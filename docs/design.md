@@ -1,13 +1,13 @@
 # RealmTool — Design Spec
 
-**Status:** Draft v4 · Phase 1 merged (PR #1) · v4: O3 Helper moved to Phase 3c (port + live test after everything else). Earlier: Draft v3 · 2026-10-03 (v2: Collision HP on by default and required to ship; Chat Filter ported from latest. v3: Anti-AFK deferred, helper is routing-only; server-authoritative hit model clarified)
+**Status:** Draft v4 · Phase 1 merged (PR #1) · v4: O3 Helper moved to Phase 3c, a post-release addition. Earlier: Draft v3 · 2026-10-03 (v2: Collision HP on by default and required to ship; Chat Filter ported from latest. v3: Anti-AFK deferred, helper is routing-only; server-authoritative hit model clarified)
 **Repository:** private, `DaAwesomePwner/RealmTool`
 **Source of ported code:** `DaAwesomePwner/realm-engine-client` (MIT, © Evergreen-Techworks; see `NOTICE`). Research was done at `9ab4f8f`. Each phase ports from the **then-current `main`**, so Chat Filter fixes such as `88a66b2` are included.
 **Research inputs:** [`docs/research/`](research/) (four Codex read-only investigations of realm-engine-client)
 
 ## 1. Goal
 
-RealmTool is a small, fast launcher and companion for Realm of the Mad God Exalt. It targets five plugins. The first release ships the four that need no code inside the game; **Anti-AFK is deferred** (Phase 4, optional, off the release gate):
+RealmTool is a small, fast launcher and companion for Realm of the Mad God Exalt. It targets five plugins plus Server Switch. The first release ships Auto Drink, Auto Nexus, Chat Filter and Server Switch. **O3 Helper and Anti-AFK are post-release additions** (Phases 3c and 4):
 
 | Plugin | What it does |
 |---|---|
@@ -16,7 +16,7 @@ RealmTool is a small, fast launcher and companion for Realm of the Mad God Exalt
 | **Auto Drink** | Drinks HP/MP potions from quickslots when *server-reported* HP/MP falls below a threshold |
 | **Auto Nexus** | Sends ESCAPE when HP reaches the threshold (default 25%). It uses **Collision HP by default**: the game client's own collision reports (`PLAYERHIT`/`AOEACK`/`GROUNDDAMAGE`), assessed in the worker before the report is forwarded, with server-reported HP as the authoritative floor. Server-HP-only is an opt-out |
 | **Chat Filter** | Hides spam, ads, blocked words and blocked senders, with optional temporary mutes |
-| **O3 Helper** *(Phase 3c)* | Withholds hit reports on Oryx 3 while shielded, on coin guardians, and on Dammah while speaking |
+| **O3 Helper** *(post-release)* | Withholds hit reports on Oryx 3 while shielded, on coin guardians, and on Dammah while speaking |
 
 It must be easy to add more plugins later, both built-in and user-supplied.
 
@@ -152,7 +152,7 @@ Known Realm Engine defects to **fix** during the port, each with a regression te
 
 ## 5. Phases
 
-Each phase ends with working, tested software. **Release gate:** Phases 1, 2, 3a, 3b, 3c and 5 (Phase 4 / Anti-AFK is optional). Never ship Auto Nexus without Collision HP. Detailed plans live in `docs/superpowers/plans/`. Only Phase 1 is written in full now; each later plan is written when its phase starts, against the real code produced by the phases before it.
+Each phase ends with working, tested software. **Release gate:** Phases 1, 2, 3a, 3b and 5. Phase 3c (O3 Helper) and Phase 4 (Anti-AFK) are post-release additions. Never ship Auto Nexus without Collision HP. Detailed plans live in `docs/superpowers/plans/`. Only Phase 1 is written in full now; each later plan is written when its phase starts, against the real code produced by the phases before it.
 
 | # | Phase | Deliverable | Key risks |
 |---|---|---|---|
@@ -160,7 +160,7 @@ Each phase ends with working, tested software. **Release gate:** Phases 1, 2, 3a
 | 2 | **Plugin host + Chat Filter + Server Switch** | Plugin API v1, manifest loader, config/profile store, commands, notifications; Chat Filter ported with its tests (O3 Helper moved to Phase 3c). The plugin API lets a plugin observe the game's HELLO. **Server Switch** (small addition, chat commands only): `/con <server>` and `/goto <ip>[:port]`. The server list comes from the official endpoint using the access token from the observed HELLO, falling back to bundled `servers.json`. The token is **held in memory only, never logged or persisted**. A switch injects one RECONNECT to the game (server IP, port 2050, name Nexus, gameId -2, empty key). The worker's Router rewrites it like any other RECONNECT, so the game reconnects through the proxy to the chosen server. Exalt's own server label not updating is accepted (cosmetic). Chat Filter is ported from latest `main` with its current rules and tests, not rewritten | API shape — it must survive Phases 3–6 unchanged |
 | 3a | **Realtime plugins: Auto Nexus (server HP) + Auto Drink** | Worker-module API; SafetyEngine, escape coordinator, report guard and AutoDrinkController ported; consumables catalog; FORK.md guarantees pinned by ported tests. Auto Nexus runs server-HP-only in this step | Safety-critical; must port, not rewrite |
 | 3b | **Auto Nexus Collision HP (default ON)** | HealthPredictor/DamageLedger ported; safety catalog (projectiles, armor-pierce, multi-hit, damaging tiles) generated; collision assessment on PLAYERHIT/AOEACK/GROUNDDAMAGE receipt in the worker; stalled-delivery fail-safe; default flipped to ON; ported hpPrediction/playerDamage/strictHp/safetyLifecycle tests plus a default-ON regression test. **Required before any release** | Catalog freshness per game build; uncalibrated AoE/ground and %-HP damage (documented assumption: max(200, raw) per unknown hit) |
-| 3c | **O3 Helper (port + live test)** | Ported after everything else is wired up, with its two known bugs fixed (coin-branch early return skipping Dammah; no active-coin exception) and dedicated tests. Then a live test in Oryx's Sanctuary confirms that withholding `ENEMYHIT` actually prevents damage during shield, coin and Dammah phases, since the server may calculate enemy hits itself | Server-side hit calculation may make withholding ineffective |
+| 3c | **O3 Helper (post-release addition)** | Not part of the first release. Ported after release, once everything else is wired up, with its two known bugs fixed (coin-branch early return skipping Dammah; no active-coin exception) and dedicated tests. Then a live test in Oryx's Sanctuary confirms that withholding `ENEMYHIT` actually prevents damage during shield, coin and Dammah phases, since the server may calculate enemy hits itself | Server-side hit calculation may make withholding ineffective |
 | 4 | **Anti-AFK (deferred, optional)** | First attempt: out-of-process `PostMessageW` click to the game window found by PID (no injection). Fallback only if needed: helper v2 with a WndProc subclass + pipe. Then the Anti-AFK plugin | Does the game accept out-of-process input? Needs live validation |
 | 5 | **UI shell + packaging** | Tauri 2 app: plugin cards with schema-rendered settings, launch, readiness, log, profiles; installer; size budget verified | Sidecar lifecycle; WebView2 availability |
 | 6 | **User plugins + polish** | `.mjs` user plugins, plugin dev guide + example, Realm Engine profile importer, `refresh-data`, patch-day checklist | — |
