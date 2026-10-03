@@ -1,4 +1,4 @@
-// Search order adapted from realm-engine-client client/src/hooker/ExaltFinder.ts @ 9ab4f8f (MIT, see NOTICE).
+// Ported from realm-engine-client client/src/hooker/ExaltFinder.ts @ 9ab4f8f (MIT, see NOTICE). Search order adapted; adds Steam libraryfolders.vdf parsing.
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
