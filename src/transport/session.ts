@@ -21,7 +21,7 @@ export interface SessionEnv {
   targetTimeoutMs: number;
   /** How long the server may stay silent after HELLO before a retry. */
   helloTimeoutMs: number;
-  /** Bytes awaiting verdicts (or queued before connect) before the session is faulted. */
+  /** Limit for verdicts, pre-connect traffic, and each socket's output queue before faulting. */
   maxPendingBytes: number;
   onClosed(id: string): void;
 }
@@ -408,9 +408,9 @@ export class Session {
       if (observation !== null) this.notifyDropped(observation);
       return false;
     }
+    if (observation !== null && name !== observation.name) this.notifyDropped(observation);
     if (!toClient) {
       const observationId = observation !== null && name === observation.name ? observation.id : null;
-      if (observation !== null && name !== observation.name) this.notifyDropped(observation);
       const now = this.env.now();
       for (const module of this.modules) {
         if (module.written.has(name)) this.call(module, 'written', () => module.hooks.written?.(decode(), kind, now, observationId), undefined);
@@ -425,6 +425,9 @@ export class Session {
     const encrypted = Buffer.from(data);
     (toClient ? this.toClientCipher : this.toServerCipher).cipher(encrypted);
     socket.write(encrypted, done);
+    if (socket.writableLength > this.env.maxPendingBytes) {
+      this.fault(new Error(`${toClient ? 'Game' : 'Server'} is not reading; output backlog exceeded the limit`));
+    }
     return true;
   }
 }

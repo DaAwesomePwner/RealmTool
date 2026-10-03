@@ -18,6 +18,7 @@ export interface PacketEvent {
 
 export interface HostEvents {
   listening: [port: number];
+  exit: [info: { code: number; expected: boolean }];
   session: [info: { id: string; remotePort: number }];
   routed: [info: { id: string; host: string; port: number; restored: boolean }];
   connected: [info: { id: string; generation: number }];
@@ -46,6 +47,7 @@ export interface ProxyHostOptions {
 export class ProxyHost extends EventEmitter<HostEvents> {
   private readonly options: ProxyHostOptions;
   private worker: Worker | null = null;
+  private readonly expectedExits = new WeakSet<Worker>();
   private listening = false;
   private starting: { resolve(port: number): void; reject(error: Error): void } | null = null;
 
@@ -87,6 +89,7 @@ export class ProxyHost extends EventEmitter<HostEvents> {
       if (this.worker === worker) this.worker = null;
       this.listening = false;
       this.failStart(new Error(`Network worker exited (code ${code}) before listening`));
+      this.emit('exit', { code, expected: this.expectedExits.has(worker) });
     });
     return started;
   }
@@ -108,6 +111,7 @@ export class ProxyHost extends EventEmitter<HostEvents> {
   async stop(): Promise<void> {
     const worker = this.worker;
     if (!worker) return;
+    this.expectedExits.add(worker);
     const exited = new Promise<void>(resolve => worker.once('exit', () => resolve()));
     worker.postMessage({ type: 'stop' } satisfies WorkerCommand);
     const timeout = setTimeout(() => { void worker.terminate(); }, 2000);

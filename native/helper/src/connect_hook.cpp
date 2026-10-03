@@ -1,5 +1,7 @@
 // Ported from realm-engine-client client/winhttp-proxy/src/connect_hook.cpp @ 9ab4f8f (MIT, see NOTICE).
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #ifndef _WIN32_WINNT
 #define _WIN32_WINNT 0x0A00
 #endif

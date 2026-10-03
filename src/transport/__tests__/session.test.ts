@@ -7,6 +7,8 @@ import { DEFAULTS, type WorkerEvent } from '../messages.ts';
 import type { WorkerModule } from '../modules.ts';
 import { Router } from '../../routing/router.ts';
 import { createFactory } from '../../protocol/schema.ts';
+import { RC4_KEYS } from '../../protocol/constants.ts';
+import { RC4Cipher } from '../../protocol/RC4Cipher.ts';
 import { frame, helloBytes, reconnectBytes, unknownId } from '../../testing/wire.ts';
 import { connectGame, FakeServer, until, type Peer } from '../../testing/net.ts';
 
@@ -65,6 +67,52 @@ async function connected(h: Harness, server: FakeServer): Promise<{ game: Peer; 
 const packets = (h: Harness) => h.events.filter((e): e is Extract<WorkerEvent, { type: 'packet' }> => e.type === 'packet');
 
 describe('Session', () => {
+  it('faults when the game stops reading and output exceeds 64 KiB', async () => {
+    const h = await harness({ maxPendingBytes: 64 * 1024 });
+    const server = await fakeServer();
+    const game = net.connect(h.port, '127.0.0.1');
+    cleanups.push(() => { game.destroy(); });
+    game.on('error', () => {});
+    await new Promise<void>(resolve => game.once('connect', resolve));
+    const hello = helloBytes(factory, Buffer.alloc(0));
+    new RC4Cipher(RC4_KEYS.clientToServer).cipher(hello);
+    game.write(hello);
+    game.pause();
+    await until(() => h.all.length === 1, 'raw game accepted');
+    h.all[0].setTarget({ host: '127.0.0.1', port: server.port });
+    await until(() => server.peers[0]?.frames.length === 1, 'raw game HELLO upstream');
+    for (let i = 0; i < 256; i++) server.peers[0].send(frame(UNKNOWN, Buffer.alloc(16 * 1024)));
+    await until(() => h.events.some(e => e.type === 'fault' && e.message.includes('not reading')), 'output backlog fault', 3000);
+    expect(h.events).toContainEqual(expect.objectContaining({
+      type: 'fault', message: 'Game is not reading; output backlog exceeded the limit',
+    }));
+  });
+
+  it('drops the server TEXT observation when a different packet is written to the game', async () => {
+    const outcomes: string[] = [];
+    const ids: number[] = [];
+    const module: WorkerModule = {
+      id: 'server-ledger', priority: 0, observe: { server: ['TEXT'] }, written: ['PING'],
+      createSession: () => ({
+        observe: (_packet, _fromClient, _now, observationId) => { ids.push(observationId); },
+        dropped: (observationId, name) => { outcomes.push(`dropped:${observationId}:${name}`); },
+        written: () => { outcomes.push('unexpected written callback'); },
+      }),
+    };
+    const h = await harness({ modules: [module], interest: new Interest({ verdict: { server: ['TEXT'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    upstream.send(factory.serialize(factory.createByName('TEXT')));
+    await until(() => packets(h).length === 1, 'held server TEXT');
+    const [report] = packets(h);
+    expect(ids).toHaveLength(1);
+    const replacement = factory.serialize(factory.createByName('PING'));
+    session.forward(report.sequence, report.generation, replacement);
+    await until(() => game.frames.length === 1, 'replacement PING at game');
+    expect(game.frames[0].equals(replacement)).toBe(true);
+    expect(outcomes).toEqual([`dropped:${ids[0]}:TEXT`]);
+  });
+
   it('connects to the resolved destination and relays both directions unchanged', async () => {
     const h = await harness();
     const server = await fakeServer();

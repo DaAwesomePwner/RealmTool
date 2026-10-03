@@ -19,6 +19,7 @@ describe('log', () => {
   });
 
   it('drops debug records unless debug is enabled', () => {
+    log.setDebug(false);
     log.setConsole(false);
     const records: LogRecord[] = [];
     const remove = log.addSink(record => records.push(record));

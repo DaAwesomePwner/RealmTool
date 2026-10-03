@@ -1,8 +1,8 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BACKUP_FILE, HELPER_FILE, installHelper, uninstallHelper, type InstallerOps } from '../helperInstaller.ts';
+import { BACKUP_FILE, HELPER_FILE, LOCK_FILE, installHelper, uninstallHelper, type InstallerOps } from '../helperInstaller.ts';
 
 function failingOps(operation: 'copyFile' | 'rename', failOnCall: number): InstallerOps {
   let calls = 0;
@@ -27,6 +27,46 @@ function setup() {
 }
 
 describe('helper installer', () => {
+  it('refuses a fresh held lock before checking or changing helper files', () => {
+    const s = setup();
+    const lock = join(s.game, LOCK_FILE);
+    writeFileSync(lock, '12345');
+    const message = `Another RealmTool process is installing or uninstalling the helper in ${s.game}; try again`;
+    const options = { timeoutMs: 10, retryMs: 1 };
+    expect(() => installHelper(s.game, 'missing-helper.dll', undefined, options)).toThrow(message);
+    expect(() => uninstallHelper(s.game, undefined, options)).toThrow(message);
+    expect(readFileSync(lock, 'utf8')).toBe('12345');
+    expect(existsSync(s.target)).toBe(false);
+  });
+
+  it('clears a stale lock and releases its own lock after installation', () => {
+    const s = setup();
+    const lock = join(s.game, LOCK_FILE);
+    writeFileSync(lock, '12345');
+    const old = new Date(Date.now() - 31_000);
+    utimesSync(lock, old, old);
+    expect(installHelper(s.game, s.helper).status).toBe('installed');
+    expect(existsSync(lock)).toBe(false);
+    expect(uninstallHelper(s.game)).toBe('removed');
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it('writes its PID and releases the lock after a thrown install or uninstall failure', () => {
+    const s = setup();
+    const lock = join(s.game, LOCK_FILE);
+    const ops = failingOps('copyFile', 1);
+    ops.exists = path => {
+      expect(readFileSync(lock, 'utf8')).toBe(String(process.pid));
+      return existsSync(path);
+    };
+    expect(() => installHelper(s.game, s.helper, ops)).toThrow('Injected copyFile failure');
+    expect(existsSync(lock)).toBe(false);
+    installHelper(s.game, s.helper);
+    ops.unlink = () => { throw new Error('Injected unlink failure'); };
+    expect(() => uninstallHelper(s.game, ops)).toThrow('Injected unlink failure');
+    expect(existsSync(lock)).toBe(false);
+  });
+
   it.each([['copyFile', 1], ['rename', 2]] as const)('restores a foreign DLL when %s fails', (operation, call) => {
     const s = setup();
     writeFileSync(s.target, 'MZ realm engine redirector');
@@ -94,6 +134,8 @@ describe('helper installer', () => {
     writeFileSync(s.target, 'foreign');
     expect(uninstallHelper(s.game)).toBe('foreign');
     expect(readFileSync(s.target, 'utf8')).toBe('foreign');
-    expect(uninstallHelper(join(s.game, 'missing'))).toBe('not-installed');
+    const empty = join(s.game, 'empty');
+    mkdirSync(empty);
+    expect(uninstallHelper(empty)).toBe('not-installed');
   });
 });

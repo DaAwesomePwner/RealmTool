@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { findExaltDirs, isExaltDir } from './game/exaltFinder.ts';
 import { DEFAULT_HELPER_PATH, installHelper, uninstallHelper } from './game/helperInstaller.ts';
@@ -18,7 +19,6 @@ export interface CliOptions {
   helper: string;
   fallback?: string;
   launch: boolean;
-  port: number;
 }
 
 export const HELP = `Usage: realmtool <command> [options]
@@ -34,7 +34,6 @@ Options:
   --helper <file>    Helper DLL to install (default: native/helper/bin/winhttp.dll)
   --fallback <ip>    Server to use when the helper recorded none
   --no-launch        start: don't launch the game
-  --port <n>         Listen port (default ${GAME_PORT})
   -h, --help         Show this help
 `;
 
@@ -47,15 +46,12 @@ export function parseCli(argv: string[]): CliOptions {
       helper: { type: 'string' },
       fallback: { type: 'string' },
       'no-launch': { type: 'boolean', default: false },
-      port: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
   if (positionals.length > 1) throw new Error(`Unexpected argument "${positionals[1]}". Run "realmtool help".`);
   const requested = values.help ? 'help' : (positionals[0] ?? 'help');
   if (!(COMMANDS as readonly string[]).includes(requested)) throw new Error(`Unknown command "${requested}". Run "realmtool help".`);
-  const port = values.port === undefined ? GAME_PORT : Number(values.port);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`--port must be 1-65535, got ${values.port}`);
   if (values['game-dir'] !== undefined && !values['game-dir'].trim()) throw new Error('--game-dir must not be empty');
   const fallback = values.fallback === undefined ? undefined : parseTargetFile(values.fallback);
   if (fallback === null) {
@@ -67,13 +63,16 @@ export function parseCli(argv: string[]): CliOptions {
     helper: values.helper ?? DEFAULT_HELPER_PATH,
     fallback,
     launch: !values['no-launch'],
-    port,
   };
 }
 
-function resolveGameDir(options: CliOptions): string | null {
-  if (options.gameDir) return isExaltDir(options.gameDir) ? options.gameDir : null;
-  return findExaltDirs()[0] ?? null;
+export function resolveGameDir(options: CliOptions): string | null {
+  if (options.gameDir) {
+    const gameDir = resolve(options.gameDir);
+    return isExaltDir(gameDir) ? gameDir : null;
+  }
+  const discovered = findExaltDirs()[0];
+  return discovered ? resolve(discovered) : null;
 }
 
 export interface RunDeps {
@@ -97,16 +96,14 @@ const defaultRunDeps: RunDeps = {
 };
 
 export async function runProxy(options: CliOptions, gameDir: string, deps: RunDeps = defaultRunDeps): Promise<number> {
-  const installed = installHelper(gameDir, options.helper);
-  log.info('Helper', `${installed.status} at ${installed.target}${installed.backedUp ? ' (previous winhttp.dll backed up)' : ''}`);
   const stale = removeStaleTargetFiles();
   if (stale) log.info('Helper', `Removed ${stale} stale target file(s)`);
 
   const host = deps.createHost({
     schema: loadSchema(),
-    listenPort: options.port,
+    listenPort: GAME_PORT,
     fallbackDestination: options.fallback ? { host: options.fallback, port: GAME_PORT } : null,
-    resolveTarget: createTargetResolver({ proxyPort: options.port }),
+    resolveTarget: createTargetResolver({ proxyPort: GAME_PORT }),
   });
   let dispose: (() => void) | undefined;
   try {
@@ -120,6 +117,13 @@ export async function runProxy(options: CliOptions, gameDir: string, deps: RunDe
     let shutdownRequested = false;
     let finish!: (code: number) => void;
     const finished = new Promise<number>(resolve => { finish = resolve; });
+    host.on('exit', ({ code, expected }) => {
+      if (!expected) {
+        shutdownRequested = true;
+        log.error('Proxy', `Network worker stopped unexpectedly (code ${code})`);
+        finish(1);
+      }
+    });
     dispose = deps.onShutdown(() => {
       shutdownRequested = true;
       finish(0);
@@ -133,6 +137,14 @@ export async function runProxy(options: CliOptions, gameDir: string, deps: RunDe
       return 1;
     }
     log.info('Proxy', `Listening on 127.0.0.1:${port}`);
+    if (shutdownRequested) return await finished;
+    try {
+      const installed = installHelper(gameDir, options.helper);
+      log.info('Helper', `${installed.status} at ${installed.target}${installed.backedUp ? ' (previous winhttp.dll backed up)' : ''}`);
+    } catch (error) {
+      log.error('Helper', (error as Error).message);
+      return 1;
+    }
     if (options.launch && !shutdownRequested) {
       const onError = (error: Error) => {
         log.error('Game', `Could not start RotMG Exalt.exe: ${error.message}`);

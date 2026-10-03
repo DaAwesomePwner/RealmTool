@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { parseCli, runProxy, type CliOptions, type RunDeps } from '../cli.ts';
+import { HELP, parseCli, resolveGameDir, runProxy, type CliOptions, type RunDeps } from '../cli.ts';
+import { ProxyHost } from '../transport/host.ts';
+import { loadSchema } from '../protocol/schema.ts';
 import { DEFAULT_HELPER_PATH } from '../game/helperInstaller.ts';
 import { log } from '../util/log.ts';
 
@@ -13,19 +15,19 @@ describe('parseCli', () => {
   });
 
   it('parses start options', () => {
-    expect(parseCli(['start', '--game-dir', 'D:\\Exalt', '--no-launch', '--fallback', '54.86.47.176', '--port', '2051']))
-      .toEqual({ command: 'start', gameDir: 'D:\\Exalt', helper: DEFAULT_HELPER_PATH, fallback: '54.86.47.176', launch: false, port: 2051 });
-    expect(parseCli(['start'])).toMatchObject({ launch: true, port: 2050, fallback: undefined });
+    expect(parseCli(['start', '--game-dir', 'D:\\Exalt', '--no-launch', '--fallback', '54.86.47.176']))
+      .toEqual({ command: 'start', gameDir: 'D:\\Exalt', helper: DEFAULT_HELPER_PATH, fallback: '54.86.47.176', launch: false });
+    expect(parseCli(['start'])).toMatchObject({ launch: true, fallback: undefined });
   });
 
   it('rejects bad input with a clear message', () => {
     expect(() => parseCli(['launch'])).toThrow('Unknown command "launch"');
-    expect(() => parseCli(['start', '--port', '99999'])).toThrow('--port');
     expect(() => parseCli(['start', '--fallback', 'usw.example.com'])).toThrow('--fallback');
   });
 
-  it('rejects port zero', () => {
-    expect(() => parseCli(['start', '--port', '0'])).toThrow('--port must be 1-65535, got 0');
+  it('rejects custom ports and omits the option from help', () => {
+    expect(() => parseCli(['start', '--port', '2051'])).toThrow("Unknown option '--port'");
+    expect(HELP).not.toContain('--port');
   });
 
   it.each(['', '   '])('rejects an empty game directory (%j)', value => {
@@ -51,6 +53,7 @@ describe('runProxy', () => {
   let start: ReturnType<typeof vi.fn<() => Promise<number>>>;
   let stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
   let dispose: ReturnType<typeof vi.fn<() => void>>;
+  let host: ProxyHost;
 
   beforeEach(() => {
     root = mkdtempSync(join(tempBase, 'realmtool-cli-'));
@@ -63,25 +66,28 @@ describe('runProxy', () => {
     writeFileSync(join(root, 'realmtool_target_123.txt'), '54.86.47.176');
     vi.spyOn(log, 'info').mockImplementation(() => {});
     vi.spyOn(log, 'error').mockImplementation(() => {});
-    options = { command: 'start', helper, launch: true, port: 2050 };
+    options = { command: 'start', helper, launch: true };
     dispose = vi.fn();
     start = vi.fn(async () => {
       expect(deps.onShutdown).toHaveBeenCalledOnce();
+      expect(existsSync(join(gameDir, 'winhttp.dll'))).toBe(false);
       return 2050;
     });
     stop = vi.fn(async () => {});
-    const host: ReturnType<RunDeps['createHost']> = {
-      on: vi.fn<ReturnType<RunDeps['createHost']>['on']>().mockReturnThis(),
-      start,
-      stop,
-    };
+    host = Object.assign(new ProxyHost({ schema: loadSchema() }), { start, stop });
     deps = {
-      createHost: vi.fn(() => {
-        expect(readFileSync(join(gameDir, 'winhttp.dll'), 'utf8')).toBe('RealmTool-Helper/1');
+      createHost: vi.fn(hostOptions => {
+        expect(hostOptions.listenPort).toBe(2050);
+        expect(existsSync(join(gameDir, 'winhttp.dll'))).toBe(false);
         expect(existsSync(join(root, 'realmtool_target_123.txt'))).toBe(false);
         return host;
       }),
-      launch: vi.fn(() => { queueMicrotask(() => shutdown()); return 123; }),
+      launch: vi.fn(() => {
+        expect(start).toHaveBeenCalledOnce();
+        expect(readFileSync(join(gameDir, 'winhttp.dll'), 'utf8')).toBe('RealmTool-Helper/1');
+        queueMicrotask(() => shutdown());
+        return 123;
+      }),
       onShutdown: vi.fn(handler => { shutdown = handler; return dispose; }),
     };
   });
@@ -99,6 +105,34 @@ describe('runProxy', () => {
     expect(await runProxy(options, gameDir, deps)).toBe(0);
     expect(start).toHaveBeenCalledOnce();
     expect(deps.launch).toHaveBeenCalledWith(gameDir, expect.any(Function));
+    expect(stop).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('resolves a relative game directory to an absolute path', () => {
+    writeFileSync(join(gameDir, 'RotMG Exalt.exe'), 'fixture');
+    const resolved = resolveGameDir({ ...options, gameDir: relative(process.cwd(), gameDir) });
+    expect(resolved).toBe(gameDir);
+    expect(isAbsolute(resolved!)).toBe(true);
+  });
+
+  it('stops the listening host and reports an install failure', async () => {
+    options.helper = join(root, 'missing-helper.dll');
+    expect(await runProxy(options, gameDir, deps)).toBe(1);
+    expect(start).toHaveBeenCalledOnce();
+    expect(log.error).toHaveBeenCalledWith('Helper', expect.stringContaining('Helper DLL not found'));
+    expect(deps.launch).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('returns one and cleans up when the worker exits unexpectedly', async () => {
+    deps.launch = vi.fn(() => {
+      setImmediate(() => host.emit('exit', { code: 7, expected: false }));
+      return 123;
+    });
+    expect(await runProxy(options, gameDir, deps)).toBe(1);
+    expect(log.error).toHaveBeenCalledWith('Proxy', 'Network worker stopped unexpectedly (code 7)');
     expect(stop).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });
@@ -126,6 +160,7 @@ describe('runProxy', () => {
     start.mockRejectedValue(new Error('listen failed'));
     expect(await runProxy(options, gameDir, deps)).toBe(1);
     expect(log.error).toHaveBeenCalledWith('Proxy', 'listen failed');
+    expect(existsSync(join(gameDir, 'winhttp.dll'))).toBe(false);
     expect(deps.launch).not.toHaveBeenCalled();
     expect(stop).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();

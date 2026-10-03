@@ -78,8 +78,11 @@ describe('ProxyHost', () => {
 
   it('stops cleanly', async () => {
     const host = new ProxyHost({ schema: loadSchema(), listenPort: 0 });
+    const exits: { code: number; expected: boolean }[] = [];
+    host.on('exit', info => exits.push(info));
     const port = await host.start();
     await host.stop();
+    expect(exits).toEqual([{ code: 0, expected: true }]);
     await expect(connectGame(port)).rejects.toThrow();
   });
 });

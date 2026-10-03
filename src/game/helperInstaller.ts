@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, readFileSync, renameSync, unlinkSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const HELPER_FILE = 'winhttp.dll';
 export const BACKUP_FILE = 'winhttp.dll.realmtool-backup';
+export const LOCK_FILE = 'winhttp.dll.realmtool-lock';
 /** Embedded in every helper build (native/helper/src/dllmain.cpp) so we never mistake a foreign DLL for ours. */
 export const HELPER_MARKER = 'RealmTool-Helper/';
 export const DEFAULT_HELPER_PATH = fileURLToPath(new URL('../../native/helper/bin/winhttp.dll', import.meta.url));
@@ -31,13 +32,63 @@ const defaultOps: InstallerOps = {
   exists: existsSync,
 };
 
+export interface InstallerLockOptions {
+  timeoutMs?: number;
+  retryMs?: number;
+  staleMs?: number;
+}
+
+function withInstallerLock<T>(gameDir: string, options: InstallerLockOptions, action: () => T): T {
+  const path = join(gameDir, LOCK_FILE);
+  const deadline = Date.now() + (options.timeoutMs ?? 5000);
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  let fd: number;
+  for (;;) {
+    try {
+      fd = openSync(path, 'wx');
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - statSync(path).mtimeMs > (options.staleMs ?? 30_000)) {
+          unlinkSync(path);
+          continue;
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error(`Another RealmTool process is installing or uninstalling the helper in ${gameDir}; try again`);
+      }
+      Atomics.wait(wait, 0, 0, Math.min(options.retryMs ?? 100, remaining));
+    }
+  }
+  try {
+    writeFileSync(fd, String(process.pid));
+    return action();
+  } finally {
+    try { closeSync(fd); } finally {
+      try { unlinkSync(path); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+  }
+}
+
 const sha256 = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
 
 export function isRealmToolHelper(path: string): boolean {
   try { return readFileSync(path).includes(HELPER_MARKER, 0, 'latin1'); } catch { return false; }
 }
 
-export function installHelper(gameDir: string, helperPath: string, ops: InstallerOps = defaultOps): InstallResult {
+export function installHelper(gameDir: string, helperPath: string, ops: InstallerOps = defaultOps,
+  options: InstallerLockOptions = {}): InstallResult {
+  return withInstallerLock(gameDir, options, () => installLocked(gameDir, helperPath, ops));
+}
+
+function installLocked(gameDir: string, helperPath: string, ops: InstallerOps): InstallResult {
   if (!ops.exists(helperPath)) throw new Error(`Helper DLL not found at ${helperPath}. Run "npm run build:helper" first.`);
   if (!isRealmToolHelper(helperPath)) throw new Error(`${helperPath} is not a RealmTool helper build (marker missing).`);
   const target = join(gameDir, HELPER_FILE);
@@ -75,7 +126,12 @@ export function installHelper(gameDir: string, helperPath: string, ops: Installe
   return { status, backedUp, target };
 }
 
-export function uninstallHelper(gameDir: string, ops: InstallerOps = defaultOps): UninstallStatus {
+export function uninstallHelper(gameDir: string, ops: InstallerOps = defaultOps,
+  options: InstallerLockOptions = {}): UninstallStatus {
+  return withInstallerLock(gameDir, options, () => uninstallLocked(gameDir, ops));
+}
+
+function uninstallLocked(gameDir: string, ops: InstallerOps): UninstallStatus {
   const target = join(gameDir, HELPER_FILE);
   const backup = join(gameDir, BACKUP_FILE);
   const targetExists = ops.exists(target);
