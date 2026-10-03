@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GAME_PORT } from '../protocol/constants.ts';
+import { log } from '../util/log.ts';
 import type { Destination } from './router.ts';
 import { readTcpProcessIdentity, type ProcessIdentity } from './tcpProcessIdentity.ts';
 
@@ -42,7 +43,9 @@ export function createTargetResolver(options: TargetResolverOptions = {}): (remo
     } catch {
       return null;
     }
-    try { unlinkSync(path); } catch { /* the next connect overwrites it anyway */ }
+    try { unlinkSync(path); } catch (error) {
+      log.warn('Routing', `Failed to remove target file ${path}: ${(error as Error).message}`);
+    }
     const host = parseTargetFile(text);
     return host ? { host, port: GAME_PORT } : null;
   };
@@ -53,7 +56,7 @@ export function removeStaleTargetFiles(dir: string = tmpdir()): number {
   let names: string[];
   try { names = readdirSync(dir); } catch { return 0; }
   for (const name of names) {
-    if (!name.startsWith(TARGET_FILE_PREFIX) || !name.endsWith('.txt')) continue;
+    if (!/^realmtool_target_\d+\.txt$/.test(name)) continue;
     try { unlinkSync(join(dir, name)); removed++; } catch { /* in use or already gone */ }
   }
   return removed;
