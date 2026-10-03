@@ -11,6 +11,7 @@ RealmTool is a small, fast launcher and companion for Realm of the Mad God Exalt
 
 | Plugin | What it does |
 |---|---|
+| **Server Switch** *(Phase 2 addition)* | `/con <server>` and `/goto <ip>` chat commands that move you to another server's Nexus through the proxy |
 | **Anti-AFK** *(deferred)* | Prevents the game's idle disconnect with a single input pulse after >5 min without movement |
 | **Auto Drink** | Drinks HP/MP potions from quickslots when *server-reported* HP/MP falls below a threshold |
 | **Auto Nexus** | Sends ESCAPE when HP reaches the threshold (default 25%). It uses **Collision HP by default**: the game client's own collision reports (`PLAYERHIT`/`AOEACK`/`GROUNDDAMAGE`), assessed in the worker before the report is forwarded, with server-reported HP as the authoritative floor. Server-HP-only is an opt-out |
@@ -23,7 +24,7 @@ It must be easy to add more plugins later, both built-in and user-supplied.
 
 - No in-game overlay, IL2CPP hooks, game-memory reads, or generated game headers.
 - No account manager, credential storage, multi-boxing, wiki, packet lab, sprite rendering, or world inspectors.
-- No server switcher (`/con`, `/goto`) — the plugin API makes it a straightforward later plugin.
+- No server-switch UI (dropdown). The Server Switch plugin ships in Phase 2 with chat commands only (`/con`, `/goto`).
 - No auto-updater.
 - No security sandbox for user plugins (they are trusted code; documented as such).
 
@@ -156,7 +157,7 @@ Each phase ends with working, tested software. **Release gate:** Phases 1, 2, 3a
 | # | Phase | Deliverable | Key risks |
 |---|---|---|---|
 | 1 | **Pass-through proxy** | `node src/cli.ts start` installs the helper, launches Exalt, and proxies all traffic through the worker with HELLO/RECONNECT routing. You can play normally, change realms, and enter dungeons. | Routing parity; helper load timing (3 s hook delay) |
-| 2 | **Plugin host + Chat Filter + O3 Helper** | Plugin API v1, manifest loader, config/profile store, commands, notifications; two standard plugins ported with tests (O3 bugs fixed). Chat Filter is ported from latest `main` with its current rules and tests, not rewritten | API shape — it must survive Phases 3–6 unchanged |
+| 2 | **Plugin host + Chat Filter + O3 Helper + Server Switch** | Plugin API v1, manifest loader, config/profile store, commands, notifications; two standard plugins ported with tests (O3 bugs fixed). The plugin API lets a plugin observe the game's HELLO. **Server Switch** (small addition, chat commands only): `/con <server>` and `/goto <ip>[:port]`. The server list comes from the official endpoint using the access token from the observed HELLO, falling back to bundled `servers.json`. The token is **held in memory only, never logged or persisted**. A switch injects one RECONNECT to the game (server IP, port 2050, name Nexus, gameId -2, empty key). The worker's Router rewrites it like any other RECONNECT, so the game reconnects through the proxy to the chosen server. Exalt's own server label not updating is accepted (cosmetic). Chat Filter is ported from latest `main` with its current rules and tests, not rewritten | API shape — it must survive Phases 3–6 unchanged |
 | 3a | **Realtime plugins: Auto Nexus (server HP) + Auto Drink** | Worker-module API; SafetyEngine, escape coordinator, report guard and AutoDrinkController ported; consumables catalog; FORK.md guarantees pinned by ported tests. Auto Nexus runs server-HP-only in this step | Safety-critical; must port, not rewrite |
 | 3b | **Auto Nexus Collision HP (default ON)** | HealthPredictor/DamageLedger ported; safety catalog (projectiles, armor-pierce, multi-hit, damaging tiles) generated; collision assessment on PLAYERHIT/AOEACK/GROUNDDAMAGE receipt in the worker; stalled-delivery fail-safe; default flipped to ON; ported hpPrediction/playerDamage/strictHp/safetyLifecycle tests plus a default-ON regression test. **Required before any release** | Catalog freshness per game build; uncalibrated AoE/ground and %-HP damage (documented assumption: max(200, raw) per unknown hit) |
 | 4 | **Anti-AFK (deferred, optional)** | First attempt: out-of-process `PostMessageW` click to the game window found by PID (no injection). Fallback only if needed: helper v2 with a WndProc subclass + pipe. Then the Anti-AFK plugin | Does the game accept out-of-process input? Needs live validation |
