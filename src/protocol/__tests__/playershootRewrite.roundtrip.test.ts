@@ -1,3 +1,4 @@
+// Ported from realm-engine-client client/src/packets/__tests__/playershootRewrite.roundtrip.test.ts @ 9ab4f8f (MIT, see NOTICE).
 import { describe, it, expect } from 'vitest';
 import { PacketFactory } from '../PacketFactory.ts';
 import { loadSchema } from '../schema.ts';
@@ -11,7 +12,7 @@ import { loadSchema } from '../schema.ts';
 // frame. Every time the rewrite armed in-game the server sent FAILURE and
 // dropped the connection ~1.4-3.4s later, so this is the check that was missing.
 describe('PLAYERSHOOT projectilePosition rewrite', () => {
-  const factory = new PacketFactory(loadSchema().definitions, loadSchema().stats);
+  const factory = new PacketFactory(loadSchema().definitions, loadSchema().stats, true);
 
   // Build a realistic PLAYERSHOOT the same way the factory reads one, so the
   // test does not depend on a captured capture file.

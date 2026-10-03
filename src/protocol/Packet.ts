@@ -21,7 +21,7 @@ export interface Packet {
    *  If false, forward rawBytes directly (avoids corruption from imperfect definitions). */
   modified: boolean;
 
-  /** Parsed fields from JSON definitions. E.g. { host: "54.241.208.233", port: 2050 }. */
+  /** Parsed fields from JSON definitions. E.g. { host: "<server-ip>", port: 2050 }. */
   data: Record<string, any>;
 
   /** The full raw bytes of the packet (length header + id + body). */

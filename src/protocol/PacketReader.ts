@@ -123,7 +123,7 @@ export class PacketReader {
 
     while ((firstByte & 128) !== 0) {
       firstByte = this.readByte();
-      result |= (firstByte & 127) << shift;
+      result += (firstByte & 127) * 2 ** shift;
       shift += 7;
     }
 

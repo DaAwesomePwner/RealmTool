@@ -38,6 +38,13 @@ export interface StatTypesFile {
 
 export type PacketDirection = 'client' | 'server';
 
+export class PacketSerializeError extends Error {
+  constructor(packetName: string, cause: unknown) {
+    super(`Failed to serialize ${packetName}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+    this.name = 'PacketSerializeError';
+  }
+}
+
 const PACKET_KEY = /^(?:(client|server):)?(0|[1-9][0-9]{0,2})$/;
 
 /**
@@ -208,7 +215,7 @@ export class PacketFactory {
       }
     } catch (err) {
       if (!this.quiet) log.warn('PacketFactory', `Failed to serialize ${packet.name}: ${(err as Error).message}`);
-      return packet.rawBytes;
+      throw new PacketSerializeError(packet.name, err);
     }
 
     const buf = writer.toBuffer();

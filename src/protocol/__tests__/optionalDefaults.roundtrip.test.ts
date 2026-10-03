@@ -1,3 +1,4 @@
+// Ported from realm-engine-client client/src/packets/__tests__/optionalDefaults.roundtrip.test.ts @ 9ab4f8f (MIT, see NOTICE).
 import { describe, it, expect } from 'vitest';
 import { PacketFactory } from '../PacketFactory.ts';
 import { loadSchema } from '../schema.ts';
@@ -13,7 +14,7 @@ import { loadSchema } from '../schema.ts';
 // PacketWriter, so the expected bytes do not come from the code under test.
 // Captured traffic never belongs in this file.
 
-const factory = new PacketFactory(loadSchema().definitions, loadSchema().stats);
+const factory = new PacketFactory(loadSchema().definitions, loadSchema().stats, true);
 
 const u8 = (v: number) => Buffer.from([v & 0xff]);
 const bool = (v: boolean) => u8(v ? 1 : 0);
