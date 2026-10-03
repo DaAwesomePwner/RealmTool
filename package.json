@@ -1,0 +1,29 @@
+{
+  "name": "realmtool",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lightweight RotMG Exalt launcher with a small extensible plugin set",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node src/cli.ts start",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "build:helper": "cmd /c native\\helper\\build.cmd",
+    "verify:helper": "node tools/verify-helper.ts"
+  },
+  "dependencies": {
+    "koffi": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "allowScripts": {
+    "koffi@2.16.3": true
+  }
+}

@@ -1,0 +1,8 @@
+RealmTool contains code ported from realm-engine-client
+(https://github.com/Evergreen-Techworks/realm-engine-client, via the private
+downstream DaAwesomePwner/realm-engine-client @ 9ab4f8f), MIT License,
+Copyright (c) 2026 Evergreen-Techworks. Ported files begin with a
+"Ported from realm-engine-client <path>" comment.
+
+native/helper/vendor/minhook is MinHook (https://github.com/TsudaKageyu/minhook),
+BSD 2-Clause License, Copyright (C) 2009-2017 Tsuda Kageyu.
