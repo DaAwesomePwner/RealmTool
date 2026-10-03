@@ -9,6 +9,7 @@ export interface HeldPacket {
   readonly observationId: number;
   readonly name: string;
   readonly fromClient: boolean;
+  /** When the frame was accepted, on the same clock as `WorkerSessionContext.now()`. */
   readonly receivedAt: number;
 }
 
@@ -17,6 +18,7 @@ export interface WorkerSessionContext {
   readonly factory: PacketFactory;
   /** Upstream connection generation; increases on every (re)connect of this game socket. */
   generation(): number;
+  /** Milliseconds on the worker's monotonic clock (performance.now()). Every timestamp in this file — hook `now` arguments and `HeldPacket.receivedAt` — uses this same clock. */
   now(): number;
   /** Encrypt and write now, ahead of anything awaiting a main-thread verdict. False if the socket can't take it. */
   writePriority(data: Buffer, toClient: boolean, done?: (error?: Error | null) => void): boolean;
@@ -38,8 +40,16 @@ export interface WorkerSessionModule {
   suppressEntry?(name: string, fromClient: boolean): boolean;
   /**
    * Original packets named in the module's `observe` lists, before the main thread sees them.
-   * `observationId` follows the frame to `written` or `dropped`, so a module can tell a delivered
-   * hit report from one a plugin withheld (Collision HP must never charge a withheld report twice).
+   *
+   * `observationId` is unique for the session's lifetime, across upstream generations. After `observe`,
+   * a frame reaches at most one of these outcomes:
+   * - `written`: only for a client→server frame that is also named in the module's `written` list and is
+   *   accepted by the socket writer. Written frames not named in `written` get no callback.
+   * - `dropped`: a plugin verdict dropped it, a module's `allowWrite` vetoed it, the socket couldn't take it,
+   *   or it was a server→client frame whose upstream generation ended. Client→server frames survive an
+   *   upstream generation change; they belong to the game socket.
+   * Frames still pending when the session closes get neither. `close()` is the signal to release every
+   * outstanding observation. (Collision HP must not charge a withheld report twice; this lifecycle is how it tells.)
    */
   observe?(packet: Packet, fromClient: boolean, now: number, observationId: number): void;
   /** Last check before output RC4 for every write: released, injected, queued and priority. False drops it. */
