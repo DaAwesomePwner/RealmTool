@@ -50,8 +50,20 @@ describe('ProxyHost', () => {
     cleanups.push(() => game.destroy());
     game.send(helloBytes(factory, Buffer.alloc(0)));
     await until(() => server.peers[0]?.frames.length === 1, 'HELLO');
-    server.peers[0].send(frame(factory.getPacketId('TEXT')!, Buffer.from('hi')));
+    const sentFrame = frame(factory.getPacketId('TEXT')!, Buffer.from('hi'));
+    server.peers[0].send(sentFrame);
     await until(() => game.frames.length === 1, 'passed through');
+    expect(game.frames[0].equals(sentFrame)).toBe(true);
+  });
+
+  it('rejects start() without throwing synchronously when Worker construction fails', async () => {
+    const host = new ProxyHost({ schema: loadSchema(), listenPort: 0,
+      workerUrl: new URL('http://example.invalid/w.js') });
+    cleanups.push(() => host.stop());
+    let started: Promise<number> | undefined;
+    expect(() => { started = host.start(); }).not.toThrow();
+    expect(started).toBeInstanceOf(Promise);
+    await expect(started).rejects.toThrow();
   });
 
   it('rejects start() with the address when the port is taken', async () => {

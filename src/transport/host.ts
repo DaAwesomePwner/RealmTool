@@ -30,7 +30,6 @@ export interface HostEvents {
 
 export interface ProxyHostOptions {
   schema: ProtocolSchema;
-  listenHost?: string;
   listenPort?: number;
   fallbackDestination?: Destination | null;
   /** Main-thread lookup of where a new game socket was going (helper temp file). */
@@ -59,7 +58,7 @@ export class ProxyHost extends EventEmitter<HostEvents> {
     if (this.worker) return Promise.reject(new Error('ProxyHost is already started'));
     const o = this.options;
     const init: WorkerInit = {
-      host: o.listenHost ?? '127.0.0.1',
+      host: '127.0.0.1',
       port: o.listenPort ?? GAME_PORT,
       definitions: o.schema.definitions,
       stats: o.schema.stats,
@@ -70,7 +69,13 @@ export class ProxyHost extends EventEmitter<HostEvents> {
       interest: o.interest ?? {},
       moduleConfig: o.moduleConfig ?? {},
     };
-    const worker = new Worker(o.workerUrl ?? new URL('./worker.ts', import.meta.url), { workerData: init });
+    let worker: Worker;
+    try {
+      worker = new Worker(o.workerUrl ?? new URL('./worker.ts', import.meta.url), { workerData: init });
+    } catch (error) {
+      this.worker = null;
+      return Promise.reject(error);
+    }
     this.worker = worker;
     const started = new Promise<number>((resolve, reject) => { this.starting = { resolve, reject }; });
     worker.on('message', (event: WorkerEvent) => this.handle(event));
