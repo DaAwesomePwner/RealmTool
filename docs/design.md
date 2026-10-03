@@ -1,8 +1,8 @@
 # RealmTool — Design Spec
 
-**Status:** Draft v1 · 2026-10-03
+**Status:** Draft v2 · 2026-10-03 (v2: Collision HP on by default and required to ship; Chat Filter ported from latest)
 **Repository:** private, `DaAwesomePwner/RealmTool`
-**Source of ported code:** `DaAwesomePwner/realm-engine-client` @ `9ab4f8f` (MIT, © Evergreen-Techworks; see `NOTICE`)
+**Source of ported code:** `DaAwesomePwner/realm-engine-client` (MIT, © Evergreen-Techworks; see `NOTICE`). Research was done at `9ab4f8f`. Each phase ports from the **then-current `main`**, so Chat Filter fixes such as `88a66b2` are included.
 **Research inputs:** [`docs/research/`](research/) (four Codex read-only investigations of realm-engine-client)
 
 ## 1. Goal
@@ -13,7 +13,7 @@ RealmTool is a small, fast launcher and companion for Realm of the Mad God Exalt
 |---|---|
 | **Anti-AFK** | Prevents the game's idle disconnect with a single input pulse after >5 min without movement |
 | **Auto Drink** | Drinks HP/MP potions from quickslots when *server-reported* HP/MP falls below a threshold |
-| **Auto Nexus** | Sends ESCAPE when *server-reported* HP falls to the threshold (default 25%); optional Collision HP |
+| **Auto Nexus** | Sends ESCAPE when HP reaches the threshold (default 25%). It uses **Collision HP by default**: the game client's own collision reports (`PLAYERHIT`/`AOEACK`/`GROUNDDAMAGE`), assessed in the worker before the report is forwarded, with server-reported HP as the authoritative floor. Server-HP-only is an opt-out |
 | **Chat Filter** | Hides spam, ads, blocked words and blocked senders, with optional temporary mutes |
 | **O3 Helper** | Withholds hit reports on Oryx 3 while shielded, on coin guardians, and on Dammah while speaking |
 
@@ -118,7 +118,7 @@ All writes are atomic (temp file → fsync → rename) and keep a `.corrupt-<ts>
 
 These are acceptance criteria for the Auto Nexus / Auto Drink port (Phase 3), each pinned by ported tests:
 
-1. Collision HP (`PreHitPrediction`) is **opt-in, OFF by default**; new/reset threshold **25%**. OFF = server HP threshold only; 0% requires an explicit server-reported zero.
+1. **RealmTool deliberately diverges from FORK.md here:** Collision HP (saved key `PreHitPrediction`) is **ON by default**, for new profiles and for imported profiles that never set it. An explicit OFF from an imported profile is respected. New/reset threshold is **25%**. ON = latest server HP minus assessed loss from client collision reports, checked synchronously on report receipt, before forwarding. OFF = server HP threshold only. 0% requires an explicit server-reported zero in both modes.
 2. Server DAMAGE never double-charges a reported projectile; changing Collision HP retires estimated debt but keeps server HP and escape lifecycle.
 3. The stalled-delivery fail-safe applies only while a reported impact is pending, and excludes plugin-dropped packets.
 4. **ESCAPE is written by the worker before plugins, observers or UI see the packet**, and stays responsive when the main thread is blocked.
@@ -149,13 +149,14 @@ Known Realm Engine defects to **fix** during the port, each with a regression te
 
 ## 5. Phases
 
-Each phase ends with working, tested software. Detailed plans live in `docs/superpowers/plans/`. Only Phase 1 is written in full now; each later plan is written when its phase starts, against the real code produced by the phases before it.
+Each phase ends with working, tested software. **Release gate:** Phases 1–4 plus 3b. Never ship Auto Nexus without Collision HP. Detailed plans live in `docs/superpowers/plans/`. Only Phase 1 is written in full now; each later plan is written when its phase starts, against the real code produced by the phases before it.
 
 | # | Phase | Deliverable | Key risks |
 |---|---|---|---|
 | 1 | **Pass-through proxy** | `node src/cli.ts start` installs the helper, launches Exalt, and proxies all traffic through the worker with HELLO/RECONNECT routing. You can play normally, change realms, and enter dungeons. | Routing parity; helper load timing (3 s hook delay) |
-| 2 | **Plugin host + Chat Filter + O3 Helper** | Plugin API v1, manifest loader, config/profile store, commands, notifications; two standard plugins ported with tests (O3 bugs fixed) | API shape — it must survive Phases 3–6 unchanged |
-| 3 | **Realtime plugins: Auto Nexus + Auto Drink** | Worker-module API, catalog generator, SafetyEngine/coordinator/report guard and AutoDrinkController ported; FORK.md guarantees pinned by ported tests | Safety-critical; must port, not rewrite |
+| 2 | **Plugin host + Chat Filter + O3 Helper** | Plugin API v1, manifest loader, config/profile store, commands, notifications; two standard plugins ported with tests (O3 bugs fixed). Chat Filter is ported from latest `main` with its current rules and tests, not rewritten | API shape — it must survive Phases 3–6 unchanged |
+| 3a | **Realtime plugins: Auto Nexus (server HP) + Auto Drink** | Worker-module API; SafetyEngine, escape coordinator, report guard and AutoDrinkController ported; consumables catalog; FORK.md guarantees pinned by ported tests. Auto Nexus runs server-HP-only in this step | Safety-critical; must port, not rewrite |
+| 3b | **Auto Nexus Collision HP (default ON)** | HealthPredictor/DamageLedger ported; safety catalog (projectiles, armor-pierce, multi-hit, damaging tiles) generated; collision assessment on PLAYERHIT/AOEACK/GROUNDDAMAGE receipt in the worker; stalled-delivery fail-safe; default flipped to ON; ported hpPrediction/playerDamage/strictHp/safetyLifecycle tests plus a default-ON regression test. **Required before any release** | Catalog freshness per game build; uncalibrated AoE/ground and %-HP damage (documented assumption: max(200, raw) per unknown hit) |
 | 4 | **Helper v2 + Anti-AFK** | Window subclass + pipe in the helper; pipe server + session identity in the backend; Anti-AFK plugin | Input acceptance; window discovery without Present |
 | 5 | **UI shell + packaging** | Tauri 2 app: plugin cards with schema-rendered settings, launch, readiness, log, profiles; installer; size budget verified | Sidecar lifecycle; WebView2 availability |
 | 6 | **User plugins + polish** | `.mjs` user plugins, plugin dev guide + example, Realm Engine profile importer, `refresh-data`, patch-day checklist | — |
@@ -163,7 +164,7 @@ Each phase ends with working, tested software. Detailed plans live in `docs/supe
 ## 6. Decisions made (with defaults) — confirm or override
 
 1. **Shell = Tauri 2** (Rust toolchain needed for Phase 5 only). Alternative: minimal Electron (bigger, but zero new toolchain). The backend is headless-first, so this can change before Phase 5 at no cost.
-2. **Collision HP is ported as-is** (opt-in, OFF by default), keeping behavior parity and its ~150 existing tests. Alternative: ship server-HP-only and drop the projectile/tile catalog (smaller, simpler, but means surgery on safety code).
+2. ~~Collision HP optional~~ **Decided 2026-10-03:** Collision HP is ported as-is and **ON by default**. Server-HP-only is the opt-out. It runs entirely in the worker from the game's own collision reports, so it needs no injected code. It must be wired and smoke-tested (Phase 3b) before any release.
 3. **One game client at a time** in v1. The worker already supports many sessions; the native bridge and session identity are built PID-aware so multi-client can be enabled later.
 4. **RealmTool and Realm Engine can't run against the same game install at the same time.** Both side-load `winhttp.dll`. The installer backs up a foreign `winhttp.dll` and restores it on uninstall.
 5. **Port with provenance, not git-fork.** RealmTool is a fresh repo; ported files carry a header comment naming their source path, and `NOTICE` keeps the MIT attribution.

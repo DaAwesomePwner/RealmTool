@@ -1470,14 +1470,14 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `Destination`, `DefsFile`, `StatTypesFile`, `Packet`, `PacketFactory`.
-- Produces (exact names used by Tasks 7–8 and Phases 2–3):
+- Produces (exact names used by Tasks 7–8 and Phases 2–3; the observation-id and `held()` surface exists for Phase 3b Collision HP):
   - `CloseSide = 'game' | 'server' | 'fault' | 'proxy'`
   - `WorkerEvent` union: `listening{port}`, `opened{id, remotePort}`, `routed{id, host, port, restored}`, `connected{id, generation}`, `packet{id, sequence, generation, fromClient, observeOnly, data}`, `closed{id, by}`, `diagnostic{id?, message}`, `fault{id?, message}`, `module{moduleId, id?, message}`
   - `WorkerCommand` union: `target{id, destination}`, `interest{interest}`, `forward{id, sequence, generation, data | null}`, `inject{id, data, toClient}`, `module{moduleId, id?, message}`, `close{id}`, `stop`
   - `WorkerInit { host, port, definitions, stats, fallbackDestination, targetTimeoutMs, helloTimeoutMs, maxPendingBytes, interest, moduleConfig }`
   - `DEFAULTS = { targetTimeoutMs: 2000, helloTimeoutMs: 3000, maxPendingBytes: 16 MiB }`
   - `InterestSpec { verdict?: DirectionalNames; observe?: DirectionalNames }`, `DirectionalNames { client?: readonly string[]; server?: readonly string[] }`, `InterestKind = 'verdict' | 'observe' | 'none'`, `class Interest { constructor(spec?); set(spec); classify(name, fromClient): InterestKind }`
-  - `WriteKind = 'normal' | 'injected' | 'priority'`, `WorkerSessionContext`, `WorkerSessionModule`, `WorkerModule` (see code), `WORKER_MODULES: readonly WorkerModule[]`
+  - `WriteKind = 'normal' | 'injected' | 'priority'`, `HeldPacket`, `WorkerSessionContext` (incl. `held()`), `WorkerSessionModule` (`observe(..., observationId)`, `written(..., observationId | null)`, `dropped(observationId, name, fromClient, now)`), `WorkerModule` (see code), `WORKER_MODULES: readonly WorkerModule[]`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1618,6 +1618,14 @@ import type { PacketFactory } from '../protocol/PacketFactory.ts';
 /** How a frame reached the writer. `priority` frames bypass ordering and are never queued before the server connects. */
 export type WriteKind = 'normal' | 'injected' | 'priority';
 
+/** A packet waiting for a main-thread verdict. */
+export interface HeldPacket {
+  readonly observationId: number;
+  readonly name: string;
+  readonly fromClient: boolean;
+  readonly receivedAt: number;
+}
+
 export interface WorkerSessionContext {
   readonly sessionId: string;
   readonly factory: PacketFactory;
@@ -1628,6 +1636,8 @@ export interface WorkerSessionContext {
   writePriority(data: Buffer, toClient: boolean, done?: (error?: Error | null) => void): boolean;
   /** Whether the upstream is writable, and whether any traffic is still queued or in flight. */
   transport(): { available: boolean; backlog: boolean };
+  /** Packets awaiting a main-thread verdict, oldest first (Collision HP's stalled-delivery fail-safe). */
+  held(): readonly HeldPacket[];
   /** Message this module's main-thread half (a ProxyHost 'module' event). */
   post(message: unknown): void;
 }
@@ -1640,12 +1650,18 @@ export interface WorkerSessionContext {
 export interface WorkerSessionModule {
   /** After decryption, before anything else. True swallows the frame (its input RC4 is already consumed). */
   suppressEntry?(name: string, fromClient: boolean): boolean;
-  /** Original packets named in the module's `observe` lists, before the main thread sees them. */
-  observe?(packet: Packet, fromClient: boolean, now: number): void;
+  /**
+   * Original packets named in the module's `observe` lists, before the main thread sees them.
+   * `observationId` follows the frame to `written` or `dropped`, so a module can tell a delivered
+   * hit report from one a plugin withheld (Collision HP must never charge a withheld report twice).
+   */
+  observe?(packet: Packet, fromClient: boolean, now: number, observationId: number): void;
   /** Last check before output RC4 for every write: released, injected, queued and priority. False drops it. */
   allowWrite?(name: string, toClient: boolean, kind: WriteKind, decode: () => Packet): boolean;
-  /** A client→server packet named in `written` was accepted by the socket writer. */
-  written?(packet: Packet, kind: WriteKind, now: number): void;
+  /** A client→server packet named in `written` was accepted by the socket writer. `observationId` is null for injected/priority frames. */
+  written?(packet: Packet, kind: WriteKind, now: number, observationId: number | null): void;
+  /** An observed frame will never reach its socket: a plugin dropped it, a module vetoed it, or its upstream generation ended. */
+  dropped?(observationId: number, name: string, fromClient: boolean, now: number): void;
   connectionChanged?(generation: number): void;
   tick?(now: number): void;
   command?(message: unknown): void;
@@ -1699,6 +1715,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Produces:
   - `interface SessionEnv { factory; router; interest; modules; post(event); now(); fallbackDestination; targetTimeoutMs; helloTimeoutMs; maxPendingBytes; onClosed(id) }` (`router` is reassignable: the worker swaps it once the bound port is known).
   - `class Session { readonly id; constructor(id, client: net.Socket, env); setTarget(destination | null); forward(sequence, generation, data: Buffer | null); inject(data, toClient): boolean; command(moduleId, message); tick(now); close(by?) }`
+  - Every frame accepted after HELLO gets an `observationId`. It goes to `observe`, then to exactly one of `written` (client→server frames named in `written`) or `dropped` (verdict drop, writer veto, unwritable socket, stale generation). Frames still queued when the session closes get neither.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1944,6 +1961,37 @@ describe('Session', () => {
     expect(upstream.frames[2][4]).toBe(UNKNOWN); // PLAYERHIT swallowed at entry, MOVE vetoed at the writer
   });
 
+  it('links each observed report to exactly one written or dropped outcome, and exposes held packets', async () => {
+    const outcomes: string[] = [];
+    const ids: number[] = [];
+    let held: () => readonly { name: string }[] = () => [];
+    const module: WorkerModule = {
+      id: 'ledger', priority: 0, observe: { client: ['PLAYERHIT'] }, written: ['PLAYERHIT'],
+      createSession: context => {
+        held = () => context.held();
+        return {
+          observe: (_packet, _fromClient, _now, observationId) => { ids.push(observationId); },
+          written: (_packet, kind, _now, observationId) => { outcomes.push(`written:${observationId}:${kind}`); },
+          dropped: (observationId, name) => { outcomes.push(`dropped:${observationId}:${name}`); },
+        };
+      },
+    };
+    const h = await harness({ modules: [module], interest: new Interest({ verdict: { client: ['PLAYERHIT'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    game.send(frame(id('PLAYERHIT'), Buffer.from([1])));
+    game.send(frame(id('PLAYERHIT'), Buffer.from([2])));
+    await until(() => packets(h).length === 2, 'two held reports');
+    expect(held().map(p => p.name)).toEqual(['PLAYERHIT', 'PLAYERHIT']);
+    const [first, second] = packets(h);
+    session.forward(first.sequence, first.generation, first.data);
+    session.forward(second.sequence, second.generation, null);
+    await until(() => outcomes.length === 2, 'both outcomes');
+    expect(outcomes).toEqual([`written:${ids[0]}:normal`, `dropped:${ids[1]}:PLAYERHIT`]);
+    expect(held()).toEqual([]);
+    expect(upstream.frames).toHaveLength(2); // HELLO + the passed report
+  });
+
   it('reports a throwing module hook and lets traffic pass', async () => {
     const module: WorkerModule = {
       id: 'broken', priority: 0,
@@ -1977,7 +2025,7 @@ import type { PacketFactory } from '../protocol/PacketFactory.ts';
 import type { Destination, Router } from '../routing/router.ts';
 import type { Interest } from './interest.ts';
 import type { CloseSide, WorkerEvent } from './messages.ts';
-import type { WorkerModule, WorkerSessionContext, WorkerSessionModule, WriteKind } from './modules.ts';
+import type { HeldPacket, WorkerModule, WorkerSessionContext, WorkerSessionModule, WriteKind } from './modules.ts';
 
 export interface SessionEnv {
   factory: PacketFactory;
@@ -1999,6 +2047,9 @@ export interface SessionEnv {
 const MAX_HELLO_RETRIES = 3;
 
 interface Pending {
+  observationId: number;
+  name: string;
+  receivedAt: number;
   fromClient: boolean;
   generation: number;
   bytes: number;
@@ -2017,6 +2068,7 @@ interface ActiveModule {
 interface Queued {
   data: Buffer;
   kind: WriteKind;
+  observationId: number | null;
 }
 
 /**
@@ -2049,6 +2101,7 @@ export class Session {
   private clientOrder: number[] = [];
   private serverOrder: number[] = [];
   private sequence = 0;
+  private observations = 0;
   private pendingBytes = 0;
   private beforeConnect: Queued[] = [];
   private beforeConnectBytes = 0;
@@ -2125,8 +2178,28 @@ export class Session {
       now: () => this.env.now(),
       writePriority: (data, toClient, done) => this.write(data, toClient, 'priority', done),
       transport: () => this.transport(),
+      held: () => this.held(),
       post: message => this.env.post({ type: 'module', moduleId, id: this.id, message }),
     };
+  }
+
+  private held(): HeldPacket[] {
+    const out: HeldPacket[] = [];
+    for (const pending of this.pending.values()) {
+      if (pending.result === undefined) {
+        out.push({ observationId: pending.observationId, name: pending.name, fromClient: pending.fromClient, receivedAt: pending.receivedAt });
+      }
+    }
+    return out;
+  }
+
+  private notifyDropped(observationId: number, name: string, fromClient: boolean): void {
+    const now = this.env.now();
+    for (const module of this.modules) {
+      if ((fromClient ? module.client : module.server).has(name)) {
+        this.call(module, 'dropped', () => module.hooks.dropped?.(observationId, name, fromClient, now), undefined);
+      }
+    }
   }
 
   private transport(): { available: boolean; backlog: boolean } {
@@ -2179,15 +2252,17 @@ export class Session {
     let packet: Packet | null = null;
     const decode = (): Packet => (packet ??= this.env.factory.createFromBytes(frame, direction));
     const now = this.env.now();
+    const observationId = ++this.observations;
     for (const module of this.modules) {
       if ((fromClient ? module.client : module.server).has(name)) {
-        this.call(module, 'observe', () => module.hooks.observe?.(decode(), fromClient, now), undefined);
+        this.call(module, 'observe', () => module.hooks.observe?.(decode(), fromClient, now, observationId), undefined);
       }
       if (this.closed) return;
     }
     const kind = this.env.interest.classify(name, fromClient);
     const sequence = ++this.sequence;
-    this.pending.set(sequence, { fromClient, generation: this.generation, bytes: frame.length, result: kind === 'verdict' ? undefined : frame });
+    this.pending.set(sequence, { observationId, name, receivedAt: now, fromClient, generation: this.generation,
+      bytes: frame.length, result: kind === 'verdict' ? undefined : frame });
     (fromClient ? this.clientOrder : this.serverOrder).push(sequence);
     this.pendingBytes += frame.length;
     if (this.pendingBytes > this.env.maxPendingBytes) {
@@ -2225,7 +2300,11 @@ export class Session {
       this.pending.delete(sequence);
       this.pendingBytes -= next.bytes;
       // Game packets belong to this socket forever; server packets only to their upstream generation.
-      if (next.result && (next.fromClient || next.generation === this.generation)) this.write(next.result, !next.fromClient, 'normal');
+      if (next.result && (next.fromClient || next.generation === this.generation)) {
+        this.write(next.result, !next.fromClient, 'normal', undefined, next.observationId);
+      } else {
+        this.notifyDropped(next.observationId, next.name, next.fromClient);
+      }
       if (this.closed) return;
     }
   }
@@ -2240,6 +2319,7 @@ export class Session {
       if (!pending.fromClient && pending.generation !== this.generation) {
         this.pending.delete(sequence);
         this.pendingBytes -= pending.bytes;
+        this.notifyDropped(pending.observationId, pending.name, pending.fromClient);
       }
     }
     this.serverOrder = this.serverOrder.filter(sequence => this.pending.has(sequence));
@@ -2287,13 +2367,14 @@ export class Session {
       const queued = this.beforeConnect;
       this.beforeConnect = [];
       this.beforeConnectBytes = 0;
-      for (const item of queued) this.write(item.data, false, item.kind);
+      for (const item of queued) this.write(item.data, false, item.kind, undefined, item.observationId);
       this.env.post({ type: 'connected', id: this.id, generation });
       this.helloTimer = setTimeout(() => retryHello(), this.env.helloTimeoutMs);
     });
   }
 
-  private write(data: Buffer, toClient: boolean, kind: WriteKind, done?: (error?: Error | null) => void): boolean {
+  private write(data: Buffer, toClient: boolean, kind: WriteKind, done?: (error?: Error | null) => void,
+    observationId: number | null = null): boolean {
     if (this.closed) return false;
     if (!isWholeFrame(data)) {
       this.env.post({ type: 'diagnostic', id: this.id, message: `Dropped a malformed ${kind} frame (${data.length} bytes)` });
@@ -2304,7 +2385,10 @@ export class Session {
     let packet: Packet | null = null;
     const decode = (): Packet => (packet ??= this.env.factory.createFromBytes(data, direction));
     for (const module of this.modules) {
-      if (!this.call(module, 'allowWrite', () => module.hooks.allowWrite?.(name, toClient, kind, decode) ?? true, true)) return false;
+      if (!this.call(module, 'allowWrite', () => module.hooks.allowWrite?.(name, toClient, kind, decode) ?? true, true)) {
+        if (observationId !== null) this.notifyDropped(observationId, name, !toClient);
+        return false;
+      }
     }
     if (!toClient && !this.serverReady) {
       if (kind === 'priority') return false;
@@ -2313,7 +2397,7 @@ export class Session {
         this.fault(new Error('Too much game traffic queued before the server connected'));
         return false;
       }
-      this.beforeConnect.push({ data: Buffer.from(data), kind });
+      this.beforeConnect.push({ data: Buffer.from(data), kind, observationId });
       return true;
     }
     let out = data;
@@ -2325,11 +2409,14 @@ export class Session {
       }
       out = rewritten;
     }
-    if (!this.writeRaw(out, toClient, done)) return false;
+    if (!this.writeRaw(out, toClient, done)) {
+      if (observationId !== null) this.notifyDropped(observationId, name, !toClient);
+      return false;
+    }
     if (!toClient) {
       const now = this.env.now();
       for (const module of this.modules) {
-        if (module.written.has(name)) this.call(module, 'written', () => module.hooks.written?.(decode(), kind, now), undefined);
+        if (module.written.has(name)) this.call(module, 'written', () => module.hooks.written?.(decode(), kind, now, observationId), undefined);
       }
     }
     return true;
@@ -2349,7 +2436,7 @@ export class Session {
 - [ ] **Step 4: Run tests**
 
 Run: `npx vitest run src/transport/__tests__/session.test.ts`
-Expected: 12 tests PASS. If the HELLO-retry test is flaky on a slow machine, raise its `until` timeout. Don't change `MAX_HELLO_RETRIES`.
+Expected: 13 tests PASS. If the HELLO-retry test is flaky on a slow machine, raise its `until` timeout. Don't change `MAX_HELLO_RETRIES`.
 
 Run: `npm run check`
 Expected: all pass.
