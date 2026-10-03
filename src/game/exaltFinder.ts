@@ -12,7 +12,7 @@ export interface FinderEnv {
   readText(path: string): string | null;
 }
 
-const STEAM_ROOTS = ['C:\\Program Files (x86)\\Steam', 'C:\\Program Files\\Steam'];
+export const STEAM_ROOTS = ['C:\\Program Files (x86)\\Steam', 'C:\\Program Files\\Steam'];
 const STEAM_GAME_FOLDERS = ['RotMG Exalt', 'Realm of the Mad God'];
 
 function defaultFinder(): FinderEnv {

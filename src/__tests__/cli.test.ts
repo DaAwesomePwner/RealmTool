@@ -38,6 +38,14 @@ describe('parseCli', () => {
     expect(parseCli(['start', '--fallback', ' 54.86.47.176 ']).fallback).toBe('54.86.47.176');
   });
 
+  it('trims an explicit launcher path', () => {
+    expect(parseCli(['start', '--launcher', ' D:\\Launcher.exe ']).launcher).toBe('D:\\Launcher.exe');
+  });
+
+  it.each(['', '   '])('rejects an empty launcher (%j)', value => {
+    expect(() => parseCli(['start', `--launcher=${value}`])).toThrow('--launcher must not be empty');
+  });
+
   it('rejects extra positional arguments', () => {
     expect(() => parseCli(['start', 'extra'])).toThrow('Unexpected argument "extra". Run "realmtool help".');
   });
@@ -65,6 +73,7 @@ describe('runProxy', () => {
     for (const name of ['TMP', 'TEMP', 'TMPDIR']) vi.stubEnv(name, root);
     writeFileSync(join(root, 'realmtool_target_123.txt'), '54.86.47.176');
     vi.spyOn(log, 'info').mockImplementation(() => {});
+    vi.spyOn(log, 'warn').mockImplementation(() => {});
     vi.spyOn(log, 'error').mockImplementation(() => {});
     options = { command: 'start', helper, launch: true };
     dispose = vi.fn();
@@ -86,7 +95,7 @@ describe('runProxy', () => {
         expect(start).toHaveBeenCalledOnce();
         expect(readFileSync(join(gameDir, 'winhttp.dll'), 'utf8')).toBe('RealmTool-Helper/1');
         queueMicrotask(() => shutdown());
-        return 123;
+        return { kind: 'deca' as const, exe: 'launcher.exe' };
       }),
       onShutdown: vi.fn(handler => { shutdown = handler; return dispose; }),
     };
@@ -104,7 +113,8 @@ describe('runProxy', () => {
   it('returns zero on shutdown and stops the host once', async () => {
     expect(await runProxy(options, gameDir, deps)).toBe(0);
     expect(start).toHaveBeenCalledOnce();
-    expect(deps.launch).toHaveBeenCalledWith(gameDir, expect.any(Function));
+    expect(deps.launch).toHaveBeenCalledWith(expect.any(Function), undefined);
+    expect(log.info).toHaveBeenCalledWith('Game', 'Opened RotMG Exalt Launcher (launcher.exe). Click Play; RealmTool routes the game automatically.');
     expect(stop).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });
@@ -129,7 +139,7 @@ describe('runProxy', () => {
   it('returns one and cleans up when the worker exits unexpectedly', async () => {
     deps.launch = vi.fn(() => {
       setImmediate(() => host.emit('exit', { code: 7, expected: false }));
-      return 123;
+      return { kind: 'deca' as const, exe: 'launcher.exe' };
     });
     expect(await runProxy(options, gameDir, deps)).toBe(1);
     expect(log.error).toHaveBeenCalledWith('Proxy', 'Network worker stopped unexpectedly (code 7)');
@@ -140,18 +150,18 @@ describe('runProxy', () => {
   it('stops the host when launch throws synchronously', async () => {
     deps.launch = vi.fn(() => { throw new Error('spawn failed'); });
     expect(await runProxy(options, gameDir, deps)).toBe(1);
-    expect(log.error).toHaveBeenCalledWith('Game', 'Could not start RotMG Exalt.exe: spawn failed');
+    expect(log.error).toHaveBeenCalledWith('Game', 'Could not open the launcher: spawn failed');
     expect(stop).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });
 
   it('stops the host when launch reports an asynchronous error', async () => {
-    deps.launch = vi.fn((_gameDir, onError) => {
+    deps.launch = vi.fn(onError => {
       setImmediate(() => onError(new Error('async spawn failed')));
-      return undefined;
+      return { kind: 'deca' as const, exe: 'launcher.exe' };
     });
     expect(await runProxy(options, gameDir, deps)).toBe(1);
-    expect(log.error).toHaveBeenCalledWith('Game', 'Could not start RotMG Exalt.exe: async spawn failed');
+    expect(log.error).toHaveBeenCalledWith('Game', 'Could not open the launcher: async spawn failed');
     expect(stop).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });
@@ -162,6 +172,36 @@ describe('runProxy', () => {
     expect(log.error).toHaveBeenCalledWith('Proxy', 'listen failed');
     expect(existsSync(join(gameDir, 'winhttp.dll'))).toBe(false);
     expect(deps.launch).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('passes the explicit launcher override to launch', async () => {
+    options.launcher = 'D:\\Launcher.exe';
+    expect(await runProxy(options, gameDir, deps)).toBe(0);
+    expect(deps.launch).toHaveBeenCalledWith(expect.any(Function), options.launcher);
+  });
+
+  it('keeps running until shutdown when no launcher is found', async () => {
+    deps.launch = vi.fn(() => {
+      setImmediate(() => {
+        expect(stop).not.toHaveBeenCalled();
+        shutdown();
+      });
+      return null;
+    });
+    expect(await runProxy(options, gameDir, deps)).toBe(0);
+    expect(log.warn).toHaveBeenCalledWith('Game', 'Could not find the RotMG Exalt Launcher or Steam. Start the game the way you normally do; RealmTool is ready.');
+    expect(stop).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('does not launch with --no-launch', async () => {
+    options.launch = parseCli(['start', '--no-launch']).launch;
+    start.mockImplementation(async () => { setImmediate(() => shutdown()); return 2050; });
+    expect(await runProxy(options, gameDir, deps)).toBe(0);
+    expect(deps.launch).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith('Game', 'Start the game from your launcher; RealmTool is ready.');
     expect(stop).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });

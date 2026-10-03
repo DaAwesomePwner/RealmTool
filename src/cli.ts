@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { findExaltDirs, isExaltDir } from './game/exaltFinder.ts';
 import { DEFAULT_HELPER_PATH, installHelper, uninstallHelper } from './game/helperInstaller.ts';
-import { launchExalt } from './game/launcher.ts';
+import { describeLaunchTarget, findLaunchTarget, openLaunchTarget, type LaunchTarget } from './game/gameLauncher.ts';
 import { GAME_PORT } from './protocol/constants.ts';
 import { loadSchema } from './protocol/schema.ts';
 import { createTargetResolver, parseTargetFile, removeStaleTargetFiles } from './routing/targetResolver.ts';
@@ -19,12 +19,13 @@ export interface CliOptions {
   helper: string;
   fallback?: string;
   launch: boolean;
+  launcher?: string;
 }
 
 export const HELP = `Usage: realmtool <command> [options]
 
 Commands:
-  start              Install the helper, launch Exalt and run the proxy (Ctrl+C to stop)
+  start              Start the proxy, install the helper and open the RotMG Exalt Launcher (Ctrl+C to stop)
   find-game          List detected Exalt install folders
   install-helper     Copy the helper DLL into the game folder
   uninstall-helper   Remove the helper DLL and restore any backed-up winhttp.dll
@@ -33,7 +34,8 @@ Options:
   --game-dir <dir>   Exalt "Production" folder (default: auto-detect)
   --helper <file>    Helper DLL to install (default: native/helper/bin/winhttp.dll)
   --fallback <ip>    Server to use when the helper recorded none
-  --no-launch        start: don't launch the game
+  --launcher <exe>    RotMG Exalt Launcher.exe to open (default: auto-detect Deca, then Steam)
+  --no-launch        start: don't open the launcher
   -h, --help         Show this help
 `;
 
@@ -45,6 +47,7 @@ export function parseCli(argv: string[]): CliOptions {
       'game-dir': { type: 'string' },
       helper: { type: 'string' },
       fallback: { type: 'string' },
+      launcher: { type: 'string' },
       'no-launch': { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -53,6 +56,8 @@ export function parseCli(argv: string[]): CliOptions {
   const requested = values.help ? 'help' : (positionals[0] ?? 'help');
   if (!(COMMANDS as readonly string[]).includes(requested)) throw new Error(`Unknown command "${requested}". Run "realmtool help".`);
   if (values['game-dir'] !== undefined && !values['game-dir'].trim()) throw new Error('--game-dir must not be empty');
+  const launcher = values.launcher?.trim();
+  if (launcher === '') throw new Error('--launcher must not be empty');
   const fallback = values.fallback === undefined ? undefined : parseTargetFile(values.fallback);
   if (fallback === null) {
     throw new Error(`--fallback must be a public IPv4 address, got ${values.fallback}`);
@@ -63,6 +68,7 @@ export function parseCli(argv: string[]): CliOptions {
     helper: values.helper ?? DEFAULT_HELPER_PATH,
     fallback,
     launch: !values['no-launch'],
+    launcher,
   };
 }
 
@@ -77,14 +83,18 @@ export function resolveGameDir(options: CliOptions): string | null {
 
 export interface RunDeps {
   createHost(options: ProxyHostOptions): Pick<ProxyHost, 'on' | 'start' | 'stop'>;
-  launch(gameDir: string, onError: (error: Error) => void): number | undefined;
+  launch(onError: (error: Error) => void, override?: string): LaunchTarget | null;
   /** Resolves when the user asks to stop (SIGINT/SIGTERM). Returns a disposer that removes the handlers. */
   onShutdown(handler: () => void): () => void;
 }
 
 const defaultRunDeps: RunDeps = {
   createHost: options => new ProxyHost(options),
-  launch: (gameDir, onError) => launchExalt(gameDir, [], onError),
+  launch: (onError, override) => {
+    const target = findLaunchTarget(undefined, override);
+    if (target) openLaunchTarget(target, onError);
+    return target;
+  },
   onShutdown(handler) {
     process.once('SIGINT', handler);
     process.once('SIGTERM', handler);
@@ -147,16 +157,22 @@ export async function runProxy(options: CliOptions, gameDir: string, deps: RunDe
     }
     if (options.launch && !shutdownRequested) {
       const onError = (error: Error) => {
-        log.error('Game', `Could not start RotMG Exalt.exe: ${error.message}`);
+        log.error('Game', `Could not open the launcher: ${error.message}`);
         finish(1);
       };
       try {
-        const pid = deps.launch(gameDir, onError);
-        log.info('Game', `Launched Exalt${pid ? ` (pid ${pid})` : ''}`);
+        const target = deps.launch(onError, options.launcher);
+        if (target) {
+          log.info('Game', `Opened ${describeLaunchTarget(target)}. Click Play; RealmTool routes the game automatically.`);
+        } else {
+          log.warn('Game', 'Could not find the RotMG Exalt Launcher or Steam. Start the game the way you normally do; RealmTool is ready.');
+        }
       } catch (error) {
         onError(error as Error);
         return 1;
       }
+    } else if (!options.launch) {
+      log.info('Game', 'Start the game from your launcher; RealmTool is ready.');
     }
     return await finished;
   } finally {
