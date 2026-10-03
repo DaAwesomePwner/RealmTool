@@ -27,6 +27,71 @@ function setup() {
 }
 
 describe('helper installer', () => {
+  it.each(['EBUSY', 'EPERM', 'EACCES'])('preserves the helper and backup when uninstall unlink fails with %s', code => {
+    const s = setup();
+    copyFileSync(s.helper, s.target);
+    writeFileSync(s.backup, 'MZ realm engine redirector');
+    const targetBefore = readFileSync(s.target);
+    const backupBefore = readFileSync(s.backup);
+    const ops = failingOps('rename', 0);
+    ops.unlink = () => { throw Object.assign(new Error('busy'), { code }); };
+    expect(() => uninstallHelper(s.game, ops)).toThrow(new Error('winhttp.dll is in use. Close RotMG Exalt (and its launcher) and try again.'));
+    expect(readFileSync(s.target)).toEqual(targetBefore);
+    expect(readFileSync(s.backup)).toEqual(backupBefore);
+  });
+
+  it('rethrows the original non-in-use uninstall unlink error', () => {
+    const s = setup();
+    copyFileSync(s.helper, s.target);
+    const error = Object.assign(new Error('missing'), { code: 'ENOENT' });
+    const ops = failingOps('rename', 0);
+    ops.unlink = () => { throw error; };
+    let caught: unknown;
+    try { uninstallHelper(s.game, ops); } catch (error) { caught = error; }
+    expect(caught).toBe(error);
+  });
+
+  it('explains a locked final install rename and restores the foreign DLL', () => {
+    const s = setup();
+    writeFileSync(s.target, 'MZ realm engine redirector');
+    const ops = failingOps('rename', 0);
+    ops.rename = (from, to) => {
+      if (from === s.target + '.realmtool-new') throw Object.assign(new Error('busy'), { code: 'EPERM' });
+      renameSync(from, to);
+    };
+    expect(() => installHelper(s.game, s.helper, ops)).toThrow(new Error('winhttp.dll is in use. Close RotMG Exalt (and its launcher) and try again.'));
+    expect(readFileSync(s.target, 'utf8')).toBe('MZ realm engine redirector');
+    expect(existsSync(s.backup)).toBe(false);
+    expect(existsSync(s.target + '.realmtool-new')).toBe(false);
+  });
+
+  it('explains a locked backup rename without changing the foreign DLL', () => {
+    const s = setup();
+    writeFileSync(s.target, 'MZ realm engine redirector');
+    const ops = failingOps('rename', 0);
+    ops.rename = () => { throw Object.assign(new Error('busy'), { code: 'EACCES' }); };
+    expect(() => installHelper(s.game, s.helper, ops)).toThrow(new Error('winhttp.dll is in use. Close RotMG Exalt (and its launcher) and try again.'));
+    expect(readFileSync(s.target, 'utf8')).toBe('MZ realm engine redirector');
+    expect(existsSync(s.backup)).toBe(false);
+    expect(existsSync(s.target + '.realmtool-new')).toBe(false);
+  });
+
+  it('keeps backup recovery details when a locked install cannot roll back', () => {
+    const s = setup();
+    writeFileSync(s.target, 'MZ realm engine redirector');
+    const ops = failingOps('rename', 0);
+    ops.rename = (from, to) => {
+      if (from !== s.target) throw Object.assign(new Error('busy'), { code: 'EPERM' });
+      renameSync(from, to);
+    };
+    expect(() => installHelper(s.game, s.helper, ops)).toThrow(new Error(
+      `winhttp.dll is in use. Close RotMG Exalt (and its launcher) and try again. Could not restore the backup at ${s.backup}: busy. Restore it to ${s.target} manually.`,
+    ));
+    expect(readFileSync(s.backup, 'utf8')).toBe('MZ realm engine redirector');
+    expect(existsSync(s.target)).toBe(false);
+    expect(existsSync(s.target + '.realmtool-new')).toBe(false);
+  });
+
   it('refuses a fresh held lock before checking or changing helper files', () => {
     const s = setup();
     const lock = join(s.game, LOCK_FILE);

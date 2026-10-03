@@ -32,6 +32,13 @@ const defaultOps: InstallerOps = {
   exists: existsSync,
 };
 
+const IN_USE_MESSAGE = 'winhttp.dll is in use. Close RotMG Exalt (and its launcher) and try again.';
+
+function inUse(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === 'EBUSY' || code === 'EPERM' || code === 'EACCES';
+}
+
 export interface InstallerLockOptions {
   timeoutMs?: number;
   retryMs?: number;
@@ -104,6 +111,7 @@ function installLocked(gameDir: string, helperPath: string, ops: InstallerOps): 
         throw new Error(`${target} is not RealmTool's and ${BACKUP_FILE} already exists. Move one of them aside and retry.`);
       }
       try { ops.rename(target, backup); } catch (error) {
+        if (inUse(error)) throw new Error(IN_USE_MESSAGE);
         throw new Error(`Could not back up ${target} (is the game running?): ${(error as Error).message}`);
       }
       backedUp = true;
@@ -121,7 +129,10 @@ function installLocked(gameDir: string, helperPath: string, ops: InstallerOps): 
         recovery = ` Could not restore the backup at ${backup}: ${(restoreError as Error).message}. Restore it to ${target} manually.`;
       }
     }
-    throw new Error(`Could not write ${target} (is the game running?): ${(error as Error).message}${recovery}`);
+    const message = inUse(error)
+      ? IN_USE_MESSAGE
+      : `Could not write ${target} (is the game running?): ${(error as Error).message}`;
+    throw new Error(message + recovery);
   }
   return { status, backedUp, target };
 }
@@ -137,7 +148,10 @@ function uninstallLocked(gameDir: string, ops: InstallerOps): UninstallStatus {
   const targetExists = ops.exists(target);
   if (targetExists) {
     if (!isRealmToolHelper(target)) return 'foreign';
-    ops.unlink(target);
+    try { ops.unlink(target); } catch (error) {
+      if (inUse(error)) throw new Error(IN_USE_MESSAGE);
+      throw error;
+    }
   }
   if (ops.exists(backup)) {
     try { ops.rename(backup, target); } catch (error) {
