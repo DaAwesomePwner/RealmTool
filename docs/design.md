@@ -1,17 +1,17 @@
 # RealmTool — Design Spec
 
-**Status:** Draft v2 · 2026-10-03 (v2: Collision HP on by default and required to ship; Chat Filter ported from latest)
+**Status:** Draft v3 · 2026-10-03 (v2: Collision HP on by default and required to ship; Chat Filter ported from latest. v3: Anti-AFK deferred, helper is routing-only; server-authoritative hit model clarified)
 **Repository:** private, `DaAwesomePwner/RealmTool`
 **Source of ported code:** `DaAwesomePwner/realm-engine-client` (MIT, © Evergreen-Techworks; see `NOTICE`). Research was done at `9ab4f8f`. Each phase ports from the **then-current `main`**, so Chat Filter fixes such as `88a66b2` are included.
 **Research inputs:** [`docs/research/`](research/) (four Codex read-only investigations of realm-engine-client)
 
 ## 1. Goal
 
-RealmTool is a small, fast launcher and companion for Realm of the Mad God Exalt. It ships exactly five plugins:
+RealmTool is a small, fast launcher and companion for Realm of the Mad God Exalt. It targets five plugins. The first release ships the four that need no code inside the game; **Anti-AFK is deferred** (Phase 4, optional, off the release gate):
 
 | Plugin | What it does |
 |---|---|
-| **Anti-AFK** | Prevents the game's idle disconnect with a single input pulse after >5 min without movement |
+| **Anti-AFK** *(deferred)* | Prevents the game's idle disconnect with a single input pulse after >5 min without movement |
 | **Auto Drink** | Drinks HP/MP potions from quickslots when *server-reported* HP/MP falls below a threshold |
 | **Auto Nexus** | Sends ESCAPE when HP reaches the threshold (default 25%). It uses **Collision HP by default**: the game client's own collision reports (`PLAYERHIT`/`AOEACK`/`GROUNDDAMAGE`), assessed in the worker before the report is forwarded, with server-reported HP as the authoritative floor. Server-HP-only is an opt-out |
 | **Chat Filter** | Hides spam, ads, blocked words and blocked senders, with optional temporary mutes |
@@ -45,8 +45,8 @@ It must be easy to add more plugins later, both built-in and user-supplied.
 │ RotMG Exalt  │──── 127.0.0.1:2050 ───▶│  Network worker (worker_threads)          Main thread                  │
 │  + helper    │                        │  ─────────────────────────────           ──────────────────            │
 │  winhttp.dll │◀── named pipe ────────▶│  sockets · RC4 · framing · ordering       ProxyHost (worker client)    │
-│ (routing +   │   (Anti-AFK pulses)    │  Router (HELLO/RECONNECT handoff)         PluginHost + 5 plugins       │
-│  Anti-AFK)   │                        │  Interest-gated forwarding                Config/profile store         │
+│ (routing     │   (control, later)    │  Router (HELLO/RECONNECT handoff)         PluginHost + 5 plugins       │
+│  routing)    │                        │  Interest-gated forwarding                Config/profile store         │
 └──────────────┘                        │  Worker modules: Auto Nexus, Auto Drink   Helper bridge (pipe server)  │
                                         │                                           Local API (HTTP+WS) for UI   │
                                         └────────────────────────────────────────────────────────────────────────┘
@@ -62,7 +62,7 @@ It must be easy to add more plugins later, both built-in and user-supplied.
 
 1. **Helper DLL (`native/helper`)** — side-loaded as `winhttp.dll` next to `RotMG Exalt.exe`, forwarding all real winhttp exports. It does two things only:
    - **Routing:** MinHook on `ws2_32!connect`; redirects non-loopback IPv4 port-2050 connections to `127.0.0.1:2050` and records the original IP in `%TEMP%\realmtool_target_<PID>.txt`. (Ported from `client/winhttp-proxy`, minus splash bypass, IL2CPP and the legacy shared file.)
-   - **Anti-AFK input (Phase 4):** finds its own process's game window via `EnumWindows` (not via a DirectX `Present` hook), subclasses its WndProc, and on request delivers a left-button down/up pair 32 ms apart, with the same safety checks as `internal/src/.../AntiAfk.cpp`.
+   - **Anti-AFK input (Phase 4, deferred):** the helper is **routing-only** until Phase 4. Try the no-injection route first: RealmTool's own process finds the game window by PID and posts a left-button down/up pair 32 ms apart (koffi `PostMessageW`), the same messages Realm Engine's DLL routes to the original WndProc. Only if live testing shows the game ignores out-of-process messages does the helper gain an `EnumWindows` + WndProc subclass, with the same safety checks as `internal/src/.../AntiAfk.cpp`.
    - Talks to the backend over `\\.\pipe\realmtool-helper` with 4-byte LE length + JSON: `hello` (pid, process creation FILETIME, protocol version, capabilities), `heartbeat`/`heartbeatResp`, `antiAfkEnabled` (replayable), `antiAfkPulse` (session-bound, non-replayable).
    - Builds with plain `cl.exe` (no MSBuild solution, no vcxproj), MinHook vendored.
 2. **Network worker** — one `worker_threads.Worker` that owns every socket, all four RC4 streams, framing, per-direction ordering and connection generations. New relative to Realm Engine:
@@ -88,7 +88,7 @@ plugins/auto-nexus/
   worker.ts          export default defineWorkerModule({ ... })  (runs in the network worker)
 ```
 
-- **Standard plugins** (`main` only) run on the main thread through `register(ctx)`. They can hook packets with verdicts (pass/drop/modify), observe packets, register chat commands, inject packets, send in-game notifications, declare a typed settings schema, publish status for the UI, and use monotonic timers. Chat Filter, O3 Helper and Anti-AFK are standard plugins.
+- **Standard plugins** (`main` only) run on the main thread through `register(ctx)`. They can hook packets with verdicts (pass/drop/modify), observe packets, register chat commands, inject packets, send in-game notifications, declare a typed settings schema, publish status for the UI, and use monotonic timers. Chat Filter, O3 Helper and (later) Anti-AFK are standard plugins.
 - **Realtime plugins** also ship a `worker` module that is **bundled into the network worker at build time** (built-in only; user plugins can't add worker code). The `main` half and the `worker` half talk over a typed per-plugin message channel. Auto Nexus and Auto Drink are realtime plugins. Worker modules run in a fixed priority order (Auto Nexus = 0, Auto Drink = 10), so ESCAPE is always written before anything else sees the packet.
 - **Capabilities** in the manifest gate what the context exposes (e.g. only plugins declaring `input` get `ctx.input.pulse()`), which keeps future plugins honest and makes reviews easy.
 - **User plugins** (Phase 6) are `.mjs` folders with the same manifest in `%APPDATA%\RealmTool\plugins\`, loaded at startup; hot reload is dev-only. They are trusted code with no sandbox, and the docs say so.
@@ -123,7 +123,9 @@ These are acceptance criteria for the Auto Nexus / Auto Drink port (Phase 3), ea
 3. The stalled-delivery fail-safe applies only while a reported impact is pending, and excludes plugin-dropped packets.
 4. **ESCAPE is written by the worker before plugins, observers or UI see the packet**, and stays responsive when the main thread is blocked.
 5. Escapes use normal ESCAPE + server-authorized RECONNECT only. Retries are bounded (default **4 × 400 ms**): initial write plus up to four retries, no catch-up bursts.
-6. After an accepted **automatic** ESCAPE, the worker suppresses exactly `PLAYERHIT`, `AOEACK`, `GROUNDDAMAGE`, `MOVE` on that TCP connection. It checks at entry (after decryption, consuming input RC4) and again at the final writer (before output RC4). Only a new TCP connection releases it. A manual ESCAPE alone does not arm it.
+6. After an accepted **automatic** ESCAPE, the worker suppresses exactly `PLAYERHIT`, `AOEACK`, `GROUNDDAMAGE`, `MOVE` on that TCP connection. It checks at entry (after decryption, consuming input RC4) and again at the final writer (before output RC4). Only a new TCP connection releases it. A manual ESCAPE alone does not arm it. *(Kept for parity with Realm Engine's tested behavior. It is **not** a survival mechanism: the server calculates hits itself whether or not reports arrive. The user verified this on 2026-10-03 by omitting outbound hit packets.)*
+
+**Hit model (verified 2026-10-03).** The server is authoritative for damage: it calculates bullet hits itself, and the client's `PLAYERHIT`/`AOEACK`/`GROUNDDAMAGE` reports are redundant to it. Collision HP still works because the client's local collision check fires at about the same moment the server registers the hit. That is well before the HP drop arrives in a server stat update, and that gap is what Collision HP closes. Server HP stays the authoritative floor in both modes. **Open check for Phase 2:** O3 Helper works by withholding `ENEMYHIT`. Confirm in game that the server honors withheld enemy-hit reports during the shield and Dammah phases, since it may also calculate those itself.
 7. Auto Drink uses server stats 0/1/3/4 (never `effectiveMaxHealth`), awards no predicted healing, derives USEITEM time from accepted MOVE/PONG/PLAYERSHOOT, and is disarmed by an escape for that TCP generation.
 
 Known Realm Engine defects to **fix** during the port, each with a regression test:
@@ -149,7 +151,7 @@ Known Realm Engine defects to **fix** during the port, each with a regression te
 
 ## 5. Phases
 
-Each phase ends with working, tested software. **Release gate:** Phases 1–4 plus 3b. Never ship Auto Nexus without Collision HP. Detailed plans live in `docs/superpowers/plans/`. Only Phase 1 is written in full now; each later plan is written when its phase starts, against the real code produced by the phases before it.
+Each phase ends with working, tested software. **Release gate:** Phases 1, 2, 3a, 3b and 5 (Phase 4 / Anti-AFK is optional). Never ship Auto Nexus without Collision HP. Detailed plans live in `docs/superpowers/plans/`. Only Phase 1 is written in full now; each later plan is written when its phase starts, against the real code produced by the phases before it.
 
 | # | Phase | Deliverable | Key risks |
 |---|---|---|---|
@@ -157,7 +159,7 @@ Each phase ends with working, tested software. **Release gate:** Phases 1–4 pl
 | 2 | **Plugin host + Chat Filter + O3 Helper** | Plugin API v1, manifest loader, config/profile store, commands, notifications; two standard plugins ported with tests (O3 bugs fixed). Chat Filter is ported from latest `main` with its current rules and tests, not rewritten | API shape — it must survive Phases 3–6 unchanged |
 | 3a | **Realtime plugins: Auto Nexus (server HP) + Auto Drink** | Worker-module API; SafetyEngine, escape coordinator, report guard and AutoDrinkController ported; consumables catalog; FORK.md guarantees pinned by ported tests. Auto Nexus runs server-HP-only in this step | Safety-critical; must port, not rewrite |
 | 3b | **Auto Nexus Collision HP (default ON)** | HealthPredictor/DamageLedger ported; safety catalog (projectiles, armor-pierce, multi-hit, damaging tiles) generated; collision assessment on PLAYERHIT/AOEACK/GROUNDDAMAGE receipt in the worker; stalled-delivery fail-safe; default flipped to ON; ported hpPrediction/playerDamage/strictHp/safetyLifecycle tests plus a default-ON regression test. **Required before any release** | Catalog freshness per game build; uncalibrated AoE/ground and %-HP damage (documented assumption: max(200, raw) per unknown hit) |
-| 4 | **Helper v2 + Anti-AFK** | Window subclass + pipe in the helper; pipe server + session identity in the backend; Anti-AFK plugin | Input acceptance; window discovery without Present |
+| 4 | **Anti-AFK (deferred, optional)** | First attempt: out-of-process `PostMessageW` click to the game window found by PID (no injection). Fallback only if needed: helper v2 with a WndProc subclass + pipe. Then the Anti-AFK plugin | Does the game accept out-of-process input? Needs live validation |
 | 5 | **UI shell + packaging** | Tauri 2 app: plugin cards with schema-rendered settings, launch, readiness, log, profiles; installer; size budget verified | Sidecar lifecycle; WebView2 availability |
 | 6 | **User plugins + polish** | `.mjs` user plugins, plugin dev guide + example, Realm Engine profile importer, `refresh-data`, patch-day checklist | — |
 
