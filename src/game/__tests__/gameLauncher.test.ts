@@ -1,12 +1,22 @@
-import { mkdtempSync, rmdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { STEAM_ROOTS } from '../exaltFinder.ts';
 import {
   LAUNCHER_EXE, STEAM_GAME_NAME, decaLauncherCandidates, describeLaunchTarget,
   findLaunchTarget, findSteamAppId, openLaunchTarget, parseRegInstallLocations, type LauncherEnv,
 } from '../gameLauncher.ts';
+
+vi.mock('node:child_process', async importOriginal => ({
+  ...await importOriginal<typeof import('node:child_process')>(),
+  spawnSync: vi.fn(),
+}));
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
 
 function fakeEnv(overrides: Partial<LauncherEnv> = {}): LauncherEnv {
   return { env: {}, exists: () => false, readText: () => null, listDir: () => [], regQuery: () => null, ...overrides };
@@ -78,6 +88,29 @@ HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Othe
     expect(findLaunchTarget(f)).toEqual({ kind: 'deca', exe });
   });
 
+  it('checks an existing environment launcher before querying the registry', () => {
+    const exe = join('D:\\Preferred', LAUNCHER_EXE);
+    const regQuery = vi.fn(() => { throw new Error('Registry must not be queried'); });
+    const f = fakeEnv({ env: { ROTMG_LAUNCHER: exe }, exists: path => path === exe, regQuery });
+    expect(findLaunchTarget(f)).toEqual({ kind: 'deca', exe });
+    expect(regQuery).not.toHaveBeenCalled();
+  });
+
+  it('uses a known path after every registry query fails, then falls back to Steam when absent', () => {
+    const exe = join('C:\\Program Files\\RotMG Exalt Launcher', LAUNCHER_EXE);
+    const f = steamEnv();
+    f.env.ROTMG_LAUNCHER = 'missing.exe';
+    const regQuery = vi.fn(() => null);
+    f.regQuery = regQuery;
+    f.exists = path => path === exe;
+    expect(findLaunchTarget(f)).toEqual({ kind: 'deca', exe });
+    expect(regQuery).toHaveBeenCalledTimes(3);
+    regQuery.mockClear();
+    f.exists = () => false;
+    expect(findLaunchTarget(f)).toEqual({ kind: 'steam', appId: '987654', uri: 'steam://rungameid/987654' });
+    expect(regQuery).toHaveBeenCalledTimes(3);
+  });
+
   it('falls back to the app id read from a manifest in an additional Steam library', () => {
     expect(findLaunchTarget(steamEnv())).toEqual({ kind: 'steam', appId: '987654', uri: 'steam://rungameid/987654' });
   });
@@ -111,6 +144,38 @@ HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Othe
   it('describes Deca and Steam targets', () => {
     expect(describeLaunchTarget({ kind: 'deca', exe: 'launcher.exe' })).toBe('RotMG Exalt Launcher (launcher.exe)');
     expect(describeLaunchTarget({ kind: 'steam', appId: '42', uri: 'steam://rungameid/42' })).toBe('Steam (app 42)');
+  });
+});
+
+describe('default registry discovery', () => {
+  afterEach(() => {
+    vi.mocked(existsSync).mockReset().mockImplementation(existsSyncOriginal);
+    vi.mocked(spawnSync).mockReset();
+    vi.unstubAllEnvs();
+  });
+
+  const existsSyncOriginal = vi.mocked(existsSync).getMockImplementation()!;
+
+  it.each([
+    { name: 'timeout', status: null, error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) },
+    { name: 'error even with status zero', status: 0, error: new Error('query failed') },
+    { name: 'nonzero status', status: 1, error: undefined },
+    { name: 'success', status: 0, error: undefined },
+  ])('bounds registry queries and handles $name', ({ status, error }) => {
+    vi.stubEnv('ROTMG_LAUNCHER', '');
+    vi.mocked(existsSync).mockReturnValue(true);
+    vi.mocked(spawnSync).mockReturnValue({
+      pid: 0, output: [], stdout: 'InstallLocation REG_SZ D:\\Registry', stderr: '', signal: null, status, error,
+    });
+    const expectedDir = status === 0 && !error ? 'D:\\Registry' : 'C:\\Program Files\\RotMG Exalt Launcher';
+    expect(findLaunchTarget()).toEqual({ kind: 'deca', exe: join(expectedDir, LAUNCHER_EXE) });
+    for (const call of vi.mocked(spawnSync).mock.calls) {
+      expect(call).toEqual([
+        'reg', ['query', expect.any(String), '/s', '/f', 'RotMG Exalt Launcher', '/d'],
+        { encoding: 'utf8', windowsHide: true, timeout: 3000 },
+      ]);
+    }
+    expect(spawnSync).toHaveBeenCalled();
   });
 });
 

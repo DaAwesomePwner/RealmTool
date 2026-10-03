@@ -156,12 +156,15 @@ export async function runProxy(options: CliOptions, gameDir: string, deps: RunDe
       return 1;
     }
     if (options.launch && !shutdownRequested) {
+      let launchFailed = false;
       const onError = (error: Error) => {
+        launchFailed = true;
         log.error('Game', `Could not open the launcher: ${error.message}`);
         finish(1);
       };
       try {
         const target = deps.launch(onError, options.launcher);
+        if (launchFailed) return 1;
         if (target) {
           log.info('Game', `Opened ${describeLaunchTarget(target)}. Click Play; RealmTool routes the game automatically.`);
         } else {

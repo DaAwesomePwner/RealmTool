@@ -166,6 +166,31 @@ describe('runProxy', () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
+  it('logs only failure when launch calls onError synchronously and returns a target', async () => {
+    vi.mocked(log.info).mockRestore();
+    vi.mocked(log.warn).mockRestore();
+    vi.mocked(log.error).mockRestore();
+    log.setConsole(false);
+    const sink = vi.fn();
+    const removeSink = log.addSink(sink);
+    try {
+      deps.launch = vi.fn(onError => {
+        onError(new Error('sync spawn failed'));
+        return { kind: 'deca' as const, exe: 'launcher.exe' };
+      });
+      expect(await runProxy(options, gameDir, deps)).toBe(1);
+      expect(sink).toHaveBeenCalledWith(expect.objectContaining({
+        level: 'error', module: 'Game', message: 'Could not open the launcher: sync spawn failed',
+      }));
+      expect(sink).not.toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('Opened ') }));
+      expect(stop).toHaveBeenCalledOnce();
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      removeSink();
+      log.setConsole(true);
+    }
+  });
+
   it('stops the host without launching when start rejects', async () => {
     start.mockRejectedValue(new Error('listen failed'));
     expect(await runProxy(options, gameDir, deps)).toBe(1);

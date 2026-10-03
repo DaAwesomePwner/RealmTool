@@ -34,8 +34,8 @@ function defaultLauncherEnv(): LauncherEnv {
     regQuery: key => {
       try {
         const result = spawnSync('reg', ['query', key, '/s', '/f', 'RotMG Exalt Launcher', '/d'],
-          { encoding: 'utf8', windowsHide: true });
-        return result.status === 0 ? result.stdout : null;
+          { encoding: 'utf8', windowsHide: true, timeout: 3000 });
+        return !result.error && result.status === 0 ? result.stdout : null;
       } catch { return null; }
     },
   };
@@ -95,6 +95,8 @@ export function findLaunchTarget(f: LauncherEnv = defaultLauncherEnv(), override
     if (!f.exists(override)) throw new Error(`Launcher not found: ${override}`);
     return { kind: 'deca', exe: resolve(override) };
   }
+  const envLauncher = f.env.ROTMG_LAUNCHER;
+  if (envLauncher && f.exists(envLauncher)) return { kind: 'deca', exe: envLauncher };
   for (const exe of decaLauncherCandidates(f)) {
     if (f.exists(exe)) return { kind: 'deca', exe };
   }
