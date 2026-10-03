@@ -46,6 +46,7 @@ export interface WorkerSessionModule {
    * - `written`: only for a client→server frame that is also named in the module's `written` list and is
    *   accepted by the socket writer. Written frames not named in `written` get no callback.
    * - `dropped`: a plugin verdict dropped it, a module's `allowWrite` vetoed it, the socket couldn't take it,
+   *   a plugin replaced it with a different packet or with malformed bytes,
    *   or it was a server→client frame whose upstream generation ended. Client→server frames survive an
    *   upstream generation change; they belong to the game socket.
    * Frames still pending when the session closes get neither. `close()` is the signal to release every
