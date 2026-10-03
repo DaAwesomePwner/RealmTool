@@ -45,8 +45,8 @@ It must be easy to add more plugins later, both built-in and user-supplied.
 │ RotMG Exalt  │──── 127.0.0.1:2050 ───▶│  Network worker (worker_threads)          Main thread                  │
 │  + helper    │                        │  ─────────────────────────────           ──────────────────            │
 │  winhttp.dll │◀── named pipe ────────▶│  sockets · RC4 · framing · ordering       ProxyHost (worker client)    │
-│ (routing     │   (control, later)    │  Router (HELLO/RECONNECT handoff)         PluginHost + 5 plugins       │
-│  routing)    │                        │  Interest-gated forwarding                Config/profile store         │
+│ (routing     │   (later, optional)    │  Router (HELLO/RECONNECT handoff)         PluginHost + 5 plugins       │
+│  only)       │                        │  Interest-gated forwarding                Config/profile store         │
 └──────────────┘                        │  Worker modules: Auto Nexus, Auto Drink   Helper bridge (pipe server)  │
                                         │                                           Local API (HTTP+WS) for UI   │
                                         └────────────────────────────────────────────────────────────────────────┘
