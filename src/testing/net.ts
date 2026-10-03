@@ -14,6 +14,7 @@ export async function until(condition: () => boolean, label: string, timeoutMs =
 /** One end of an encrypted RotMG stream. Records every decrypted frame it receives. */
 export class Peer {
   readonly frames: Buffer[] = [];
+  readonly errors: Error[] = [];
   closed = false;
   private readonly socket: net.Socket;
   private readonly sendCipher: RC4Cipher;
@@ -23,9 +24,16 @@ export class Peer {
     this.socket = socket;
     this.sendCipher = new RC4Cipher(sendKey);
     this.decoder = new FrameDecoder(new RC4Cipher(receiveKey));
-    socket.on('data', data => this.decoder.feed(data, frame => this.frames.push(frame)));
+    socket.on('data', data => {
+      try {
+        this.decoder.feed(data, frame => this.frames.push(frame));
+      } catch (error) {
+        this.errors.push(error as Error);
+        this.socket.destroy();
+      }
+    });
     socket.on('close', () => { this.closed = true; });
-    socket.on('error', () => {});
+    socket.on('error', error => { this.errors.push(error); });
   }
 
   send(plain: Buffer): void {
@@ -56,7 +64,13 @@ export class FakeServer {
     this.peers.push(new Peer(socket, RC4_KEYS.serverToClient, RC4_KEYS.clientToServer)));
 
   async listen(): Promise<number> {
-    await new Promise<void>(resolve => this.server.listen(0, '127.0.0.1', resolve));
+    await new Promise<void>((resolve, reject) => {
+      this.server.once('error', reject);
+      this.server.listen(0, '127.0.0.1', () => {
+        this.server.off('error', reject);
+        resolve();
+      });
+    });
     this.port = (this.server.address() as net.AddressInfo).port;
     return this.port;
   }
