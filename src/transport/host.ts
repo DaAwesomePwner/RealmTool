@@ -1,3 +1,4 @@
+import { resourcePaths } from '../app/resources.ts';
 import { EventEmitter } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { GAME_PORT } from '../protocol/constants.ts';
@@ -73,7 +74,7 @@ export class ProxyHost extends EventEmitter<HostEvents> {
     };
     let worker: Worker;
     try {
-      worker = new Worker(o.workerUrl ?? new URL('./worker.ts', import.meta.url), { workerData: init });
+      worker = new Worker(o.workerUrl ?? resourcePaths().workerUrl, { workerData: init });
     } catch (error) {
       this.worker = null;
       return Promise.reject(error);

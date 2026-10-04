@@ -1,6 +1,8 @@
 // Commands ported from realm-engine-client client/src/core/CoreCommands.ts, ServerSwitchService.ts and
 // client/plugins/ip-connect.ts @ 88a66b2 (MIT, see NOTICE). RECONNECT targets the real server: RealmTool's
 // worker Router rewrites every RECONNECT to the game, so no loopback/GUID handling belongs here.
+import { join } from 'node:path';
+import { resourcePaths } from '../../src/app/resources.ts';
 import { readFileSync } from 'node:fs';
 import { isIPv4 } from 'node:net';
 import { definePlugin, type ClientConnection, type PluginContext } from '../../src/plugins/api.ts';
@@ -10,7 +12,7 @@ import { fallbackServers, resolveServer, ServerDirectory } from './directory.ts'
 const NEXUS_GAME_ID = -2;
 
 function defaultDirectory(): ServerDirectory {
-  const json = JSON.parse(readFileSync(new URL('../../data/servers.json', import.meta.url), 'utf8')) as Record<string, unknown>;
+  const json = JSON.parse(readFileSync(join(resourcePaths().dataDir, 'servers.json'), 'utf8')) as Record<string, unknown>;
   return new ServerDirectory({ fallback: fallbackServers(json) });
 }
 
@@ -20,26 +22,27 @@ function reconnect(ctx: PluginContext, client: ClientConnection, name: string, h
   client.sendToClient(packet);
 }
 
-export function createServerSwitch(directory: ServerDirectory = defaultDirectory()) {
+export function createServerSwitch(directory?: ServerDirectory) {
   return definePlugin({
     id: 'server-switch',
     name: 'Server Switch',
     apiVersion: 1,
     capabilities: ['packets', 'commands', 'notifications', 'inject'],
     register(ctx) {
+      const servers = directory ?? defaultDirectory();
       ctx.observePacket('HELLO', (_client, packet) => {
         const token = packet.data.accessToken;
-        if (typeof token === 'string' && token) void directory.refresh(token);
+        if (typeof token === 'string' && token) void servers.refresh(token);
       });
 
       ctx.hookCommand('con', (client, _command, args) => {
         const say = (message: string) => ctx.sendNotification(client, 'Server Switch', message);
         if (args.length !== 1) {
-          const names = directory.list().map(s => s.name).join(', ');
+          const names = servers.list().map(s => s.name).join(', ');
           say(`Use /con <name, abbreviation, or IPv4>, e.g. /con USEast or /con USE. Servers: ${names || '(none loaded)'}`);
           return;
         }
-        const result = resolveServer(args[0], directory.list());
+        const result = resolveServer(args[0], servers.list());
         if (!result.ok) { say(result.message); return; }
         say(`Connecting to ${result.name}...`);
         reconnect(ctx, client, result.name, result.address, GAME_PORT);
