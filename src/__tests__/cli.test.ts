@@ -114,6 +114,7 @@ describe('runProxy', () => {
         queueMicrotask(() => shutdown());
         return { kind: 'deca' as const, exe: 'launcher.exe' };
       }),
+      nativeModuleError: vi.fn(() => null),
       onShutdown: vi.fn(handler => { shutdown = handler; return dispose; }),
     };
   });
@@ -196,6 +197,29 @@ describe('runProxy', () => {
     expect(log.info).toHaveBeenCalledWith('Game', 'Opened RotMG Exalt Launcher (launcher.exe). Click Play; RealmTool routes the game automatically.');
     expect(stop).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('refuses to start when the native module cannot load and no fallback is set', async () => {
+    deps.nativeModuleError = vi.fn(() => "TCP owner lookup unavailable (koffi/Win32 load failed): Cannot find module 'koffi'");
+    expect(await runProxy(options, gameDir, deps)).toBe(1);
+    expect(log.error).toHaveBeenCalledWith('RealmTool', expect.stringMatching(
+      /^RealmTool can't load its native module \(koffi\): run "npm install" in .+ and try again$/));
+    const message = vi.mocked(log.error).mock.calls[0][1];
+    expect(existsSync(join(message.match(/in (.+) and try again/)![1], 'package.json'))).toBe(true);
+    expect(deps.createHost).not.toHaveBeenCalled();
+    expect(deps.launch).not.toHaveBeenCalled();
+    expect(existsSync(join(gameDir, 'winhttp.dll'))).toBe(false);
+  });
+
+  it('starts with a warning when the native module cannot load but --fallback is set', async () => {
+    deps.nativeModuleError = vi.fn(() => 'TCP owner lookup unavailable');
+    options.fallback = '54.86.47.176';
+    expect(await runProxy(options, gameDir, deps)).toBe(0);
+    expect(log.warn).toHaveBeenCalledWith('Routing', expect.stringContaining('fallback server 54.86.47.176'));
+    expect(log.error).not.toHaveBeenCalled();
+    expect(vi.mocked(deps.createHost).mock.calls[0][0].fallbackDestination).toEqual({ host: '54.86.47.176', port: 2050 });
+    expect(deps.launch).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it('resolves a relative game directory to an absolute path', () => {
