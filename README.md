@@ -30,7 +30,16 @@ Do not run Realm Engine against the same game installation at the same time.
 - **Chat Filter:** on by default. Its settings live in the profile. Edit them with RealmTool stopped, because RealmTool saves its own state on exit. `node src/cli.ts config-path` prints the profile location.
 - **Server Switch:** `/con <server>` (names like `USWest`, abbreviations like `usw`, or an IPv4), `/goto <ip>[:port]`, `/ip`. Exalt's own server label doesn't change.
 
-The profile is created on the first run that changes a setting.
+The profile is created on the first run that changes a setting. If it does not exist yet, create the folder and file at the location printed by `node src/cli.ts config-path`. Edit it only with RealmTool stopped. For example, this profile disables Server Switch and leaves Chat Filter at its defaults:
+
+```json
+{
+  "schemaVersion": 1,
+  "plugins": {
+    "server-switch": { "enabled": false, "settings": {} }
+  }
+}
+```
 
 | Document | What it covers |
 |---|---|
