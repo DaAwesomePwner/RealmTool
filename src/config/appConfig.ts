@@ -28,7 +28,7 @@ function validate(value: Record<string, unknown>): AppConfig {
 }
 
 export class AppConfigStore {
-  private readonly dir: string;
+  readonly dir: string;
   private readonly path: string;
   private config = defaults();
   private savingDisabled = false;

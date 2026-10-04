@@ -18,6 +18,15 @@ export interface InstallResult {
 }
 export type UninstallStatus = 'removed' | 'restored' | 'not-installed' | 'foreign';
 
+export type HelperState = 'absent' | 'installed' | 'outdated' | 'foreign';
+export function inspectHelper(gameDir: string, helperPath: string): { state: HelperState; backup: boolean } {
+  const target = join(gameDir, HELPER_FILE);
+  const backup = existsSync(join(gameDir, BACKUP_FILE));
+  if (!existsSync(target)) return { state: 'absent', backup };
+  if (!isRealmToolHelper(target)) return { state: 'foreign', backup };
+  return { state: sha256(target) === sha256(helperPath) ? 'installed' : 'outdated', backup };
+}
+
 export interface InstallerOps {
   copyFile(src: string, dest: string): void;
   rename(from: string, to: string): void;

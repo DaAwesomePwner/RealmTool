@@ -48,6 +48,11 @@ describe('parseCli', () => {
     expect(parseCli(['start', '--launcher', ' D:\\Launcher.exe ']).launcher).toBe('D:\\Launcher.exe');
   });
 
+  it('rejects the game executable as a launcher argument', () => {
+    expect(() => parseCli(['start', '--launcher', ' D:\\Exalt\\RotMG Exalt.exe ']))
+      .toThrow('Select the RotMG Exalt Launcher');
+  });
+
   it.each(['', '   '])('rejects an empty launcher (%j)', value => {
     expect(() => parseCli(['start', `--launcher=${value}`])).toThrow('--launcher must not be empty');
   });
@@ -79,6 +84,8 @@ describe('runProxy', () => {
     root = mkdtempSync(join(tempBase, 'realmtool-cli-'));
     gameDir = join(root, 'game');
     mkdirSync(gameDir);
+    // Directory validation now belongs to AppController, including direct runProxy calls.
+    writeFileSync(join(gameDir, 'RotMG Exalt.exe'), 'fixture');
     const helper = join(root, 'helper.dll');
     writeFileSync(helper, 'RealmTool-Helper/1');
     // Keep stale-target cleanup confined to this fixture as well.
@@ -153,6 +160,15 @@ describe('runProxy', () => {
     expect(output).toHaveBeenCalledExactlyOnceWith(path);
     expect(existsSync(path)).toBe(false);
     expect(deps.createHost).not.toHaveBeenCalled();
+  });
+
+  it('rejects a game-executable launcher before saving CLI configuration', async () => {
+    options.launcher = join(gameDir, 'RotMG Exalt.exe');
+    await expect(runProxy(options, gameDir, deps)).rejects.toThrow('Select the RotMG Exalt Launcher');
+    expect(existsSync(join(deps.profileDir(), 'config.json'))).toBe(false);
+    expect(deps.createHost).not.toHaveBeenCalled();
+    expect(deps.launch).not.toHaveBeenCalled();
+    expect(deps.onShutdown).not.toHaveBeenCalled();
   });
 
   it('sets TEXT verdict interest before start resolves', async () => {
