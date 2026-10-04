@@ -17,7 +17,13 @@ export interface AutoDrinkBoundary {
   /** Synchronous final socket acceptance, not a server acknowledgement. */
   send(use: AutoDrinkUse): boolean;
 }
-export interface AutoDrinkGate { available: boolean; backlog: boolean; escape: boolean }
+export interface AutoDrinkGate {
+  available: boolean;
+  backlog: boolean;
+  escape: boolean;
+  /** Block automatic selection/reservation while retaining accepted-write bookkeeping. */
+  consumptionBlockReason?: string;
+}
 interface Stock { type: number; qty: number; revision: number }
 interface Reservation extends Stock { slotId: number; at: number; epoch: number; tainted: boolean }
 const QUICK = 1_000_000;
@@ -290,6 +296,7 @@ export class AutoDrinkController {
 
   private blockReason(gate: AutoDrinkGate, now: number, time: number | null): string {
     if (!this.settings.enabled) return 'disabled';
+    if (gate.consumptionBlockReason) return gate.consumptionBlockReason;
     if (this.escaped || gate.escape) return 'escape lifecycle';
     if (this.terminal) return this.terminal;
     if (!gate.available) return 'transport unavailable';

@@ -3,11 +3,13 @@ import { AutoDrinkController } from '../../src/auto-drink/AutoDrinkController.ts
 import { DEFAULT_AUTO_DRINK_SETTINGS } from '../../src/auto-drink/AutoDrinkTypes.ts';
 import type { WorkerModule } from '../../src/transport/modules.ts';
 import { validateConfig, type AutoDrinkEvent } from './messages.ts';
+import { readGameBuildAsync } from '../../src/game/gameBuild.ts';
+import { describeError } from '../../src/util/describeError.ts';
 
 /** An independent module owner, also useful for isolated session tests. */
-export function createAutoDrinkModule(): WorkerModule {
-  let config = validateConfig({ settings: DEFAULT_AUTO_DRINK_SETTINGS, items: [] });
-  const controllers = new Set<AutoDrinkController>();
+export function createAutoDrinkModule(buildReader: (gameDir: string) => Promise<string> = readGameBuildAsync): WorkerModule {
+  let config = validateConfig({ settings: DEFAULT_AUTO_DRINK_SETTINGS, items: [], gameBuild: null, gameDir: null });
+  const sessions = new Set<() => void>();
   return {
     id: 'auto-drink', priority: 10,
     observe: { server: ['MAPINFO', 'CREATESUCCESS', 'UPDATE', 'NEWTICK', 'DAMAGE', 'DEATH'], client: ['ESCAPE'] },
@@ -16,16 +18,15 @@ export function createAutoDrinkModule(): WorkerModule {
     configure(value) {
       const next = validateConfig(value);
       config = next;
-      for (const controller of controllers) {
-        controller.configure(next.settings);
-        controller.setCatalog(next.items);
-      }
+      for (const apply of sessions) apply();
     },
     createSession(context) {
       let escapedGeneration: number | null = null;
       let closed = false;
       let lastStatus = '';
       let lastPostedAt = -Infinity;
+      let verification = 0;
+      let catalogReason = '';
       const controller = new AutoDrinkController({
         now: () => context.now(), wallNow: () => Date.now(),
         send(use) {
@@ -42,9 +43,34 @@ export function createAutoDrinkModule(): WorkerModule {
           } catch { return false; }
         },
       });
-      controller.configure(config.settings);
-      controller.setCatalog(config.items);
-      controllers.add(controller);
+      function apply(): void {
+        const next = config;
+        const token = ++verification;
+        controller.configure(next.settings);
+        // Catalog membership is also needed to account for accepted manual inventory consumption.
+        // Verification blocks automatic selection in evaluate, not outgoing bookkeeping.
+        controller.setCatalog(next.items);
+        catalogReason = next.gameDir === null ? 'installed game build unknown (game directory unavailable)'
+          : next.gameBuild === null ? 'catalog game build unknown' : 'verifying installed game build';
+        if (next.gameDir === null || next.gameBuild === null) return;
+        // Each session checks independently, including sessions opened while the main thread is stalled.
+        // A replaced config or closed session must never accept a late result from this read.
+        void (async () => {
+          try {
+            const installed = await buildReader(next.gameDir!);
+            if (closed || token !== verification) return;
+            if (installed !== next.gameBuild) {
+              catalogReason = `catalog is for game build ${next.gameBuild} but the installed game is ${installed}; run npm run gen:catalogs`;
+              return;
+            }
+            catalogReason = '';
+          } catch (error) {
+            if (!closed && token === verification) catalogReason = `installed game build unknown (${describeError(error)})`;
+          }
+        })();
+      }
+      apply();
+      sessions.add(apply);
       return {
         observe(packet, fromClient) {
           if (fromClient) { if (packet.name === 'ESCAPE') controller.escape(); }
@@ -71,7 +97,8 @@ export function createAutoDrinkModule(): WorkerModule {
             controller.escape();
             escapedGeneration = generation;
           }
-          controller.evaluate({ ...context.transport(), escape: context.automation.escapeLatched() });
+          controller.evaluate({ ...context.transport(), escape: context.automation.escapeLatched(),
+            consumptionBlockReason: catalogReason ? `consumables catalog unavailable: ${catalogReason}` : undefined });
           const status = controller.status();
           const signature = JSON.stringify([generation, status]);
           if (signature !== lastStatus && now - lastPostedAt >= 200) {
@@ -85,7 +112,7 @@ export function createAutoDrinkModule(): WorkerModule {
           closed = true;
           controller.disconnect();
           try { context.post({ type: 'status', status: controller.status(), generation: context.generation() } satisfies AutoDrinkEvent); }
-          finally { controllers.delete(controller); }
+          finally { sessions.delete(apply); }
         },
       };
     },

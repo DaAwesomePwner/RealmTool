@@ -5,6 +5,7 @@ import type { PacketFactory } from '../protocol/PacketFactory.ts';
 import type { PacketEvent, ProxyHost } from '../transport/host.ts';
 import type { InterestSpec } from '../transport/interest.ts';
 import { log } from '../util/log.ts';
+import { describeError } from '../util/describeError.ts';
 import {
   PLUGIN_API_VERSION, type Capability, type ClientConnection, type CommandHook, type ConnectionEvent,
   type PacketHook, type PluginContext, type PluginDefinition, type ServerInfo, type SettingDef, type WorkerChannel,
@@ -13,10 +14,6 @@ import { IDENTITY_PACKETS, PlayerIdentity } from './identity.ts';
 import { SettingsStore } from './settings.ts';
 
 const CREDENTIAL_PACKETS: ReadonlySet<string> = new Set(['HELLO']);
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export type ProxyLike = Pick<ProxyHost, 'on' | 'off' | 'setInterest' | 'forward' | 'inject' | 'configureModules' | 'moduleCommand'>;
 

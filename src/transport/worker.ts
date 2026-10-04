@@ -9,6 +9,8 @@ import type { WorkerCommand, WorkerEvent, WorkerInit } from './messages.ts';
 import { Session, type SessionEnv } from './session.ts';
 import { WORKER_MODULES } from './workerModules.ts';
 import type { WorkerModule } from './modules.ts';
+import { describeError } from '../util/describeError.ts';
+import { guardWorkerCall, tickSessions } from './workerGuard.ts';
 
 const TICK_MS = 8;
 const init = workerData as WorkerInit;
@@ -20,7 +22,7 @@ function configureModule(module: WorkerModule, config: unknown): void {
   try {
     module.configure?.(config);
   } catch (error) {
-    post({ type: 'diagnostic', message: `module ${module.id} rejected its configuration: ${error instanceof Error ? error.message : String(error)}` });
+    post({ type: 'diagnostic', message: `module ${module.id} rejected its configuration: ${describeError(error)}` });
   }
 }
 
@@ -67,14 +69,14 @@ if (init.host !== '127.0.0.1') {
   const timer = WORKER_MODULES.length > 0
     ? setInterval(() => {
       const now = performance.now();
-      for (const session of sessions.values()) session.tick(now);
+      tickSessions(sessions.values(), now, post);
     }, TICK_MS)
     : null;
 
-  port.on('message', (command: WorkerCommand) => {
+  port.on('message', (command: WorkerCommand) => guardWorkerCall(post, `Worker command ${command.type}`, () => {
     if (command.type === 'stop') {
       if (timer) clearInterval(timer);
-      for (const session of [...sessions.values()]) session.close('proxy');
+      for (const session of [...sessions.values()]) guardWorkerCall(post, 'Session close', () => session.close('proxy'), session.id);
       listener.close(() => port.close());
       return;
     }
@@ -100,5 +102,5 @@ if (init.host !== '127.0.0.1') {
       case 'module': session.command(command.moduleId, command.message); break;
       case 'close': session.close('proxy'); break;
     }
-  });
+  }, 'id' in command ? command.id : undefined));
 }
