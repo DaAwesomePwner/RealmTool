@@ -37,3 +37,17 @@ The bundled catalog is stamped `15a3ce058fe946c792c23558bdb10e2c`. The integrati
 3. `/nexus` sends you to the Nexus (`MANUAL NEXUS`).
 4. Enable Auto Drink in the profile (RealmTool stopped), put HP potions in a quickslot, take damage below 50%: a potion is used once, and not more often than every 400 ms.
 5. Ctrl+C. The profile has `auto-nexus` and `auto-drink` entries and no `PreHitPrediction`.
+
+## Rulings made during Phase 3a
+
+Each ruling ends with what it costs if it turns out to be wrong.
+
+1. **Collision HP is absent in 3a, not hidden.** There's no `PreHitPrediction` setting, nothing is saved, and the worker rejects enabling prediction. So 3b can introduce it ON by default without meeting an old saved `false`. *Cost:* none until 3b.
+2. **Reaction timing is fixed at 400 ms.** Realm Engine's adaptive reaction learning was dropped with its telemetry. *Cost:* retry and recovery windows don't adapt to the connection.
+3. **`fast-xml-parser` is a dev dependency used only by `tools/`.** The controller installs it (the Codex sandbox has no registry). *Cost:* a version bump.
+4. **The catalog is stamped with the game's Unity `build-guid` from `boot.config`.** *Cost:* a game update that keeps the same GUID would go undetected.
+5. **No live profile-switch transaction or cross-module rollback.** Profiles apply once at startup per plugin via `migrate`/`validate`. Each worker module validates its whole config before applying it. Realm Engine's transaction tests were adapted to this. *Cost:* a future live profile switcher (Phase 5 UI) needs a batch apply/rollback API.
+6. **Auto Drink checks the catalog against the installed build through a read-only `PluginContext.gameDir`,** at startup, on every new game connection and on enable. A mismatch or unknown build means no consumables (fail closed). *Cost:* after a game update, Auto Drink stays inactive until `npm run gen:catalogs` (intended).
+7. **Auto Drink disarms only on an accepted, written RECONNECT** (or the shared escape latch), never on a raw one. This overrides the plan's Task 7 observe list. *Cost:* none expected; Auto Nexus uses the same rule.
+8. **The `AutoDrinkItem` type is unified** on `src/auto-drink/AutoDrinkTypes.ts`. Task 5 used a temporary local copy so it could run in parallel. *Cost:* none.
+9. **A new Phase 3a handoff** was written instead of renaming the Phase 2 one, which the `docs/phase2-wrapup` branch edits. *Cost:* one extra file.
