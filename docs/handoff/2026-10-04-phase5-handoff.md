@@ -15,7 +15,7 @@ U1–U5 were approved by the user as written on 2026-10-04.
 | U5 | Per-user `currentUser` installation under `%LOCALAPPDATA%`, without elevation; each Windows user installs separately. |
 | P1 | Rust spawns the sidecar; no JS process capability or shell plugin. The Job Object uses kill-on-close plus silent breakaway so the game and launcher survive RealmTool quitting. Suspended spawn closes the spawn/assign race. |
 | P2 | As implemented: closing hides to tray while the proxy runs, otherwise quits. First hide displays a one-time notice. Tray offers Show and Quit. Quit requests `/api/shutdown`, waits up to 3 seconds, then Job Object cleanup kills the sidecar if necessary. |
-| P3 | As implemented: stdout contains one `REALMTOOL_READY {"port":N}` line; other process output is discarded by the shell. Logs go to memory/file. Stdin EOF or authenticated shutdown ends the sidecar. |
+| P3 | As implemented: stdout contains one `REALMTOOL_READY {"port":N}` line; other stdout and all stderr are piped and drained (never shown) by the shell. A null stderr crashes Koffi-loaded Node on exit. Logs go to memory/file. Stdin EOF or authenticated shutdown ends the sidecar. |
 | P4 | UI installed-size budget is ≤ 120 MiB, measured 95.65 MiB. Headless ≤ 90 MiB is dropped for v1 because no supported Node fits; the development CLI remains available. |
 | P5 | Generic schema-driven settings and status only. Plugin settings follow each plugin's validator: clamping counts as acceptance, with the stored value shown. Unknown/hidden keys and disabled-plugin buttons are rejected. |
 | P6 | Memory ring: 1,000 records. Disk: `%APPDATA%\RealmTool\logs\realmtool.log`, rotating at 1 MiB with three files total. A throwing sink is detached with one warning. |
@@ -24,7 +24,14 @@ HTTP bearer authentication has one exception: CORS preflight (`OPTIONS`) has no 
 
 ## Validation
 
-Validation: <coordinator fills in>
+Validation (coordinator, outside the sandbox, 2026-10-04, final branch state):
+- `npx tsc --noEmit` and `npx tsc --noEmit -p ui` pass, and `npx vitest run` passes **1268 tests in 68 files**.
+- `cargo test --offline --manifest-path src-tauri/Cargo.toml` passes **11/11**, including on a checkout without `dist/`. The bundle resources live in `src-tauri/tauri.bundle.conf.json`, which only `tools/build-app.ts` passes to `tauri build --config`.
+- The final installer was rebuilt with the stderr fix: `RealmTool_0.1.0_x64-setup.exe` 24.10 MiB, measured installed at **100,300,681 bytes (95.65 MiB)**. The silent uninstall removed the directory and the leftover install-location key.
+- `node tools/smoke-package.ts` passed on the port-busy path (the user's Realm Engine holds 2050), with a clean exit code 0. The full path (running proxy, four built-ins) needs 2050 free; run it with Realm Engine closed.
+- Every task was implemented by a Codex agent, verified by the coordinator and approved by an independent Codex review. Review fix rounds: T2, T5, T7, T8 (twice) and T9 (twice).
+
+**Exit crash found and fixed during validation:** a Node process whose stderr is a null handle crashes with 0xC0000409 on exit once Koffi is loaded (reproduced with a bare `require('koffi')` on Node 24.21.0 and 26.7.0). The shell now pipes and drains the sidecar's stderr, a Rust test with a Koffi-loading stub pins exit code 0, and the package smoke mirrors the shell's stdio.
 
 Coordinator-measured build facts (not remeasured by the documentation worker):
 

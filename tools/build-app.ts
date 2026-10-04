@@ -15,7 +15,7 @@ export function buildApp(): void {
   if (process.platform !== 'win32') throw new Error('The app build requires Windows x64');
   // cmd is needed for npm.cmd/npx.cmd; commands contain no caller-supplied input.
   for (const command of ['npm run build:helper', 'npm run fetch:node', 'npm run build:backend',
-    'npm run ui:build', 'npx tauri build']) {
+    'npm run ui:build', 'npx tauri build --config src-tauri/tauri.bundle.conf.json']) {
     const result = spawnSync('cmd.exe', ['/d', '/s', '/c', command], { cwd: projectRoot, stdio: 'inherit', windowsHide: true });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`${command} failed (${result.status ?? result.signal})`);
