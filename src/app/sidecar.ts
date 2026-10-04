@@ -4,9 +4,9 @@ import { resourcePaths } from './resources.ts';
 import { AppConfigStore } from '../config/appConfig.ts';
 import { appDataDir } from '../config/store.ts';
 import { log } from '../util/log.ts';
-import { LogRing, attachFileLog } from '../util/logStore.ts';
+import { type LogRing, attachFileLog } from '../util/logStore.ts';
 
-export async function runSidecar(options: { env: NodeJS.ProcessEnv; stdin: NodeJS.ReadableStream; stdout: NodeJS.WritableStream;
+export async function runSidecar(options: { logs: LogRing; env: NodeJS.ProcessEnv; stdin: NodeJS.ReadableStream; stdout: NodeJS.WritableStream;
   startApi: (controller: AppController, token: string, origins: string[]) => Promise<{ port: number; close(): Promise<void> }> }): Promise<number> {
   const token = options.env.REALMTOOL_API_TOKEN;
   delete options.env.REALMTOOL_API_TOKEN;
@@ -33,7 +33,7 @@ export async function runSidecar(options: { env: NodeJS.ProcessEnv; stdin: NodeJ
     || ('destroyed' in options.stdin && options.stdin.destroyed)) stop();
   options.stdin.resume();
   try {
-    controller = new AppController({ config: new AppConfigStore(appDataDir(options.env)), resources: resourcePaths(options.env), logs: new LogRing() });
+    controller = new AppController({ config: new AppConfigStore(appDataDir(options.env)), resources: resourcePaths(options.env), logs: options.logs });
     shutdown = controller.shutdown.bind(controller);
     controller.shutdown = () => { stopping = true; finish(); return shutdown!(); };
     if (stopping) await shutdown();

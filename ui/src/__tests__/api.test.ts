@@ -58,3 +58,44 @@ it('retries a failed ticket request and cancels retries without opening a socket
   stop(); await vi.advanceTimersByTimeAsync(10000);
   expect(fetch).toHaveBeenCalledTimes(2); expect(socket).not.toHaveBeenCalled();
 });
+
+it('ignores delayed callbacks from a socket closed by its watchdog', async () => {
+  vi.useFakeTimers();
+  class Socket {
+    static sockets: Socket[] = [];
+    onopen: (() => void) | null = null;
+    onclose: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    close = vi.fn();
+    constructor() { Socket.sockets.push(this); }
+  }
+  vi.stubGlobal('WebSocket', Socket);
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ticket: 'ticket' }))));
+  const api = new ApiClient({ port: 1234, token: 'secret' });
+  api.onConnection = vi.fn();
+  const event = vi.fn(), stop = await api.events(event);
+  try {
+    const a = Socket.sockets[0];
+    const lateClose = a.onclose!, lateOpen = a.onopen!, lateError = a.onerror!, lateMessage = a.onmessage!;
+    await vi.advanceTimersByTimeAsync(5250);
+    const b = Socket.sockets[1];
+    expect(b).toBeDefined();
+    // B is still connecting: A must not cancel B's connection watchdog.
+    lateClose();
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(Socket.sockets).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(1);
+    b.onopen!();
+    vi.mocked(api.onConnection).mockClear();
+    lateClose(); lateOpen(); lateError(); lateMessage({ data: '{}' });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(Socket.sockets).toHaveLength(2);
+    expect(api.onConnection).not.toHaveBeenCalled();
+    expect(event).not.toHaveBeenCalled();
+    expect(b.close).not.toHaveBeenCalled();
+    expect(a.close).toHaveBeenCalledOnce();
+    expect([a.onopen, a.onmessage, a.onclose, a.onerror]).toEqual([null, null, null, null]);
+  } finally { stop(); }
+});

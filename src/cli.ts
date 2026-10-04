@@ -233,17 +233,14 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (options.command === 'serve') {
     const logs = new LogRing();
-    const detach = log.addSink(record => logs.push(record));
-    try {
-      return await runSidecar({ env: process.env, stdin: process.stdin, stdout: process.stdout,
-        startApi: async (controller, token, origins) => {
-          const api = await startApiServer(controller, logs, { token, origins });
-          // runSidecar writes READY in the promise continuation, before this next turn.
-          const start = setImmediate(() => { void controller.startProxy().catch(() => { /* Controller retains and logs the failure. */ }); });
-          return { port: api.port, close: () => { clearImmediate(start); return api.close(); } };
-        },
-      });
-    } finally { detach(); }
+    return await runSidecar({ logs, env: process.env, stdin: process.stdin, stdout: process.stdout,
+      startApi: async (controller, token, origins) => {
+        const api = await startApiServer(controller, logs, { token, origins });
+        // runSidecar writes READY in the promise continuation, before this next turn.
+        const start = setImmediate(() => { void controller.startProxy().catch(() => { /* Controller retains and logs the failure. */ }); });
+        return { port: api.port, close: () => { clearImmediate(start); return api.close(); } };
+      },
+    });
   }
   if (options.command === 'help') {
     console.log(HELP);

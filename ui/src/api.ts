@@ -55,28 +55,38 @@ export class ApiClient {
       retry = setTimeout(() => { retry = undefined; void connect(); }, delay);
       delay = Math.min(delay * 2, 5000);
     };
+    const closeSocket = (current: WebSocket) => {
+      current.onopen = null; current.onmessage = null; current.onclose = null; current.onerror = null;
+      if (socket === current) socket = undefined;
+      current.close();
+    };
     const connect = async () => {
       try {
         const { ticket } = await this.post<{ ticket: string }>('/api/ws-ticket', {});
         if (stopped) return;
         const current = new WebSocket(`${this.base.replace('http:', 'ws:')}/api/events?ticket=${encodeURIComponent(ticket)}`);
+        if (socket) closeSocket(socket);
         socket = current;
-        current.onopen = () => { clearTimeout(watchdog); delay = 250; this.onConnection(true); };
+        current.onopen = () => { if (socket !== current) return; clearTimeout(watchdog); delay = 250; this.onConnection(true); };
         current.onmessage = event => {
+          if (socket !== current) return;
           let parsed: unknown;
           try { parsed = JSON.parse(String(event.data)); } catch { return; }
           onEvent(parsed);
         };
-        current.onclose = schedule;
-        current.onerror = () => { current.close(); schedule(); };
-        watchdog = setTimeout(() => { current.close(); schedule(); }, 5000);
+        current.onclose = () => {
+          if (socket !== current) return;
+          closeSocket(current); schedule();
+        };
+        current.onerror = () => { if (socket !== current) return; closeSocket(current); schedule(); };
+        watchdog = setTimeout(() => { if (socket !== current) return; closeSocket(current); schedule(); }, 5000);
       } catch { schedule(); }
     };
     await connect();
     return () => {
       stopped = true;
       clearTimeout(retry); clearTimeout(watchdog);
-      if (socket) { socket.onclose = null; socket.onerror = null; socket.onopen = null; socket.onmessage = null; socket.close(); }
+      if (socket) closeSocket(socket);
     };
   }
 }
