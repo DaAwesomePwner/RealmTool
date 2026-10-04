@@ -1,12 +1,12 @@
 # RealmTool
 
-A lightweight launcher and companion for Realm of the Mad God Exalt. Phase 1 provides a pass-through proxy; plugins are planned for later phases.
+A lightweight launcher and companion for Realm of the Mad God Exalt. Phase 2 adds a plugin host with Chat Filter and Server Switch to the proxy.
 
 RealmTool reuses selected, tested pieces of [realm-engine-client](https://github.com/DaAwesomePwner/realm-engine-client) (MIT). It drops the IL2CPP DLL, overlay, account manager, dashboard and 77 MiB of game assets.
 
-**Status:** Phase 1 pass-through proxy. No plugins yet.
+**Status:** Phase 2 plugin host with built-in Chat Filter and Server Switch.
 
-## Phase 1 usage
+## Usage
 
 Requires Windows, Node ≥ 22.18, and Visual Studio 2022 C++ x64 tools to build the helper.
 
@@ -24,6 +24,13 @@ Use `--launcher "C:\path\to\RotMG Exalt Launcher.exe"` to choose an explicit lau
 Press Ctrl+C to stop the proxy. The helper stays installed until you remove it. Close Exalt, then run `node src/cli.ts uninstall-helper` to remove RealmTool's helper and restore the original `winhttp.dll` if one was backed up. Pass the same `--game-dir` when using an explicit game folder.
 
 Do not run Realm Engine against the same game installation at the same time.
+
+## Plugins (Phase 2)
+
+- **Chat Filter:** on by default. Its settings live in the profile. Edit them with RealmTool stopped, because RealmTool saves its own state on exit. `node src/cli.ts config-path` prints the profile location.
+- **Server Switch:** `/con <server>` (names like `USWest`, abbreviations like `usw`, or an IPv4), `/goto <ip>[:port]`, `/ip`. Exalt's own server label doesn't change.
+
+The profile is created on the first run that changes a setting.
 
 | Document | What it covers |
 |---|---|

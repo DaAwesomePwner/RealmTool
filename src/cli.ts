@@ -1,16 +1,20 @@
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { BUILTIN_PLUGINS } from '../plugins/index.ts';
+import { appDataDir, ProfileStore } from './config/store.ts';
 import { findExaltDirs, isExaltDir } from './game/exaltFinder.ts';
 import { DEFAULT_HELPER_PATH, installHelper, uninstallHelper } from './game/helperInstaller.ts';
 import { describeLaunchTarget, findLaunchTarget, openLaunchTarget, type LaunchTarget } from './game/gameLauncher.ts';
 import { GAME_PORT } from './protocol/constants.ts';
-import { loadSchema } from './protocol/schema.ts';
+import type { PluginDefinition } from './plugins/api.ts';
+import { PluginHost } from './plugins/host.ts';
+import { createFactory, loadSchema } from './protocol/schema.ts';
 import { createTargetResolver, parseTargetFile, removeStaleTargetFiles } from './routing/targetResolver.ts';
 import { ProxyHost, type ProxyHostOptions } from './transport/host.ts';
 import { log } from './util/log.ts';
 
-const COMMANDS = ['start', 'find-game', 'install-helper', 'uninstall-helper', 'help'] as const;
+const COMMANDS = ['start', 'find-game', 'install-helper', 'uninstall-helper', 'config-path', 'help'] as const;
 type Command = typeof COMMANDS[number];
 
 export interface CliOptions {
@@ -29,6 +33,7 @@ Commands:
   find-game          List detected Exalt install folders
   install-helper     Copy the helper DLL into the game folder
   uninstall-helper   Remove the helper DLL and restore any backed-up winhttp.dll
+  config-path        Print the settings profile location
 
 Options:
   --game-dir <dir>   Exalt "Production" folder (default: auto-detect)
@@ -82,7 +87,9 @@ export function resolveGameDir(options: CliOptions): string | null {
 }
 
 export interface RunDeps {
-  createHost(options: ProxyHostOptions): Pick<ProxyHost, 'on' | 'start' | 'stop'>;
+  createHost(options: ProxyHostOptions): Pick<ProxyHost, 'on' | 'off' | 'start' | 'stop' | 'setInterest' | 'forward' | 'inject'>;
+  plugins: readonly PluginDefinition[];
+  profileDir(): string;
   launch(onError: (error: Error) => void, override?: string): LaunchTarget | null;
   /** Resolves when the user asks to stop (SIGINT/SIGTERM). Returns a disposer that removes the handlers. */
   onShutdown(handler: () => void): () => void;
@@ -90,6 +97,8 @@ export interface RunDeps {
 
 const defaultRunDeps: RunDeps = {
   createHost: options => new ProxyHost(options),
+  plugins: BUILTIN_PLUGINS,
+  profileDir: () => appDataDir(),
   launch: (onError, override) => {
     const target = findLaunchTarget(undefined, override);
     if (target) openLaunchTarget(target, onError);
@@ -109,14 +118,21 @@ export async function runProxy(options: CliOptions, gameDir: string, deps: RunDe
   const stale = removeStaleTargetFiles();
   if (stale) log.info('Helper', `Removed ${stale} stale target file(s)`);
 
+  const schema = loadSchema();
+  const factory = createFactory(schema);
   const host = deps.createHost({
-    schema: loadSchema(),
+    schema,
     listenPort: GAME_PORT,
     fallbackDestination: options.fallback ? { host: options.fallback, port: GAME_PORT } : null,
     resolveTarget: createTargetResolver({ proxyPort: GAME_PORT }),
   });
   let dispose: (() => void) | undefined;
+  let plugins: PluginHost | undefined;
   try {
+    plugins = new PluginHost({ proxy: host, factory, definitions: deps.plugins, profile: new ProfileStore({ dir: deps.profileDir() }) });
+    plugins.start();
+    log.info('Plugins', `Loaded ${plugins.loaded().join(', ') || 'no plugins'}`);
+
     host.on('session', ({ id, remotePort }) => log.info('Proxy', `Game connected (${id.slice(0, 8)}, port ${remotePort})`));
     host.on('routed', ({ id, host: server, port, restored }) =>
       log.info('Proxy', `${id.slice(0, 8)} → ${server}:${port}${restored ? ' (transfer)' : ''}`));
@@ -181,6 +197,7 @@ export async function runProxy(options: CliOptions, gameDir: string, deps: RunDe
   } finally {
     try {
       log.info('Proxy', 'Stopping…');
+      plugins?.stop();
       await host.stop();
     } finally {
       dispose?.();
@@ -198,6 +215,10 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (options.command === 'help') {
     console.log(HELP);
+    return 0;
+  }
+  if (options.command === 'config-path') {
+    console.log(new ProfileStore({ dir: appDataDir() }).path);
     return 0;
   }
   if (options.command === 'find-game') {

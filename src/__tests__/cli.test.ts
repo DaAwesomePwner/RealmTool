@@ -2,9 +2,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HELP, parseCli, resolveGameDir, runProxy, type CliOptions, type RunDeps } from '../cli.ts';
-import { ProxyHost } from '../transport/host.ts';
-import { loadSchema } from '../protocol/schema.ts';
+import { HELP, main, parseCli, resolveGameDir, runProxy, type CliOptions, type RunDeps } from '../cli.ts';
+import { appDataDir, ProfileStore } from '../config/store.ts';
+import { PLUGIN_API_VERSION, type PluginContext } from '../plugins/api.ts';
+import { FakeProxy } from '../testing/pluginHarness.ts';
 import { DEFAULT_HELPER_PATH } from '../game/helperInstaller.ts';
 import { log } from '../util/log.ts';
 
@@ -12,6 +13,11 @@ describe('parseCli', () => {
   it('defaults to help', () => {
     expect(parseCli([]).command).toBe('help');
     expect(parseCli(['start', '--help']).command).toBe('help');
+  });
+
+  it('parses config-path and documents it in help', () => {
+    expect(parseCli(['config-path']).command).toBe('config-path');
+    expect(HELP).toContain('config-path        Print the settings profile location');
   });
 
   it('parses start options', () => {
@@ -51,6 +57,11 @@ describe('parseCli', () => {
   });
 });
 
+class FakeHost extends FakeProxy {
+  async start(): Promise<number> { return 2050; }
+  async stop(): Promise<void> {}
+}
+
 describe('runProxy', () => {
   const tempBase = tmpdir();
   let root: string;
@@ -61,7 +72,8 @@ describe('runProxy', () => {
   let start: ReturnType<typeof vi.fn<() => Promise<number>>>;
   let stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
   let dispose: ReturnType<typeof vi.fn<() => void>>;
-  let host: ProxyHost;
+  let host: FakeHost;
+  let removeSink: () => void;
 
   beforeEach(() => {
     root = mkdtempSync(join(tempBase, 'realmtool-cli-'));
@@ -72,6 +84,8 @@ describe('runProxy', () => {
     // Keep stale-target cleanup confined to this fixture as well.
     for (const name of ['TMP', 'TEMP', 'TMPDIR']) vi.stubEnv(name, root);
     writeFileSync(join(root, 'realmtool_target_123.txt'), '54.86.47.176');
+    log.setConsole(false);
+    removeSink = log.addSink(() => {});
     vi.spyOn(log, 'info').mockImplementation(() => {});
     vi.spyOn(log, 'warn').mockImplementation(() => {});
     vi.spyOn(log, 'error').mockImplementation(() => {});
@@ -83,13 +97,16 @@ describe('runProxy', () => {
       return 2050;
     });
     stop = vi.fn(async () => {});
-    host = Object.assign(new ProxyHost({ schema: loadSchema() }), { start, stop });
+    host = Object.assign(new FakeHost(), { start, stop });
     deps = {
+      plugins: [],
+      profileDir: () => join(root, 'config'),
       createHost: vi.fn(hostOptions => {
         expect(hostOptions.listenPort).toBe(2050);
         expect(existsSync(join(gameDir, 'winhttp.dll'))).toBe(false);
         expect(existsSync(join(root, 'realmtool_target_123.txt'))).toBe(false);
-        return host;
+        // EventEmitter's fluent methods retain ProxyHost's return type in Pick.
+        return host as unknown as ReturnType<RunDeps['createHost']>;
       }),
       launch: vi.fn(() => {
         expect(start).toHaveBeenCalledOnce();
@@ -102,12 +119,74 @@ describe('runProxy', () => {
   });
 
   afterEach(() => {
+    removeSink();
+    log.setConsole(true);
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     if (dirname(root) !== tempBase || !basename(root).startsWith('realmtool-cli-')) {
       throw new Error('Unexpected temporary fixture path');
     }
     rmSync(root, { recursive: true, force: true });
+  });
+
+  function registerTestPlugin(cleanup: () => void = () => {}): () => PluginContext {
+    let context!: PluginContext;
+    deps.plugins = [{
+      id: 'cli-test', name: 'CLI Test', apiVersion: PLUGIN_API_VERSION, capabilities: ['packets'],
+      register(ctx) {
+        context = ctx;
+        ctx.hookPacket('TEXT', () => {});
+        ctx.registerSetting('message', { label: 'Message', type: 'text', value: 'default' });
+        ctx.registerCleanup(cleanup);
+      },
+    }];
+    return () => context;
+  }
+
+  it('prints config-path without requiring a game directory or creating a profile', async () => {
+    vi.stubEnv('APPDATA', root);
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const path = new ProfileStore({ dir: appDataDir() }).path;
+    expect(await main(['config-path', '--game-dir', join(root, 'missing-game')])).toBe(0);
+    expect(output).toHaveBeenCalledExactlyOnceWith(path);
+    expect(existsSync(path)).toBe(false);
+    expect(deps.createHost).not.toHaveBeenCalled();
+  });
+
+  it('sets TEXT verdict interest before start resolves', async () => {
+    registerTestPlugin();
+    const setInterest = vi.spyOn(host, 'setInterest');
+    start.mockImplementation(async () => {
+      expect(setInterest).toHaveBeenCalledOnce();
+      expect(host.interest.verdict?.server).toContain('TEXT');
+      return 2050;
+    });
+    expect(await runProxy(options, gameDir, deps)).toBe(0);
+    expect(log.info).toHaveBeenCalledWith('Plugins', 'Loaded cli-test');
+    expect(existsSync(new ProfileStore({ dir: deps.profileDir() }).path)).toBe(false);
+  });
+
+  it('flushes a setting changed during the run on normal shutdown', async () => {
+    const context = registerTestPlugin();
+    const path = new ProfileStore({ dir: deps.profileDir() }).path;
+    deps.launch = vi.fn(() => {
+      expect(context().updateSetting('message', 'saved on shutdown')).toBe(true);
+      expect(existsSync(path)).toBe(false);
+      shutdown();
+      return null;
+    });
+    expect(await runProxy(options, gameDir, deps)).toBe(0);
+    expect(JSON.parse(readFileSync(path, 'utf8')).plugins['cli-test'].settings.message)
+      .toBe('saved on shutdown');
+  });
+
+  it('runs plugin cleanup before stopping the proxy host', async () => {
+    const calls: string[] = [];
+    registerTestPlugin(() => { calls.push('plugin cleanup'); });
+    stop.mockImplementation(async () => { calls.push('host stop'); });
+    expect(await runProxy(options, gameDir, deps)).toBe(0);
+    expect(calls).toEqual(['plugin cleanup', 'host stop']);
   });
 
   it('returns zero on shutdown and stops the host once', async () => {
