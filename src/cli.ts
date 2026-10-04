@@ -1,4 +1,4 @@
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { BUILTIN_PLUGINS } from '../plugins/index.ts';
@@ -11,8 +11,12 @@ import type { PluginDefinition } from './plugins/api.ts';
 import { PluginHost, type ProxyLike } from './plugins/host.ts';
 import { createFactory, loadSchema } from './protocol/schema.ts';
 import { createTargetResolver, parseTargetFile, removeStaleTargetFiles } from './routing/targetResolver.ts';
+import { tcpOwnerSourceError } from './routing/tcpProcessIdentity.ts';
 import { ProxyHost, type ProxyHostOptions } from './transport/host.ts';
 import { log } from './util/log.ts';
+
+/** The checkout whose node_modules must hold koffi. */
+const REPO_DIR = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 const COMMANDS = ['start', 'find-game', 'install-helper', 'uninstall-helper', 'config-path', 'help'] as const;
 type Command = typeof COMMANDS[number];
@@ -91,6 +95,8 @@ export interface RunDeps {
   plugins: readonly PluginDefinition[];
   profileDir(): string;
   launch(onError: (error: Error) => void, override?: string): LaunchTarget | null;
+  /** Loads the native TCP owner lookup; returns why it is unavailable, or null when it works. */
+  nativeModuleError(): string | null;
   /** Resolves when the user asks to stop (SIGINT/SIGTERM). Returns a disposer that removes the handlers. */
   onShutdown(handler: () => void): () => void;
 }
@@ -104,6 +110,7 @@ const defaultRunDeps: RunDeps = {
     if (target) openLaunchTarget(target, onError);
     return target;
   },
+  nativeModuleError: tcpOwnerSourceError,
   onShutdown(handler) {
     process.once('SIGINT', handler);
     process.once('SIGTERM', handler);
@@ -115,6 +122,17 @@ const defaultRunDeps: RunDeps = {
 };
 
 export async function runProxy(options: CliOptions, gameDir: string, deps: RunDeps = defaultRunDeps): Promise<number> {
+  // Without the TCP owner lookup no connection can be matched to the helper's target, so
+  // the game would hang on the loading screen. Stop before touching the game folder.
+  const nativeError = deps.nativeModuleError();
+  if (nativeError) {
+    if (!options.fallback) {
+      log.error('RealmTool', `RealmTool can't load its native module (koffi): run "npm install" in ${REPO_DIR} and try again`);
+      return 1;
+    }
+    log.warn('Routing', `Native module unavailable; new connections will use the fallback server ${options.fallback}`);
+  }
+
   const stale = removeStaleTargetFiles();
   if (stale) log.info('Helper', `Removed ${stale} stale target file(s)`);
 
