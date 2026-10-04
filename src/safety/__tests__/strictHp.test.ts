@@ -11,7 +11,7 @@ function fixture(settings: SafetySettingsInput = {}, hp: number | null = 707, ma
   let now = 1000, tick = 0;
   const escape = vi.fn();
   const engine = new SafetyEngine(escape);
-  engine.configure({ enabled: true, ...settings }, now);
+  engine.configure({ enabled: true, preHitPrediction: false, ...settings }, now);
   const emit = (name: string, data: any = {}, client = false, defined = true) => {
     const packet = factory.createByName(name);
     packet.direction = client ? 'client' : 'server';
@@ -26,6 +26,8 @@ function fixture(settings: SafetySettingsInput = {}, hp: number | null = 707, ma
       ...(max === null ? [] : [{ id: S.MaxHP, value: max }, { id: S.Defense, value: 0 }]), ...(hp === null ? [] : [{ id: S.HP, value: hp }]),
     ] } },
   ] });
+  engine.setCatalog({ projectiles: [[49897, 0, { lifetimeMs: 10000, multiHit: false, armorPiercing: false,
+    maxHealthDamage: 0, conditionEffects: [{ effect: 'Curse', durationSec: 2 }] }]], tiles: [[7, 10]] });
   const shot = (bullet = 0, damage = 90) => emit('ENEMYSHOOT', { ownerId: 184312, bulletId: bullet, bulletType: 0, damage, numShots: 1 });
   const hit = (bullet = 0) => emit('PLAYERHIT', { objectId: 184312, bulletId: bullet }, true);
   const damage = (bullet = 0, amount = 90) => emit('DAMAGE', { targetId: 1, objectId: 184312, bulletId: bullet, damageAmount: amount });
@@ -52,8 +54,8 @@ it.each([false])('logged Curse-applying projectile at 707/707 HP with prediction
       pendingCount: 0, pendingDamage: 0, impacts: [] } });
 });
 
-it('keeps default-off monitoring ready above the threshold and gates direct automatic requests only', () => {
-  expect(DEFAULT_SAFETY_SETTINGS).not.toHaveProperty('preHitPrediction');
+it('keeps explicitly OFF monitoring ready above the threshold and gates direct automatic requests only', () => {
+  expect(DEFAULT_SAFETY_SETTINGS.preHitPrediction).toBe(true);
   const f = fixture();
   expect(f.engine.status()).toMatchObject({ automaticEligible: true, protectionState: 'monitoring' });
   for (const reason of ['unbounded impact', 'damage ledger capacity', 'native feed stalled', 'ordinary backlog', 'manual nexus']) {
@@ -165,15 +167,11 @@ it('enable/disable and ordinary settings changes preserve active-mode HP facts w
   }
 });
 
-it('rejects enabling Collision HP', () => {
-  const f = fixture();
-  const before = f.engine.status(), settings = { ...f.engine.settings };
-  expect(() => safetySettings({ preHitPrediction: true })).toThrow('Collision HP is not available in this version');
-  expect(() => f.configure({ enabled: false, preHitPrediction: true })).toThrow('Collision HP is not available in this version');
-  expect(f.engine.settings).toEqual(settings);
-  expect(f.engine.status()).toEqual(before);
-  f.hit(); expectStrict(f);
-  f.health(176); expect(f.escape).toHaveBeenCalledTimes(1);
+it('defaults Collision HP ON, respects explicit OFF, and ignores retired selectors', () => {
+  expect(safetySettings({}).preHitPrediction).toBe(true);
+  expect(safetySettings({ preHitPrediction: false }).preHitPrediction).toBe(false);
+  expect(safetySettings({ preHitPrediction: true, burstGuard: true, instantNexus: true, predictionModel: 'v2-shadow', forecastTiming: 'old' }))
+    .toEqual(DEFAULT_SAFETY_SETTINGS);
 });
 
 it('filters owner stats and triggers immediately on a full owner UPDATE', () => {
@@ -204,4 +202,69 @@ it('owner kill flag records zero and death without requesting an automatic escap
   expect(f.engine.status()).toMatchObject({ phase: 'dead', confirmedHp: 0, automaticEligible: false });
   f.engine.request(f.time(), 'manual nexus', true); f.advance(5000);
   expect(f.escape).not.toHaveBeenCalled();
+});
+
+it('Curse-applying projectile ON charges its own hit before the condition changes later hits', () => {
+  const f = fixture({ preHitPrediction: true }); f.shot(0, 90); f.hit();
+  expect(f.engine.status().lowerHp).toBe(617); expect(f.escape).not.toHaveBeenCalled();
+  f.shot(1, 90); f.hit(1); expect(f.engine.status().lowerHp).toBe(505);
+});
+it('ON unknown HP with no reports never triggers, but real reported loss does', () => {
+  const f = fixture({ preHitPrediction: true }, null); f.advance(10000);
+  expect(f.escape).not.toHaveBeenCalled(); f.hit();
+  expect(f.escape.mock.calls[0][0].reason).toBe('health unavailable during observed danger');
+});
+it('ON zero threshold ignores predicted zero and waits for explicit server zero', () => {
+  const f = fixture({ preHitPrediction: true, thresholdPct: 0 }, 1); f.shot(0, 99999); f.hit();
+  f.advance(10000); expect(f.escape).not.toHaveBeenCalled(); f.health(0);
+  expect(f.escape.mock.calls[0][0]).toMatchObject({ reason: 'server HP threshold', confirmedHp: 0 });
+});
+it('ON threshold change reevaluates retained collision HP without refreshing its anchor', () => {
+  const f = fixture({ preHitPrediction: true }); f.shot(0, 90); f.hit(); f.advance(100);
+  f.configure({ thresholdPct: 90 });
+  expect(f.escape.mock.calls[0][0]).toMatchObject({ lowerHp: 617, evidence: { trigger: 'settings changed', pendingDamage: 90 } });
+  expect(f.engine.status().healthAgeMs).toBe(100);
+});
+it('OFF/ON retires reports, measurements and areas while preserving server HP revision and age', () => {
+  const f = fixture({ preHitPrediction: true }, 1000, 1000);
+  f.shot(1, 10); f.hit(1); f.damage(1, 10); f.health(990);
+  f.shot(2, 10); f.damage(2, 10);
+  f.emit('AOE', { position: { x: 1, y: 1 }, radius: 1, damage: 900 });
+  f.emit('GROUNDDAMAGE', { position: { x: 1, y: 1 } }, true);
+  f.advance(100); const revision = f.engine.predictor.revision;
+  f.configure({ preHitPrediction: false });
+  expect(f.engine.status()).toMatchObject({ confirmedHp: 990, lowerHp: 990, healthAgeMs: 100, prediction: null });
+  f.configure({ preHitPrediction: true });
+  expect(f.engine.predictor.revision).toBe(revision);
+  expect(f.engine.status().prediction?.pendingCount).toBe(0);
+  f.emit('AOE', { position: { x: 1, y: 1 }, radius: 1, damage: 20 });
+  f.emit('AOEACK', { position: { x: 1, y: 1 } }, true);
+  f.hit(1); expect(f.engine.status().lowerHp).toBe(960);
+});
+it('enable/disable ON preserves reported debt and server anchor age', () => {
+  const f = fixture({ preHitPrediction: true }); f.shot(); f.hit(); f.advance(100);
+  f.configure({ enabled: false }); f.configure({ notification: false, reactionMs: 600 }); f.configure({ enabled: true });
+  expect(f.engine.status()).toMatchObject({ confirmedHp: 707, lowerHp: 617, healthAgeMs: 100, prediction: { pendingCount: 1 } });
+});
+it('stalled ENEMYSHOOT and AoE estimate one mitigated hit, with unknowns assumed at 200', () => {
+  const f = fixture({ preHitPrediction: true }); f.health(707, [{ id: S.Defense, value: 77 }]);
+  const assess = (name: string, data: any, defined = true) => {
+    const p = factory.createByName(name); p.direction = 'server'; p.isDefined = defined; p.data = data;
+    f.engine.observe(p, f.time()); return f.engine.stalledDanger(p, f.time());
+  };
+  expect(assess('ENEMYSHOOT', { ownerId: 184312, bulletId: 1, bulletType: 0, damage: 170, numShots: 4 })).toBe(93);
+  expect(assess('ENEMYSHOOT', { ownerId: 999, bulletId: 1, bulletType: 0, damage: 120 })).toBe(200);
+  expect(assess('AOE', { position: { x: 1, y: 1 }, radius: 1, damage: 100, armorPierce: false })).toBe(23);
+  expect(assess('AOE', { position: { x: 1, y: 1 }, radius: 1, damage: 100, armorPierce: true })).toBe(100);
+  expect(assess('AOE', {}, false)).toBe(200);
+});
+it('stalled delivery requires pending loss and reaches the inclusive threshold only', () => {
+  const f = fixture({ preHitPrediction: true }); f.shot(); f.hit();
+  f.engine.deliveryStalled(f.time(), 440); expect(f.escape).not.toHaveBeenCalled();
+  f.engine.deliveryStalled(f.time(), 440.25);
+  expect(f.escape.mock.calls[0][0]).toMatchObject({ lowerHp: 617, reason: 'danger delivery stalled behind plugin processing' });
+  for (const preHitPrediction of [true, false]) {
+    const idle = fixture({ preHitPrediction }); idle.engine.deliveryStalled(idle.time(), 10000);
+    expect(idle.escape).not.toHaveBeenCalled();
+  }
 });

@@ -363,8 +363,8 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
   // SafetyEngine.ts
   setCatalog(catalog: SafetyCatalog): void;            // lookup swap only; never resets debt
   observe(packet: Packet, now: number, observationId?: number | null): void;
-  /** Final-writer assessment for a prepared client report; dedups against its original observation (signature: name, objectId, bulletId, x, y). */
-  preparePredictionWrite(packet: Packet, now: number, observationId: number | null): void;
+  /** Final-writer assessment for a prepared client report. Returns the delivery id to pass to reportDelivered: the observation id, or a synthetic negative id when there was none. */
+  preparePredictionWrite(packet: Packet, now: number, observationId: number | null): number | null;
   reportDelivered(observationId: number | null, now: number, written: boolean): void;
   deliveryBacklog(value: boolean): void;
   /** One plausible hit for a delayed server ENEMYSHOOT/AOE (not numShots × loss); 200 if undecodable. */

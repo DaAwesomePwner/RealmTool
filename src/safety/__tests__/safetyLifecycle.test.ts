@@ -26,7 +26,8 @@ function fixture(settings: SafetySettingsInput = {}) {
       return io.mode !== 'reject';
     },
   });
-  engine.configure({ enabled: true, burstGuard: false, retryCount: 2, retryMs: 400, reactionMs: 400, ...settings }, now);
+  engine.configure({ enabled: true, preHitPrediction: false, burstGuard: false, retryCount: 2, retryMs: 400, reactionMs: 400, ...settings }, now);
+  engine.setCatalog({ projectiles: [[100, 0, { lifetimeMs: 10000, multiHit: false, armorPiercing: false, maxHealthDamage: 0, conditionEffects: [] }]], tiles: [] });
   engine.connectionChanged(1);
   function emit(name: string, data: any = {}, fromClient = false, defined = true) {
     const p = factory.createByName(name); p.data = data; p.isDefined = defined;
@@ -409,4 +410,97 @@ it('checks automatic danger before a due manual retry can claim the physical slo
   expect(f.engine.attempts.status).toMatchObject({ origin: 'automatic', phase: 'queued' });
   expect(f.engine.attempts.acceptedReceipt(f.engine.attempts.status!.id)).toMatchObject({ origin: 'automatic', shared: false });
   expect(f.engine.status()).toMatchObject({ attemptOrigin: 'automatic', attemptPhase: 'queued' });
+});
+
+it('an actual unresolved hit can supersede a manual request exactly once', () => {
+  const f = fixture({ preHitPrediction: true }); f.manual(); f.complete();
+  f.emit('PLAYERHIT', { objectId: 99, bulletId: 99 }, true);
+  f.emit('PLAYERHIT', { objectId: 99, bulletId: 99 }, true); f.advance(8);
+  expect(f.decision.mock.calls.map(([d]) => [d.origin, d.reason])).toEqual([
+    ['manual', 'manual nexus'], ['automatic', 'predicted HP crosses threshold'],
+  ]);
+  f.manual(); expect(f.decision).toHaveBeenCalledTimes(2);
+});
+
+it('a projectile spawn adds no loss while manual retries continue normally', () => {
+  const f = fixture({ preHitPrediction: true }); f.manual(); f.complete();
+  f.emit('ENEMYSHOOT', { ownerId: 2, bulletId: 1, bulletType: 0, damage: 900 });
+  f.advance(400);
+  expect(f.decision).toHaveBeenCalledTimes(1);
+  expect(f.writes).toHaveLength(2);
+  expect(snapshot(f.engine).attempt).toMatchObject({ origin: 'manual', phase: 'queued' });
+});
+
+it('recovers bounded exhaustion after cooldown and fresh liveness with the original HP debt retained', () => {
+  const f = fixture({ preHitPrediction: true }); f.hit(); f.complete();
+  f.advance(400); f.complete(); f.advance(400); f.complete();
+  expect(f.writes).toHaveLength(3); f.advance(800);
+  expect(snapshot(f.engine)).toMatchObject({ phase: 'failed', protectionState: 'cooldown', lowerHp: 200, prediction: { pendingCount: 1 } });
+  f.advance(999); f.health(); expect(f.decision).toHaveBeenCalledTimes(1);
+  f.advance(1);
+  expect(f.decision).toHaveBeenCalledTimes(2);
+  expect(snapshot(f.engine)).toMatchObject({ protectionState: 'escaping', automaticEligible: false, attempt: { phase: 'queued' } });
+  expect(f.decision.mock.calls[1][0]).toMatchObject({ confirmedHp: 600, lowerHp: 200,
+    evidence: { pendingCount: 1, pendingDamage: 400 } });
+  expect(f.writes.map(w => w.at)).toEqual([1000, 1400, 1800, 3600]);
+});
+
+it('toggle cancellation preserves HP debt, retires retries, and cannot bypass the automatic cooldown', () => {
+  const f = fixture({ preHitPrediction: true }); f.hit(1, 100); f.configure({ enabled: false }); f.configure({ enabled: true });
+  expect(snapshot(f.engine)).toMatchObject({ lowerHp: 500, prediction: { pendingCount: 1 } });
+  f.hit(2, 300); const old = snapshot(f.engine).attempt!;
+  f.configure({ enabled: false }); f.complete(0); f.advance(400);
+  expect(f.writes).toHaveLength(1); expect(snapshot(f.engine).protectionState).toBe('disabled');
+  f.configure({ enabled: true }); f.health(); f.advance(599);
+  expect(f.decision).toHaveBeenCalledTimes(1); f.advance(1);
+  const current = snapshot(f.engine).attempt!;
+  expect(current).toMatchObject({ phase: 'queued', epoch: old.epoch, connectionGeneration: old.connectionGeneration });
+  expect(current.lifecycleRevision).toBeGreaterThan(old.lifecycleRevision);
+  expect(current.writeId).not.toBe(old.writeId);
+  f.complete(0, new Error('late duplicate callback'));
+  expect(snapshot(f.engine).attempt).toEqual(current);
+  f.advance(400); expect(f.writes).toHaveLength(2); // Old callback did not clear the new pending slot.
+  expect(snapshot(f.engine)).toMatchObject({ confirmedHp: 600, lowerHp: 200, prediction: { pendingCount: 2 } });
+});
+
+it.each(['queued', 'written'] as const)('mode changes preserve a %s accepted escape and its scheduled retries', phase => {
+  const f = fixture({ preHitPrediction: true, instantNexus: true }); f.hit();
+  if (phase === 'written') f.complete();
+  const before = snapshot(f.engine).attempt!, receipt = f.engine.attempts.acceptedReceipt(before.id);
+  f.configure({ preHitPrediction: false });
+  expect(snapshot(f.engine)).toMatchObject({ confirmedHp: 600, lowerHp: 600, prediction: null, attempt: before });
+  expect(f.engine.attempts.acceptedReceipt(before.id)).toEqual(receipt);
+  expect(f.engine.settings).not.toHaveProperty('instantNexus');
+  f.configure({ preHitPrediction: true, instantNexus: true }); f.configure({ preHitPrediction: false });
+  expect(f.engine.settings).not.toHaveProperty('instantNexus');
+  expect(snapshot(f.engine).attempt).toEqual(before);
+  if (phase === 'queued') f.complete();
+  f.advance(400);
+  expect(f.writes.map(w => w.at)).toEqual([1000, 1400]);
+  expect(snapshot(f.engine).attempt).toMatchObject({ id: before.id, lifecycleRevision: before.lifecycleRevision, phase: 'queued' });
+  expect(f.decision).toHaveBeenCalledTimes(1);
+});
+
+it('mode changes preserve automatic failure cooldown and require fresh liveness for recovery', () => {
+  const f = fixture({ retryCount: 0 }); f.health(200); f.complete(); f.advance(800);
+  const failed = snapshot(f.engine).attempt!;
+  f.configure({ preHitPrediction: true }); f.configure({ preHitPrediction: false });
+  expect(snapshot(f.engine).attempt).toEqual(failed);
+  expect(snapshot(f.engine).protectionState).toBe('cooldown');
+  f.advance(999); f.health(); expect(f.decision).toHaveBeenCalledTimes(1);
+  f.advance(1); expect(f.decision).toHaveBeenCalledTimes(2);
+  expect(f.decision.mock.calls[1][0]).toMatchObject({ reason: 'server HP threshold', confirmedHp: 200, lowerHp: 200 });
+});
+
+it.each(['dead', 'transition'] as const)('mode changes preserve the %s terminal latch and connection generation', phase => {
+  const f = fixture();
+  if (phase === 'dead') f.emit('DAMAGE', { targetId: 1, kill: true, damageAmount: 1 });
+  else f.engine.confirmTransition(f.now());
+  const epoch = f.engine.epoch;
+  f.configure({ preHitPrediction: true }); f.configure({ preHitPrediction: false });
+  f.health(0); f.manual(); f.advance(10000);
+  expect(snapshot(f.engine)).toMatchObject({ phase, epoch, automaticEligible: false });
+  expect(f.decision).not.toHaveBeenCalled(); expect(f.writes).toHaveLength(0);
+  f.engine.connectionChanged(2); f.enter('Realm', 200);
+  expect(snapshot(f.engine).attempt).toMatchObject({ connectionGeneration: 2, origin: 'automatic' });
 });

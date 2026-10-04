@@ -1,0 +1,745 @@
+{
+  "source": "safety-1790273785416-f45ffdc5-efbf-4bdc-a20e-8089af49d939.json",
+  "note": "Derived Kraken forecasts only. No actual hit was recorded; report suffix in the test is synthetic.",
+  "hp": 707,
+  "maxHp": 707,
+  "defense": 32,
+  "raw": 130,
+  "ownerType": 29221,
+  "shots": [
+    {
+      "bullet": 36,
+      "bulletType": 0,
+      "numShots": 255
+    },
+    {
+      "bullet": 37,
+      "bulletType": 0,
+      "numShots": 255
+    },
+    {
+      "bullet": 38,
+      "bulletType": 1,
+      "numShots": 255
+    },
+    {
+      "bullet": 39,
+      "bulletType": 1,
+      "numShots": 255
+    },
+    {
+      "bullet": 40,
+      "bulletType": 2,
+      "numShots": 255
+    },
+    {
+      "bullet": 41,
+      "bulletType": 2,
+      "numShots": 255
+    },
+    {
+      "bullet": 42,
+      "bulletType": 3,
+      "numShots": 255
+    },
+    {
+      "bullet": 43,
+      "bulletType": 3,
+      "numShots": 255
+    },
+    {
+      "bullet": 44,
+      "bulletType": 4,
+      "numShots": 255
+    },
+    {
+      "bullet": 45,
+      "bulletType": 4,
+      "numShots": 255
+    },
+    {
+      "bullet": 46,
+      "bulletType": 5,
+      "numShots": 255
+    },
+    {
+      "bullet": 47,
+      "bulletType": 5,
+      "numShots": 255
+    }
+  ],
+  "scans": [
+    {
+      "seq": 1526,
+      "at": 0,
+      "ageMs": 0.5534999883675482,
+      "complete": true,
+      "threats": [
+        {
+          "bullet": 36,
+          "generation": 645116508151,
+          "t": 314.666,
+          "motionT": 314.666,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 37,
+          "generation": 645116508185,
+          "t": 314.008,
+          "motionT": 314.008,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 38,
+          "generation": 645116508192,
+          "t": 350.116,
+          "motionT": 350.116,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 39,
+          "generation": 645116508212,
+          "t": 349.821,
+          "motionT": 349.821,
+          "crossed": false,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "seq": 1527,
+      "at": 4.565199999997276,
+      "ageMs": 0.5043999757763231,
+      "complete": true,
+      "threats": [
+        {
+          "bullet": 36,
+          "generation": 645116508151,
+          "t": 310.051,
+          "motionT": 310.051,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 37,
+          "generation": 645116508185,
+          "t": 309.4,
+          "motionT": 309.4,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 38,
+          "generation": 645116508192,
+          "t": 345.495,
+          "motionT": 345.495,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 39,
+          "generation": 645116508212,
+          "t": 345.203,
+          "motionT": 345.203,
+          "crossed": false,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "seq": 1528,
+      "at": 12.200199999992037,
+      "ageMs": 0.5393999519292265,
+      "complete": true,
+      "threats": [
+        {
+          "bullet": 42,
+          "generation": 645116508241,
+          "t": 134.308,
+          "motionT": 134.308,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 43,
+          "generation": 645116508249,
+          "t": 138.166,
+          "motionT": 138.166,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 44,
+          "generation": 645116508258,
+          "t": 144.767,
+          "motionT": 144.767,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 45,
+          "generation": 645116508266,
+          "t": 141.562,
+          "motionT": 141.562,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 46,
+          "generation": 645116508274,
+          "t": 149.656,
+          "motionT": 149.656,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 47,
+          "generation": 645116508284,
+          "t": 152.742,
+          "motionT": 152.742,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 36,
+          "generation": 645116508151,
+          "t": 116.125,
+          "motionT": 116.125,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 37,
+          "generation": 645116508185,
+          "t": 116.021,
+          "motionT": 116.021,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 38,
+          "generation": 645116508192,
+          "t": 121.691,
+          "motionT": 121.691,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 39,
+          "generation": 645116508212,
+          "t": 121.656,
+          "motionT": 121.656,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 40,
+          "generation": 645116508222,
+          "t": 134.773,
+          "motionT": 134.773,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 41,
+          "generation": 645116508231,
+          "t": 131.005,
+          "motionT": 131.005,
+          "crossed": false,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "seq": 1529,
+      "at": 16.616299999994226,
+      "ageMs": 0.5280000616039615,
+      "complete": true,
+      "threats": [
+        {
+          "bullet": 41,
+          "generation": 645116508231,
+          "t": 389.433,
+          "motionT": 389.433,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 39,
+          "generation": 645116508212,
+          "t": 320.487,
+          "motionT": 320.487,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 38,
+          "generation": 645116508192,
+          "t": 320.759,
+          "motionT": 320.759,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 37,
+          "generation": 645116508185,
+          "t": 285.95,
+          "motionT": 285.95,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 36,
+          "generation": 645116508151,
+          "t": 286.584,
+          "motionT": 286.584,
+          "crossed": false,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "seq": 1530,
+      "at": 24.081500000000233,
+      "ageMs": 0.5443999746348709,
+      "complete": true,
+      "threats": [
+        {
+          "bullet": 36,
+          "generation": 645116508151,
+          "t": 279.129,
+          "motionT": 279.129,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 37,
+          "generation": 645116508185,
+          "t": 278.499,
+          "motionT": 278.499,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 38,
+          "generation": 645116508192,
+          "t": 313.311,
+          "motionT": 313.311,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 39,
+          "generation": 645116508212,
+          "t": 313.031,
+          "motionT": 313.031,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 41,
+          "generation": 645116508231,
+          "t": 381.98,
+          "motionT": 381.98,
+          "crossed": false,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "seq": 1531,
+      "at": 30.378100000001723,
+      "ageMs": 0.5275999445002526,
+      "complete": true,
+      "threats": [
+        {
+          "bullet": 41,
+          "generation": 645116508231,
+          "t": 101.3,
+          "motionT": 101.3,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 40,
+          "generation": 645116508222,
+          "t": 104.231,
+          "motionT": 104.231,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 39,
+          "generation": 645116508212,
+          "t": 93.917,
+          "motionT": 93.917,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 38,
+          "generation": 645116508192,
+          "t": 93.948,
+          "motionT": 93.948,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 37,
+          "generation": 645116508185,
+          "t": 89.403,
+          "motionT": 89.403,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 36,
+          "generation": 645116508151,
+          "t": 89.486,
+          "motionT": 89.486,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 47,
+          "generation": 645116508284,
+          "t": 117.918,
+          "motionT": 117.918,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 46,
+          "generation": 645116508274,
+          "t": 115.603,
+          "motionT": 115.603,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 45,
+          "generation": 645116508266,
+          "t": 109.462,
+          "motionT": 109.462,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 44,
+          "generation": 645116508258,
+          "t": 111.907,
+          "motionT": 111.907,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 43,
+          "generation": 645116508249,
+          "t": 106.855,
+          "motionT": 106.855,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 42,
+          "generation": 645116508241,
+          "t": 103.871,
+          "motionT": 103.871,
+          "crossed": false,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "seq": 1532,
+      "at": 35.7783999999956,
+      "ageMs": 0.5327999469736824,
+      "complete": true,
+      "threats": [
+        {
+          "bullet": 41,
+          "generation": 645116508231,
+          "t": 354.174,
+          "motionT": 354.174,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 39,
+          "generation": 645116508212,
+          "t": 287.921,
+          "motionT": 287.921,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 38,
+          "generation": 645116508192,
+          "t": 288.189,
+          "motionT": 288.189,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 37,
+          "generation": 645116508185,
+          "t": 254.737,
+          "motionT": 254.737,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 36,
+          "generation": 645116508151,
+          "t": 255.344,
+          "motionT": 255.344,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 42,
+          "generation": 645116508241,
+          "t": 381.704,
+          "motionT": 381.704,
+          "crossed": false,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "seq": 1533,
+      "at": 42.095799999995506,
+      "ageMs": 0.5752999874093803,
+      "complete": true,
+      "threats": [
+        {
+          "bullet": 41,
+          "generation": 645116508231,
+          "t": 128.946,
+          "motionT": 128.946,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 40,
+          "generation": 645116508222,
+          "t": 134.095,
+          "motionT": 134.095,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 39,
+          "generation": 645116508212,
+          "t": 116.332,
+          "motionT": 116.332,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 38,
+          "generation": 645116508192,
+          "t": 116.381,
+          "motionT": 116.381,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 37,
+          "generation": 645116508185,
+          "t": 108.848,
+          "motionT": 108.848,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 36,
+          "generation": 645116508151,
+          "t": 108.983,
+          "motionT": 108.983,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 47,
+          "generation": 645116508284,
+          "t": 159.193,
+          "motionT": 159.193,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 46,
+          "generation": 645116508274,
+          "t": 154.816,
+          "motionT": 154.816,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 45,
+          "generation": 645116508266,
+          "t": 143.469,
+          "motionT": 143.469,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 44,
+          "generation": 645116508258,
+          "t": 147.943,
+          "motionT": 147.943,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 43,
+          "generation": 645116508249,
+          "t": 138.764,
+          "motionT": 138.764,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 42,
+          "generation": 645116508241,
+          "t": 133.458,
+          "motionT": 133.458,
+          "crossed": false,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "seq": 1534,
+      "at": 47.889199999990524,
+      "ageMs": 0.525000055306009,
+      "complete": true,
+      "threats": [
+        {
+          "bullet": 42,
+          "generation": 645116508241,
+          "t": 358.717,
+          "motionT": 358.717,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 43,
+          "generation": 645116508249,
+          "t": 393.421,
+          "motionT": 393.421,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 36,
+          "generation": 645116508151,
+          "t": 235.599,
+          "motionT": 235.599,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 37,
+          "generation": 645116508185,
+          "t": 235.002,
+          "motionT": 235.002,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 38,
+          "generation": 645116508192,
+          "t": 267.601,
+          "motionT": 267.601,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 39,
+          "generation": 645116508212,
+          "t": 267.346,
+          "motionT": 267.346,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 41,
+          "generation": 645116508231,
+          "t": 331.896,
+          "motionT": 331.896,
+          "crossed": false,
+          "repeated": false
+        }
+      ]
+    },
+    {
+      "seq": 1535,
+      "at": 53.605100000000675,
+      "ageMs": 0.5597000278503401,
+      "complete": true,
+      "threats": [
+        {
+          "bullet": 41,
+          "generation": 645116508231,
+          "t": 326.208,
+          "motionT": 326.208,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 39,
+          "generation": 645116508212,
+          "t": 261.656,
+          "motionT": 261.656,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 38,
+          "generation": 645116508192,
+          "t": 261.919,
+          "motionT": 261.919,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 37,
+          "generation": 645116508185,
+          "t": 229.322,
+          "motionT": 229.322,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 36,
+          "generation": 645116508151,
+          "t": 229.919,
+          "motionT": 229.919,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 43,
+          "generation": 645116508249,
+          "t": 387.748,
+          "motionT": 387.748,
+          "crossed": false,
+          "repeated": false
+        },
+        {
+          "bullet": 42,
+          "generation": 645116508241,
+          "t": 353.031,
+          "motionT": 353.031,
+          "crossed": false,
+          "repeated": false
+        }
+      ]
+    }
+  ]
+}
