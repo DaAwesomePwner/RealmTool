@@ -162,6 +162,28 @@ describe('Auto Nexus session adapter', () => {
 });
 
 describe('Collision HP worker wiring', () => {
+  it('charges the delivered AoE after a verdict-dropped AoE', async () => {
+    const h = await harness({}, { serverVerdict: ['AOE'] });
+    await h.send('UPDATE', { tiles: [], drops: [], newObjs: [{ objectType: 768,
+      status: { objectId: 1, pos: { x: 1, y: 1 }, data: [
+        { id: 0, value: 707 }, { id: 1, value: 707 }, { id: 21, value: 0 },
+      ] } }] });
+    const before = h.game.frames.length;
+    for (const damage of [500, 20]) h.upstream.send(bytes('AOE', { position: { x: 1, y: 1 }, radius: 2, damage }));
+    await until(() => h.packets('AOE').length === 2, 'AoE verdicts');
+    const [dropped, delivered] = h.packets('AOE');
+    h.session.forward(dropped.sequence, dropped.generation, null);
+    h.session.forward(delivered.sequence, delivered.generation, Buffer.from(delivered.data));
+    await until(() => h.game.frames.length === before + 1, 'delivered AoE');
+    expect(factory.createFromBytes(h.game.frames.at(-1)!, 'server').data.damage).toBe(20);
+    h.game.send(bytes('AOEACK', { time: 1000, position: { x: 1, y: 1 } }));
+    await until(() => h.upstream.frames.some(f => f[4] === factory.getPacketId('AOEACK')), 'AoE acknowledgement');
+    expect(h.sample().status).toMatchObject({ confirmedHp: 707, lowerHp: 687,
+      prediction: { pendingDamage: 20 } });
+    expect(h.escapes()).toHaveLength(0);
+    expect(h.upstream.errors).toEqual([]);
+  });
+
   const hit = (bulletId = 1) => bytes('PLAYERHIT', { objectId: 2, bulletId });
   const shoot = (bulletId = 1) => bytes('ENEMYSHOOT', { ownerId: 2, bulletId, bulletType: 0,
     damage: 300, numShots: 1, startingPos: { x: 0, y: 0 } });

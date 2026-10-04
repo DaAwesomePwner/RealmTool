@@ -16,7 +16,7 @@ interface Shot {
   id: string; at: number; expires: number; raw: number; def?: SafetyProjectileDef; ambiguous: boolean;
   owner: number; ownerType?: number; bulletType: number;
 }
-interface AreaAttack { id: string; x: number; y: number; radius: number; raw: number; at: number }
+interface AreaAttack { id: string; observationId: number | null; x: number; y: number; radius: number; raw: number; at: number }
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
 const pair = (owner: number, bullet: number) => `${owner}:${bullet & 0xffff}`;
 
@@ -173,11 +173,16 @@ export class SafetyEngine {
         this.uncertain(now, 'invalid AoE geometry/damage'); return;
       }
       if (this.areas.length >= 128) { this.uncertain(now, 'AoE correspondence capacity'); return; }
-      const area = { id: `aoe:${++this.aoeSeq}`, x: p.x, y: p.y, radius: d.radius, raw: d.damage, at: now };
+      const area = { id: `aoe:${++this.aoeSeq}`, observationId, x: p.x, y: p.y, radius: d.radius, raw: d.damage, at: now };
       this.areas.push(area);
     }
   }
 
+
+  retireArea(observationId: number): void {
+    const index = this.areas.findIndex(area => area.observationId === observationId);
+    if (index !== -1) this.areas.splice(index, 1);
+  }
 
   private applyStatus(status: Parameters<ServerPlayerState['applyStatus']>[0], now: number, full = false): void {
     if (this.player.ownerObjectId === 0 || status.objectId !== this.player.ownerObjectId) return;
