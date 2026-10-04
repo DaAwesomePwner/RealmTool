@@ -25,11 +25,13 @@ HTTP bearer authentication has one exception: CORS preflight (`OPTIONS`) has no 
 ## Validation
 
 Validation (coordinator, outside the sandbox, 2026-10-04, final branch state):
-- `npx tsc --noEmit` and `npx tsc --noEmit -p ui` pass, and `npx vitest run` passes **1268 tests in 68 files**.
+- `npx tsc --noEmit` and `npx tsc --noEmit -p ui` pass, and `npx vitest run` passes **1306 tests in 69 files**.
 - `cargo test --offline --manifest-path src-tauri/Cargo.toml` passes **11/11**, including on a checkout without `dist/`. The bundle resources live in `src-tauri/tauri.bundle.conf.json`, which only `tools/build-app.ts` passes to `tauri build --config`.
 - The final installer was rebuilt with the stderr fix: `RealmTool_0.1.0_x64-setup.exe` 24.10 MiB, measured installed at **100,300,681 bytes (95.65 MiB)**. The silent uninstall removed the directory and the leftover install-location key.
 - `node tools/smoke-package.ts` passed on the port-busy path (the user's Realm Engine holds 2050), with a clean exit code 0. The full path (running proxy, four built-ins) needs 2050 free; run it with Realm Engine closed.
 - Every task was implemented by a Codex agent, verified by the coordinator and approved by an independent Codex review. Review fix rounds: T2, T5, T7, T8 (twice) and T9 (twice).
+
+**Helper install targets (final whole-branch review fix):** `config.json` records `helperDirs`, every folder RealmTool installs its helper into. Every install path (desktop controller, CLI `start`, CLI `install-helper`) saves the target, plus `gameDir` on a first run, **before** modifying the game folder, and refuses if it can't save. The uninstaller's `uninstall-helper --quiet` restores every recorded folder and never a discovered one. Config writes re-read `config.json` immediately before the atomic write, and `helperDirs` changes only through add/remove operations. The tiny window between re-read and rename is an accepted residual.
 
 **Exit crash found and fixed during validation:** a Node process whose stderr is a null handle crashes with 0xC0000409 on exit once Koffi is loaded (reproduced with a bare `require('koffi')` on Node 24.21.0 and 26.7.0). The shell now pipes and drains the sidecar's stderr, a Rust test with a Koffi-loading stub pins exit code 0, and the package smoke mirrors the shell's stdio.
 
