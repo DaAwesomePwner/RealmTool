@@ -1,6 +1,6 @@
 # RealmTool — Design Spec
 
-**Status:** Draft v4 · Phase 1 merged (PR #1) · v4: O3 Helper moved to Phase 3c, a post-release addition. Earlier: Draft v3 · 2026-10-03 (v2: Collision HP on by default and required to ship; Chat Filter ported from latest. v3: Anti-AFK deferred, helper is routing-only; server-authoritative hit model clarified)
+**Status:** Draft v4 · Phase 1 merged (PR #1) · Phase 2 merged (PR #2), live-tested 2026-10-03 · v4: O3 Helper moved to Phase 3c, a post-release addition. Earlier: Draft v3 · 2026-10-03 (v2: Collision HP on by default and required to ship; Chat Filter ported from latest. v3: Anti-AFK deferred, helper is routing-only; server-authoritative hit model clarified)
 **Repository:** private, `DaAwesomePwner/RealmTool`
 **Source of ported code:** `DaAwesomePwner/realm-engine-client` (MIT, © Evergreen-Techworks; see `NOTICE`). Research was done at `9ab4f8f`. Each phase ports from the **then-current `main`**, so Chat Filter fixes such as `88a66b2` are included.
 **Research inputs:** [`docs/research/`](research/) (four Codex read-only investigations of realm-engine-client)
