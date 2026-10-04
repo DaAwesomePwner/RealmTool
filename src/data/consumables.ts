@@ -1,7 +1,7 @@
 // Adapted from realm-engine-client client/src/auto-drink/AutoDrinkTypes.ts @ 88a66b2 (MIT, see NOTICE).
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resourcePaths } from '../app/resources.ts';
 import { appDataDir } from '../config/store.ts';
 import type { AutoDrinkItem } from '../auto-drink/AutoDrinkTypes.ts';
 export type { AutoDrinkItem } from '../auto-drink/AutoDrinkTypes.ts';
@@ -44,7 +44,7 @@ export function validateConsumablesCatalog(value: unknown): ConsumablesCatalog {
 
 export function loadConsumables(options: { appDataDir?: string; bundledPath?: string } = {}): CatalogLoad {
   const appData = options.appDataDir ?? appDataDir();
-  const bundled = options.bundledPath ?? fileURLToPath(new URL('../../data/catalogs/consumables.json', import.meta.url));
+  const bundled = options.bundledPath ?? join(resourcePaths().dataDir, 'catalogs/consumables.json');
   const paths = [join(appData, 'data', 'catalogs', 'consumables.json'), bundled];
   for (const path of paths) {
     let json: string;

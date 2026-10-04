@@ -14,7 +14,9 @@
     "check": "npm run typecheck && npm test",
     "build:helper": "cmd /c native\\helper\\build.cmd",
     "verify:helper": "node tools/verify-helper.ts",
-    "gen:catalogs": "node tools/gen-catalogs.ts"
+    "gen:catalogs": "node tools/gen-catalogs.ts",
+    "build:backend": "node tools/build-backend.ts",
+    "fetch:node": "node tools/fetch-node.ts"
   },
   "dependencies": {
     "koffi": "^2.9.0",

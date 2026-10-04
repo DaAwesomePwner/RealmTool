@@ -13,12 +13,15 @@ import { createFactory, loadSchema } from './protocol/schema.ts';
 import { createTargetResolver, parseTargetFile, removeStaleTargetFiles } from './routing/targetResolver.ts';
 import { tcpOwnerSourceError } from './routing/tcpProcessIdentity.ts';
 import { ProxyHost, type ProxyHostOptions } from './transport/host.ts';
+import { loadConsumables } from './data/consumables.ts';
+import { loadSafetyCatalog } from './data/safety.ts';
+import { resourcePaths } from './app/resources.ts';
 import { log } from './util/log.ts';
 
 /** The checkout whose node_modules must hold koffi. */
 const REPO_DIR = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
-const COMMANDS = ['start', 'find-game', 'install-helper', 'uninstall-helper', 'config-path', 'help'] as const;
+const COMMANDS = ['start', 'find-game', 'install-helper', 'uninstall-helper', 'config-path', 'help', 'selftest'] as const;
 type Command = typeof COMMANDS[number];
 
 export interface CliOptions {
@@ -230,6 +233,23 @@ export async function main(argv: string[]): Promise<number> {
   } catch (error) {
     console.error((error as Error).message);
     return 2;
+  }
+  if (options.command === 'selftest') {
+    const host = new ProxyHost({ schema: loadSchema(), listenPort: 0 });
+    try {
+      // Read package catalogs, independent of any user overrides.
+      const appDataDir = resourcePaths().root;
+      const consumables = loadConsumables({ appDataDir });
+      const safety = loadSafetyCatalog({ appDataDir });
+      if (!consumables.ok) throw new Error(consumables.reason);
+      if (!safety.ok) throw new Error(safety.reason);
+      await host.start();
+      console.log('selftest ok');
+      return 0;
+    } catch (error) {
+      log.error('Selftest', (error as Error).message);
+      return 1;
+    } finally { await host.stop(); }
   }
   if (options.command === 'help') {
     console.log(HELP);

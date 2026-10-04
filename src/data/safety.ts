@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resourcePaths } from '../app/resources.ts';
 import { appDataDir } from '../config/store.ts';
 import { PROJECTILE_FLAGS, SAFETY_CATALOG_LIMITS as limits,
   type SafetyCatalog, type SafetyCatalogFile, type SafetyProjectileRow } from '../safety/SafetyCatalog.ts';
@@ -78,7 +78,7 @@ export function toSafetyCatalog(file: SafetyCatalogFile): SafetyCatalog {
 }
 
 export function loadSafetyCatalog(options: { appDataDir?: string; bundledPath?: string } = {}): SafetyCatalogLoad {
-  const bundled = options.bundledPath ?? fileURLToPath(new URL('../../data/catalogs/safety.json', import.meta.url));
+  const bundled = options.bundledPath ?? join(resourcePaths().dataDir, 'catalogs/safety.json');
   for (const path of [join(options.appDataDir ?? appDataDir(), 'data', 'catalogs', 'safety.json'), bundled]) {
     let bytes: Buffer;
     try { bytes = readFileSync(path); }
