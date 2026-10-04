@@ -41,5 +41,6 @@ export type WorkerCommand =
   | { type: 'inject'; id: string; data: Uint8Array; toClient: boolean }
   /** Without `id`: module-wide configuration. With `id`: a command for that session's module instance. */
   | { type: 'module'; moduleId: string; id?: string; message: unknown }
+  | { type: 'modules'; configs: Record<string, unknown> }
   | { type: 'close'; id: string }
   | { type: 'stop' };

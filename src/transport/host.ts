@@ -105,7 +105,15 @@ export class ProxyHost extends EventEmitter<HostEvents> {
 
   inject(id: string, data: Buffer, toClient: boolean): void { this.send({ type: 'inject', id, data, toClient }); }
 
-  configureModule(moduleId: string, config: unknown): void { this.send({ type: 'module', moduleId, message: config }); }
+  configureModule(moduleId: string, config: unknown): void {
+    this.options.moduleConfig = { ...this.options.moduleConfig, [moduleId]: config };
+    this.send({ type: 'module', moduleId, message: config });
+  }
+
+  configureModules(configs: Record<string, unknown>): void {
+    this.options.moduleConfig = { ...this.options.moduleConfig, ...configs };
+    this.send({ type: 'modules', configs });
+  }
 
   moduleCommand(moduleId: string, id: string, message: unknown): void { this.send({ type: 'module', moduleId, id, message }); }
 

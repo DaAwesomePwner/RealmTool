@@ -1,10 +1,11 @@
 import net from 'node:net';
 import { performance } from 'node:perf_hooks';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session, type SessionEnv } from '../session.ts';
 import { Interest } from '../interest.ts';
 import { DEFAULTS, type WorkerEvent } from '../messages.ts';
-import type { WorkerModule } from '../modules.ts';
+import type { WorkerModule, WorkerSessionContext } from '../modules.ts';
+import type { Packet } from '../../protocol/Packet.ts';
 import { Router } from '../../routing/router.ts';
 import { createFactory } from '../../protocol/schema.ts';
 import { RC4_KEYS } from '../../protocol/constants.ts';
@@ -67,6 +68,146 @@ async function connected(h: Harness, server: FakeServer): Promise<{ game: Peer; 
 const packets = (h: Harness) => h.events.filter((e): e is Extract<WorkerEvent, { type: 'packet' }> => e.type === 'packet');
 
 describe('Session', () => {
+  it('confirms only accepted server writes with the rewritten RECONNECT', async () => {
+    const written: Packet[] = [];
+    const module: WorkerModule = {
+      id: 'transfer', priority: 0, writtenServer: ['RECONNECT'],
+      createSession: () => ({ writtenServer: packet => { written.push(packet); } }),
+    };
+    const h = await harness({ modules: [module], interest: new Interest({ verdict: { server: ['RECONNECT'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    const reconnect = reconnectBytes(factory, { host: 'localhost', port: server.port, key: Buffer.from('real-key') });
+    upstream.send(reconnect);
+    await until(() => packets(h).length === 1, 'held RECONNECT');
+    expect(written).toEqual([]);
+    const held = packets(h)[0];
+    session.forward(held.sequence, held.generation, Buffer.from(held.data));
+    await until(() => game.frames.length === 1, 'accepted RECONNECT');
+    expect(written).toHaveLength(1);
+    expect(written[0].data).toMatchObject({ host: '127.0.0.1', port: h.port });
+    expect(written[0].rawBytes.equals(game.frames[0])).toBe(true);
+
+    upstream.send(reconnect);
+    await until(() => packets(h).length === 2, 'dropped RECONNECT');
+    const dropped = packets(h)[1];
+    session.forward(dropped.sequence, dropped.generation, null);
+    // A complete frame with an invalid route must not confirm a transfer either.
+    expect(session.inject(reconnectBytes(factory, { host: 'bad host', port: server.port, key: Buffer.alloc(0) }), true)).toBe(false);
+    // A valid route still needs an accepting game-socket writer.
+    const client = session['client'];
+    const writable = vi.spyOn(client, 'writable', 'get').mockReturnValue(false);
+    try { expect(session.inject(reconnect, true)).toBe(false); }
+    finally { writable.mockRestore(); }
+    expect(written).toHaveLength(1);
+    expect(game.frames).toHaveLength(1);
+  });
+
+  it('reports the priority origin and null for a released client packet', async () => {
+    let context!: WorkerSessionContext;
+    const writes: unknown[][] = [];
+    const module: WorkerModule = {
+      id: 'm1', priority: 0, written: ['ESCAPE'],
+      createSession: ctx => {
+        context = ctx;
+        return { written: (_packet, kind, _now, observationId, origin) => { writes.push([kind, observationId, origin]); } };
+      },
+    };
+    const h = await harness({ modules: [module], interest: new Interest({ verdict: { client: ['ESCAPE'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    const done = vi.fn();
+    expect(context.writePriority(frame(id('ESCAPE')), false, done, 'm1')).toBe(true);
+    game.send(frame(id('ESCAPE')));
+    await until(() => packets(h).length === 1, 'held ESCAPE');
+    const held = packets(h)[0];
+    session.forward(held.sequence, held.generation, Buffer.from(held.data));
+    await until(() => upstream.frames.length === 3 && done.mock.calls.length === 1, 'both ESCAPEs');
+    expect(writes).toEqual([['priority', null, 'm1'], ['normal', expect.any(Number), null]]);
+    expect(context.writePriority(frame(id('ESCAPE')), false)).toBe(true);
+    expect(session.inject(frame(id('ESCAPE')), false)).toBe(true);
+    expect(writes.slice(2)).toEqual([['priority', null, null], ['injected', null, null]]);
+  });
+
+  it('decodes accepted server writes only for subscribers and shares the final decode', async () => {
+    const written: Packet[] = [];
+    const modules: WorkerModule[] = ['a', 'b'].map(moduleId => ({
+      id: moduleId, priority: 0, writtenServer: ['PING'],
+      createSession: () => ({ writtenServer: packet => { written.push(packet); } }),
+    }));
+    const h = await harness({ modules });
+    const server = await fakeServer();
+    const { session } = await connected(h, server);
+    const ping = factory.serialize(factory.createByName('PING'));
+    const decode = vi.spyOn(factory, 'createFromBytes');
+    // Node write(false) still accepts the frame; callbacks must run immediately.
+    const write = vi.spyOn(session['client'], 'write').mockReturnValue(false);
+    try {
+      expect(session.inject(frame(UNKNOWN), true)).toBe(true);
+      expect(decode).not.toHaveBeenCalled();
+      expect(session.inject(ping, true)).toBe(true);
+      expect(written).toHaveLength(2);
+      expect(written[0]).toBe(written[1]);
+      expect(decode).toHaveBeenCalledTimes(1);
+      expect(write).toHaveBeenCalledTimes(2);
+    } finally {
+      write.mockRestore();
+      decode.mockRestore();
+    }
+  });
+
+  it('reports upstream backpressure separately from held verdicts', async () => {
+    let context!: WorkerSessionContext;
+    const module: WorkerModule = { id: 'pressure', priority: 0, createSession: ctx => { context = ctx; return {}; } };
+    const h = await harness({ modules: [module], interest: new Interest({ verdict: { client: ['ESCAPE'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    expect(context.transport()).toMatchObject({ available: true, upstreamBackpressure: false });
+    game.send(frame(id('ESCAPE')));
+    await until(() => packets(h).length === 1, 'held verdict');
+    expect(context.transport()).toMatchObject({ backlog: true, upstreamBackpressure: false });
+    upstream['socket'].pause();
+    const large = frame(UNKNOWN, Buffer.alloc(64 * 1024));
+    for (let i = 0; i < 128 && !session['server']!.writableNeedDrain; i++) {
+      expect(context.writePriority(large, false)).toBe(true);
+    }
+    expect(session['server']!.writableNeedDrain).toBe(true);
+    expect(context.transport().upstreamBackpressure).toBe(true);
+  });
+
+  it('shares automation within a session and resets it before connectionChanged on every generation', async () => {
+    const contexts: WorkerSessionContext[] = [];
+    const changes: unknown[][] = [];
+    const modules: WorkerModule[] = ['a', 'b'].map(moduleId => ({
+      id: moduleId, priority: 0,
+      createSession: context => {
+        contexts.push(context);
+        expect(context.transport().upstreamBackpressure).toBe(false);
+        context.automation.latchEscape('before connect');
+        return { connectionChanged: generation => {
+          changes.push([context.sessionId, moduleId, generation, context.automation.generation, context.automation.escapeLatched()]);
+        } };
+      },
+    }));
+    const h = await harness({ modules, helloTimeoutMs: 100 });
+    const server = await fakeServer();
+    const { session } = await connected(h, server);
+    expect(contexts[0].automation).toBe(contexts[1].automation);
+    contexts[0].automation.latchEscape('manual escape');
+    expect(contexts[1].automation.escapeLatched()).toBe(true);
+    await until(() => changes.length >= 4, 'upstream retry');
+    expect(changes.slice(0, 4)).toEqual([
+      [session.id, 'a', 1, 1, false], [session.id, 'b', 1, 1, false],
+      [session.id, 'a', 2, 2, false], [session.id, 'b', 2, 2, false],
+    ]);
+    const second = await connected(h, server);
+    expect(contexts[2].automation).not.toBe(contexts[0].automation);
+    expect(contexts[2].automation).toBe(contexts[3].automation);
+    expect(second.session.id).not.toBe(session.id);
+    contexts[0].automation.latchEscape('auto escape');
+    expect(contexts[2].automation.escapeLatched()).toBe(false);
+  });
+
   it('faults when the game stops reading and output exceeds 64 KiB', async () => {
     const h = await harness({ maxPendingBytes: 64 * 1024 });
     const server = await fakeServer();
