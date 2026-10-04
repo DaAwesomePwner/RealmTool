@@ -1,0 +1,804 @@
+{
+  "description": "Sanitized packet HP/report/write timing from two recorded early escapes. Final forecast counts are decision counterfactuals; missing empty native scans prevent a complete geometry replay. No account, item, position or wall-clock fields.",
+  "scenarios": [
+    {
+      "label": "Recorded escape 1",
+      "maxHp": 707,
+      "defense": 32,
+      "serverHp": 591,
+      "pendingCount": 4,
+      "forecastCount": 3,
+      "originalProjectedHp": 136,
+      "at": 16718.106,
+      "events": [
+        {
+          "at": 2055.044,
+          "kind": "hp",
+          "hp": 707
+        },
+        {
+          "at": 2281.337,
+          "kind": "tick",
+          "hp": 707,
+          "rtt": 0
+        },
+        {
+          "at": 2484.853,
+          "kind": "tick",
+          "rtt": 152
+        },
+        {
+          "at": 2689.15,
+          "kind": "tick",
+          "rtt": 160
+        },
+        {
+          "at": 2893.572,
+          "kind": "tick",
+          "rtt": 164
+        },
+        {
+          "at": 3099.902,
+          "kind": "tick",
+          "rtt": 172
+        },
+        {
+          "at": 3217.153,
+          "kind": "tick",
+          "rtt": 172
+        },
+        {
+          "at": 3418.55,
+          "kind": "tick",
+          "rtt": 78
+        },
+        {
+          "at": 3621.298,
+          "kind": "tick",
+          "rtt": 86
+        },
+        {
+          "at": 3822.374,
+          "kind": "tick",
+          "rtt": 86
+        },
+        {
+          "at": 4025.55,
+          "kind": "tick",
+          "rtt": 90
+        },
+        {
+          "at": 4233.029,
+          "kind": "tick",
+          "rtt": 98
+        },
+        {
+          "at": 4435.767,
+          "kind": "tick",
+          "rtt": 102
+        },
+        {
+          "at": 4643.246,
+          "kind": "tick",
+          "rtt": 109
+        },
+        {
+          "at": 4846.416,
+          "kind": "tick",
+          "rtt": 113
+        },
+        {
+          "at": 5048.055,
+          "kind": "tick",
+          "rtt": 117
+        },
+        {
+          "at": 5250.112,
+          "kind": "tick",
+          "rtt": 125
+        },
+        {
+          "at": 5456.068,
+          "kind": "tick",
+          "rtt": 129
+        },
+        {
+          "at": 5656.844,
+          "kind": "tick",
+          "rtt": 133
+        },
+        {
+          "at": 5860.22,
+          "kind": "tick",
+          "rtt": 140
+        },
+        {
+          "at": 6064.448,
+          "kind": "tick",
+          "rtt": 144
+        },
+        {
+          "at": 6267.242,
+          "kind": "tick",
+          "rtt": 144
+        },
+        {
+          "at": 6469.446,
+          "kind": "tick",
+          "rtt": 148
+        },
+        {
+          "at": 6673.117,
+          "kind": "tick",
+          "rtt": 149
+        },
+        {
+          "at": 6874.765,
+          "kind": "tick",
+          "rtt": 157
+        },
+        {
+          "at": 7081.189,
+          "kind": "tick",
+          "rtt": 164
+        },
+        {
+          "at": 7283.515,
+          "kind": "tick",
+          "rtt": 164
+        },
+        {
+          "at": 7490.17,
+          "kind": "tick",
+          "rtt": 172
+        },
+        {
+          "at": 7692.582,
+          "kind": "tick",
+          "rtt": 172
+        },
+        {
+          "at": 7900.21,
+          "kind": "tick",
+          "rtt": 180
+        },
+        {
+          "at": 8099.276,
+          "kind": "tick",
+          "rtt": 184
+        },
+        {
+          "at": 8301.531,
+          "kind": "tick",
+          "rtt": 188
+        },
+        {
+          "at": 8507.814,
+          "kind": "tick",
+          "rtt": 191
+        },
+        {
+          "at": 8713.125,
+          "kind": "tick",
+          "rtt": 191
+        },
+        {
+          "at": 8913.418,
+          "kind": "tick",
+          "rtt": 191
+        },
+        {
+          "at": 9116.078,
+          "kind": "tick",
+          "rtt": 125
+        },
+        {
+          "at": 9321.577,
+          "kind": "tick",
+          "rtt": 129
+        },
+        {
+          "at": 9524.549,
+          "kind": "tick",
+          "rtt": 137
+        },
+        {
+          "at": 9729.447,
+          "kind": "tick",
+          "rtt": 140
+        },
+        {
+          "at": 9932.824,
+          "kind": "tick",
+          "rtt": 148
+        },
+        {
+          "at": 10141.761,
+          "kind": "tick",
+          "rtt": 148
+        },
+        {
+          "at": 10344.961,
+          "kind": "tick",
+          "rtt": 164
+        },
+        {
+          "at": 10548.168,
+          "kind": "tick",
+          "rtt": 160
+        },
+        {
+          "at": 10751.684,
+          "kind": "tick",
+          "rtt": 164
+        },
+        {
+          "at": 10958.739,
+          "kind": "tick",
+          "rtt": 168
+        },
+        {
+          "at": 11079.595,
+          "kind": "tick",
+          "rtt": 172
+        },
+        {
+          "at": 11277.002,
+          "kind": "tick",
+          "rtt": 74
+        },
+        {
+          "at": 11479.073,
+          "kind": "tick",
+          "rtt": 74
+        },
+        {
+          "at": 11680.664,
+          "kind": "tick",
+          "rtt": 82
+        },
+        {
+          "at": 11887.561,
+          "kind": "tick",
+          "rtt": 86
+        },
+        {
+          "at": 12091.431,
+          "kind": "tick",
+          "rtt": 93
+        },
+        {
+          "at": 12298.446,
+          "kind": "tick",
+          "rtt": 97
+        },
+        {
+          "at": 12532.272,
+          "kind": "tick",
+          "rtt": 101
+        },
+        {
+          "at": 12735.04,
+          "kind": "tick",
+          "rtt": 106
+        },
+        {
+          "at": 12937.414,
+          "kind": "tick",
+          "rtt": 114
+        },
+        {
+          "at": 13145.884,
+          "kind": "tick",
+          "rtt": 114
+        },
+        {
+          "at": 13351.621,
+          "kind": "tick",
+          "rtt": 117
+        },
+        {
+          "at": 13561.477,
+          "kind": "tick",
+          "rtt": 125
+        },
+        {
+          "at": 13762.37,
+          "kind": "tick",
+          "rtt": 125
+        },
+        {
+          "at": 13965.328,
+          "kind": "tick",
+          "rtt": 133
+        },
+        {
+          "at": 14168.705,
+          "kind": "tick",
+          "rtt": 133
+        },
+        {
+          "at": 14371.653,
+          "kind": "tick",
+          "rtt": 137
+        },
+        {
+          "at": 14576.14,
+          "kind": "tick",
+          "rtt": 145
+        },
+        {
+          "at": 14778.66,
+          "kind": "tick",
+          "rtt": 152
+        },
+        {
+          "at": 14982.542,
+          "kind": "tick",
+          "rtt": 156
+        },
+        {
+          "at": 15185.263,
+          "kind": "tick",
+          "rtt": 160
+        },
+        {
+          "at": 15385.572,
+          "kind": "tick",
+          "rtt": 168
+        },
+        {
+          "at": 15588.698,
+          "kind": "tick",
+          "rtt": 168
+        },
+        {
+          "at": 15791.644,
+          "kind": "tick",
+          "rtt": 172
+        },
+        {
+          "at": 15996.812,
+          "kind": "tick",
+          "rtt": 179
+        },
+        {
+          "at": 16042.695,
+          "kind": "hit",
+          "id": 1,
+          "raw": 65
+        },
+        {
+          "at": 16043.34,
+          "kind": "hit",
+          "id": 2,
+          "raw": 65
+        },
+        {
+          "at": 16043.673,
+          "kind": "delivery",
+          "id": 1,
+          "written": true
+        },
+        {
+          "at": 16043.848,
+          "kind": "delivery",
+          "id": 2,
+          "written": true
+        },
+        {
+          "at": 16112.762,
+          "kind": "tick",
+          "hp": 641,
+          "rtt": 183
+        },
+        {
+          "at": 16317.662,
+          "kind": "tick",
+          "hp": 656,
+          "rtt": 86
+        },
+        {
+          "at": 16517.422,
+          "kind": "tick",
+          "rtt": 90
+        },
+        {
+          "at": 16557.904,
+          "kind": "hit",
+          "id": 3,
+          "raw": 65
+        },
+        {
+          "at": 16558.138,
+          "kind": "delivery",
+          "id": 3,
+          "written": true
+        },
+        {
+          "at": 16660.829,
+          "kind": "hit",
+          "id": 4,
+          "raw": 65
+        },
+        {
+          "at": 16661.166,
+          "kind": "delivery",
+          "id": 4,
+          "written": true
+        }
+      ]
+    },
+    {
+      "label": "Recorded escape 2",
+      "maxHp": 707,
+      "defense": 32,
+      "serverHp": 659,
+      "pendingCount": 2,
+      "forecastCount": 6,
+      "originalProjectedHp": 139,
+      "at": 14901.84,
+      "events": [
+        {
+          "at": 2341.963,
+          "kind": "hp",
+          "hp": 707
+        },
+        {
+          "at": 2415.714,
+          "kind": "tick",
+          "hp": 707,
+          "rtt": 0
+        },
+        {
+          "at": 2622.404,
+          "kind": "tick",
+          "rtt": 106
+        },
+        {
+          "at": 2826.718,
+          "kind": "tick",
+          "rtt": 110
+        },
+        {
+          "at": 3033.407,
+          "kind": "tick",
+          "rtt": 114
+        },
+        {
+          "at": 3244.112,
+          "kind": "tick",
+          "rtt": 113
+        },
+        {
+          "at": 3450.837,
+          "kind": "tick",
+          "rtt": 121
+        },
+        {
+          "at": 3652.874,
+          "kind": "tick",
+          "rtt": 113
+        },
+        {
+          "at": 3858.864,
+          "kind": "tick",
+          "rtt": 117
+        },
+        {
+          "at": 4060.881,
+          "kind": "tick",
+          "rtt": 117
+        },
+        {
+          "at": 4261.948,
+          "kind": "tick",
+          "rtt": 129
+        },
+        {
+          "at": 4463.469,
+          "kind": "tick",
+          "rtt": 129
+        },
+        {
+          "at": 4671.258,
+          "kind": "tick",
+          "rtt": 137
+        },
+        {
+          "at": 4876.38,
+          "kind": "tick",
+          "rtt": 140
+        },
+        {
+          "at": 5085.447,
+          "kind": "tick",
+          "rtt": 148
+        },
+        {
+          "at": 5292.334,
+          "kind": "tick",
+          "rtt": 152
+        },
+        {
+          "at": 5496.268,
+          "kind": "tick",
+          "rtt": 156
+        },
+        {
+          "at": 5698.481,
+          "kind": "tick",
+          "rtt": 156
+        },
+        {
+          "at": 5901.33,
+          "kind": "tick",
+          "rtt": 164
+        },
+        {
+          "at": 6104.309,
+          "kind": "tick",
+          "rtt": 171
+        },
+        {
+          "at": 6305.96,
+          "kind": "tick",
+          "rtt": 172
+        },
+        {
+          "at": 6511.403,
+          "kind": "tick",
+          "rtt": 183
+        },
+        {
+          "at": 6716.23,
+          "kind": "tick",
+          "rtt": 191
+        },
+        {
+          "at": 6915.882,
+          "kind": "tick",
+          "rtt": 192
+        },
+        {
+          "at": 7119.489,
+          "kind": "tick",
+          "rtt": 196
+        },
+        {
+          "at": 7320.373,
+          "kind": "tick",
+          "rtt": 196
+        },
+        {
+          "at": 7521.396,
+          "kind": "tick",
+          "rtt": 215
+        },
+        {
+          "at": 7721.333,
+          "kind": "tick",
+          "rtt": 113
+        },
+        {
+          "at": 7921.376,
+          "kind": "tick",
+          "rtt": 113
+        },
+        {
+          "at": 8127.187,
+          "kind": "tick",
+          "rtt": 117
+        },
+        {
+          "at": 8327.463,
+          "kind": "tick",
+          "rtt": 125
+        },
+        {
+          "at": 8528.733,
+          "kind": "tick",
+          "rtt": 125
+        },
+        {
+          "at": 8734.995,
+          "kind": "tick",
+          "rtt": 129
+        },
+        {
+          "at": 8937.669,
+          "kind": "tick",
+          "rtt": 136
+        },
+        {
+          "at": 9139.993,
+          "kind": "tick",
+          "rtt": 141
+        },
+        {
+          "at": 9348.531,
+          "kind": "tick",
+          "rtt": 145
+        },
+        {
+          "at": 9552.109,
+          "kind": "tick",
+          "rtt": 149
+        },
+        {
+          "at": 9755.224,
+          "kind": "tick",
+          "rtt": 149
+        },
+        {
+          "at": 9962.482,
+          "kind": "tick",
+          "rtt": 172
+        },
+        {
+          "at": 10165.467,
+          "kind": "tick",
+          "rtt": 172
+        },
+        {
+          "at": 10368.963,
+          "kind": "tick",
+          "rtt": 176
+        },
+        {
+          "at": 10572.004,
+          "kind": "tick",
+          "rtt": 188
+        },
+        {
+          "at": 10772.416,
+          "kind": "tick",
+          "rtt": 184
+        },
+        {
+          "at": 10975.55,
+          "kind": "tick",
+          "rtt": 192
+        },
+        {
+          "at": 11178.301,
+          "kind": "tick",
+          "rtt": 195
+        },
+        {
+          "at": 11382.567,
+          "kind": "tick",
+          "rtt": 195
+        },
+        {
+          "at": 11587.047,
+          "kind": "tick",
+          "rtt": 215
+        },
+        {
+          "at": 11787.485,
+          "kind": "tick",
+          "rtt": 215
+        },
+        {
+          "at": 11903.464,
+          "kind": "tick",
+          "hp": 707,
+          "rtt": 215
+        },
+        {
+          "at": 12108.206,
+          "kind": "tick",
+          "rtt": 118
+        },
+        {
+          "at": 12307.959,
+          "kind": "tick",
+          "rtt": 125
+        },
+        {
+          "at": 12512.162,
+          "kind": "tick",
+          "rtt": 129
+        },
+        {
+          "at": 12713.096,
+          "kind": "tick",
+          "rtt": 133
+        },
+        {
+          "at": 12915.108,
+          "kind": "tick",
+          "rtt": 133
+        },
+        {
+          "at": 13122.785,
+          "kind": "tick",
+          "rtt": 137
+        },
+        {
+          "at": 13325.151,
+          "kind": "tick",
+          "rtt": 145
+        },
+        {
+          "at": 13528.919,
+          "kind": "tick",
+          "rtt": 148
+        },
+        {
+          "at": 13618.312,
+          "kind": "hit",
+          "id": 1,
+          "raw": 65
+        },
+        {
+          "at": 13618.666,
+          "kind": "delivery",
+          "id": 1,
+          "written": true
+        },
+        {
+          "at": 13738.316,
+          "kind": "tick",
+          "hp": 674,
+          "rtt": 152
+        },
+        {
+          "at": 13936.15,
+          "kind": "tick",
+          "hp": 675,
+          "rtt": 160
+        },
+        {
+          "at": 14143.264,
+          "kind": "tick",
+          "hp": 676,
+          "rtt": 160
+        },
+        {
+          "at": 14345.527,
+          "kind": "tick",
+          "hp": 677,
+          "rtt": 172
+        },
+        {
+          "at": 14443.285,
+          "kind": "hit",
+          "id": 2,
+          "raw": 65
+        },
+        {
+          "at": 14443.563,
+          "kind": "delivery",
+          "id": 2,
+          "written": true
+        },
+        {
+          "at": 14549.653,
+          "kind": "tick",
+          "hp": 658,
+          "rtt": 172
+        },
+        {
+          "at": 14752.536,
+          "kind": "tick",
+          "hp": 659,
+          "rtt": 78
+        },
+        {
+          "at": 14861.452,
+          "kind": "hit",
+          "id": 3,
+          "raw": 65
+        },
+        {
+          "at": 14861.724,
+          "kind": "delivery",
+          "id": 3,
+          "written": true
+        }
+      ]
+    }
+  ]
+}

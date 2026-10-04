@@ -1,0 +1,3540 @@
+{
+  "schema": 1,
+  "description": "Sanitized observed projectile, explicit HP and delivery timing. Counterfactual accounting only; not a survival replay.",
+  "events": [
+    {
+      "at": 0,
+      "kind": "reset"
+    },
+    {
+      "at": 1008.343,
+      "kind": "reset"
+    },
+    {
+      "at": 1087.78,
+      "kind": "reset"
+    },
+    {
+      "at": 2180.667,
+      "kind": "reset"
+    },
+    {
+      "at": 2215.811,
+      "kind": "hp",
+      "hp": 707,
+      "maxHp": 707
+    },
+    {
+      "at": 2285.377,
+      "kind": "tick",
+      "rtt": 0
+    },
+    {
+      "at": 2285.377,
+      "kind": "hp",
+      "hp": 707,
+      "maxHp": 707
+    },
+    {
+      "at": 2491.191,
+      "kind": "tick",
+      "rtt": 200
+    },
+    {
+      "at": 2702.33,
+      "kind": "tick",
+      "rtt": 199
+    },
+    {
+      "at": 2903.743,
+      "kind": "tick",
+      "rtt": 199
+    },
+    {
+      "at": 3116.318,
+      "kind": "tick",
+      "rtt": 215
+    },
+    {
+      "at": 3319.39,
+      "kind": "tick",
+      "rtt": 213
+    },
+    {
+      "at": 3533.871,
+      "kind": "tick",
+      "rtt": 213
+    },
+    {
+      "at": 3735.234,
+      "kind": "tick",
+      "rtt": 213
+    },
+    {
+      "at": 3946.781,
+      "kind": "tick",
+      "rtt": 219
+    },
+    {
+      "at": 4055.278,
+      "kind": "tick",
+      "rtt": 217
+    },
+    {
+      "at": 4259.221,
+      "kind": "tick",
+      "rtt": 125
+    },
+    {
+      "at": 4464.374,
+      "kind": "tick",
+      "rtt": 131
+    },
+    {
+      "at": 4666.951,
+      "kind": "tick",
+      "rtt": 129
+    },
+    {
+      "at": 4878.273,
+      "kind": "tick",
+      "rtt": 135
+    },
+    {
+      "at": 5087.379,
+      "kind": "tick",
+      "rtt": 139
+    },
+    {
+      "at": 5292.076,
+      "kind": "tick",
+      "rtt": 139
+    },
+    {
+      "at": 5498.003,
+      "kind": "tick",
+      "rtt": 147
+    },
+    {
+      "at": 5498.003,
+      "kind": "hp",
+      "hp": 707,
+      "maxHp": 707
+    },
+    {
+      "at": 5698.572,
+      "kind": "tick",
+      "rtt": 146
+    },
+    {
+      "at": 5902.03,
+      "kind": "tick",
+      "rtt": 152
+    },
+    {
+      "at": 6105.269,
+      "kind": "tick",
+      "rtt": 152
+    },
+    {
+      "at": 6307.42,
+      "kind": "tick",
+      "rtt": 160
+    },
+    {
+      "at": 6520.648,
+      "kind": "tick",
+      "rtt": 162
+    },
+    {
+      "at": 6731.594,
+      "kind": "tick",
+      "rtt": 172
+    },
+    {
+      "at": 6936.372,
+      "kind": "tick",
+      "rtt": 171
+    },
+    {
+      "at": 7142.818,
+      "kind": "tick",
+      "rtt": 177
+    },
+    {
+      "at": 7350.597,
+      "kind": "tick",
+      "rtt": 180
+    },
+    {
+      "at": 7552.582,
+      "kind": "tick",
+      "rtt": 180
+    },
+    {
+      "at": 7753.41,
+      "kind": "tick",
+      "rtt": 188
+    },
+    {
+      "at": 7956.74,
+      "kind": "tick",
+      "rtt": 188
+    },
+    {
+      "at": 8157.175,
+      "kind": "tick",
+      "rtt": 104
+    },
+    {
+      "at": 8361.284,
+      "kind": "tick",
+      "rtt": 110
+    },
+    {
+      "at": 8566.822,
+      "kind": "tick",
+      "rtt": 111
+    },
+    {
+      "at": 8768.414,
+      "kind": "tick",
+      "rtt": 117
+    },
+    {
+      "at": 8973.415,
+      "kind": "tick",
+      "rtt": 121
+    },
+    {
+      "at": 9177.977,
+      "kind": "tick",
+      "rtt": 129
+    },
+    {
+      "at": 9383.1,
+      "kind": "tick",
+      "rtt": 129
+    },
+    {
+      "at": 9585.221,
+      "kind": "tick",
+      "rtt": 137
+    },
+    {
+      "at": 9786.295,
+      "kind": "tick",
+      "rtt": 138
+    },
+    {
+      "at": 9989.377,
+      "kind": "tick",
+      "rtt": 140
+    },
+    {
+      "at": 10196.575,
+      "kind": "tick",
+      "rtt": 144
+    },
+    {
+      "at": 10397.75,
+      "kind": "tick",
+      "rtt": 150
+    },
+    {
+      "at": 10599.016,
+      "kind": "tick",
+      "rtt": 150
+    },
+    {
+      "at": 10801.572,
+      "kind": "tick",
+      "rtt": 154
+    },
+    {
+      "at": 11005.116,
+      "kind": "tick",
+      "rtt": 162
+    },
+    {
+      "at": 11209.812,
+      "kind": "tick",
+      "rtt": 163
+    },
+    {
+      "at": 11412.518,
+      "kind": "tick",
+      "rtt": 168
+    },
+    {
+      "at": 11614.365,
+      "kind": "tick",
+      "rtt": 172
+    },
+    {
+      "at": 11815.044,
+      "kind": "tick",
+      "rtt": 176
+    },
+    {
+      "at": 12018.309,
+      "kind": "tick",
+      "rtt": 180
+    },
+    {
+      "at": 12223.203,
+      "kind": "tick",
+      "rtt": 182
+    },
+    {
+      "at": 12427.066,
+      "kind": "tick",
+      "rtt": 190
+    },
+    {
+      "at": 12630.748,
+      "kind": "tick",
+      "rtt": 189
+    },
+    {
+      "at": 12838.753,
+      "kind": "tick",
+      "rtt": 197
+    },
+    {
+      "at": 13039.351,
+      "kind": "tick",
+      "rtt": 197
+    },
+    {
+      "at": 13246.523,
+      "kind": "tick",
+      "rtt": 215
+    },
+    {
+      "at": 13358.573,
+      "kind": "tick",
+      "rtt": 211
+    },
+    {
+      "at": 13559.872,
+      "kind": "tick",
+      "rtt": 118
+    },
+    {
+      "at": 13761.765,
+      "kind": "tick",
+      "rtt": 117
+    },
+    {
+      "at": 13965.938,
+      "kind": "tick",
+      "rtt": 121
+    },
+    {
+      "at": 14169.29,
+      "kind": "tick",
+      "rtt": 125
+    },
+    {
+      "at": 14377.93,
+      "kind": "tick",
+      "rtt": 127
+    },
+    {
+      "at": 14578.567,
+      "kind": "tick",
+      "rtt": 133
+    },
+    {
+      "at": 14783.868,
+      "kind": "tick",
+      "rtt": 135
+    },
+    {
+      "at": 14991.859,
+      "kind": "tick",
+      "rtt": 143
+    },
+    {
+      "at": 15203.603,
+      "kind": "tick",
+      "rtt": 148
+    },
+    {
+      "at": 15411.051,
+      "kind": "tick",
+      "rtt": 150
+    },
+    {
+      "at": 15613.704,
+      "kind": "tick",
+      "rtt": 152
+    },
+    {
+      "at": 15823.495,
+      "kind": "tick",
+      "rtt": 160
+    },
+    {
+      "at": 16029.224,
+      "kind": "tick",
+      "rtt": 162
+    },
+    {
+      "at": 16231.006,
+      "kind": "tick",
+      "rtt": 160
+    },
+    {
+      "at": 16437.03,
+      "kind": "tick",
+      "rtt": 168
+    },
+    {
+      "at": 16640.799,
+      "kind": "tick",
+      "rtt": 171
+    },
+    {
+      "at": 16846.053,
+      "kind": "tick",
+      "rtt": 172
+    },
+    {
+      "at": 17049.856,
+      "kind": "tick",
+      "rtt": 178
+    },
+    {
+      "at": 17251.076,
+      "kind": "tick",
+      "rtt": 178
+    },
+    {
+      "at": 17453.993,
+      "kind": "tick",
+      "rtt": 184
+    },
+    {
+      "at": 17661.695,
+      "kind": "tick",
+      "rtt": 188
+    },
+    {
+      "at": 17867.886,
+      "kind": "tick",
+      "rtt": 192
+    },
+    {
+      "at": 18070.309,
+      "kind": "tick",
+      "rtt": 195
+    },
+    {
+      "at": 18278.335,
+      "kind": "tick",
+      "rtt": 197
+    },
+    {
+      "at": 18472.78,
+      "kind": "hit",
+      "id": 1,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 18473.39,
+      "kind": "written",
+      "id": 1
+    },
+    {
+      "at": 18481.756,
+      "kind": "tick",
+      "rtt": 197
+    },
+    {
+      "at": 18693.991,
+      "kind": "tick",
+      "rtt": 211
+    },
+    {
+      "at": 18693.991,
+      "kind": "hp",
+      "hp": 690,
+      "maxHp": 707
+    },
+    {
+      "at": 18896.383,
+      "kind": "tick",
+      "rtt": 211
+    },
+    {
+      "at": 18896.383,
+      "kind": "hp",
+      "hp": 692,
+      "maxHp": 707
+    },
+    {
+      "at": 19100.194,
+      "kind": "tick",
+      "rtt": 215
+    },
+    {
+      "at": 19100.194,
+      "kind": "hp",
+      "hp": 693,
+      "maxHp": 707
+    },
+    {
+      "at": 19303.548,
+      "kind": "tick",
+      "rtt": 215
+    },
+    {
+      "at": 19303.548,
+      "kind": "hp",
+      "hp": 695,
+      "maxHp": 707
+    },
+    {
+      "at": 19509.175,
+      "kind": "tick",
+      "rtt": 223
+    },
+    {
+      "at": 19509.175,
+      "kind": "hp",
+      "hp": 707,
+      "maxHp": 707
+    },
+    {
+      "at": 19711.049,
+      "kind": "tick",
+      "rtt": 224
+    },
+    {
+      "at": 19916.871,
+      "kind": "tick",
+      "rtt": 230
+    },
+    {
+      "at": 20033.804,
+      "kind": "tick",
+      "rtt": 234
+    },
+    {
+      "at": 20233.167,
+      "kind": "tick",
+      "rtt": 141
+    },
+    {
+      "at": 20434.11,
+      "kind": "tick",
+      "rtt": 143
+    },
+    {
+      "at": 20638.067,
+      "kind": "tick",
+      "rtt": 150
+    },
+    {
+      "at": 20850.397,
+      "kind": "tick",
+      "rtt": 154
+    },
+    {
+      "at": 21060.885,
+      "kind": "tick",
+      "rtt": 156
+    },
+    {
+      "at": 21266.929,
+      "kind": "tick",
+      "rtt": 160
+    },
+    {
+      "at": 21473.849,
+      "kind": "tick",
+      "rtt": 162
+    },
+    {
+      "at": 21676.984,
+      "kind": "tick",
+      "rtt": 160
+    },
+    {
+      "at": 21881.698,
+      "kind": "tick",
+      "rtt": 160
+    },
+    {
+      "at": 22085.782,
+      "kind": "tick",
+      "rtt": 164
+    },
+    {
+      "at": 22288.467,
+      "kind": "tick",
+      "rtt": 170
+    },
+    {
+      "at": 22492.182,
+      "kind": "tick",
+      "rtt": 172
+    },
+    {
+      "at": 22698.336,
+      "kind": "tick",
+      "rtt": 172
+    },
+    {
+      "at": 22900.231,
+      "kind": "tick",
+      "rtt": 149
+    },
+    {
+      "at": 23105.012,
+      "kind": "tick",
+      "rtt": 51
+    },
+    {
+      "at": 23307.696,
+      "kind": "tick",
+      "rtt": 55
+    },
+    {
+      "at": 23514.997,
+      "kind": "tick",
+      "rtt": 54
+    },
+    {
+      "at": 23715.692,
+      "kind": "tick",
+      "rtt": 60
+    },
+    {
+      "at": 23925.938,
+      "kind": "tick",
+      "rtt": 64
+    },
+    {
+      "at": 24141.21,
+      "kind": "tick",
+      "rtt": 56
+    },
+    {
+      "at": 24341.429,
+      "kind": "tick",
+      "rtt": 64
+    },
+    {
+      "at": 24543.569,
+      "kind": "tick",
+      "rtt": 70
+    },
+    {
+      "at": 24747.02,
+      "kind": "tick",
+      "rtt": 74
+    },
+    {
+      "at": 24952.73,
+      "kind": "tick",
+      "rtt": 76
+    },
+    {
+      "at": 25160.313,
+      "kind": "tick",
+      "rtt": 76
+    },
+    {
+      "at": 25365.499,
+      "kind": "tick",
+      "rtt": 76
+    },
+    {
+      "at": 25571.093,
+      "kind": "tick",
+      "rtt": 76
+    },
+    {
+      "at": 25783.06,
+      "kind": "tick",
+      "rtt": 76
+    },
+    {
+      "at": 25990.112,
+      "kind": "tick",
+      "rtt": 82
+    },
+    {
+      "at": 26197.794,
+      "kind": "tick",
+      "rtt": 79
+    },
+    {
+      "at": 26404.314,
+      "kind": "tick",
+      "rtt": 81
+    },
+    {
+      "at": 26608.911,
+      "kind": "tick",
+      "rtt": 84
+    },
+    {
+      "at": 26811.067,
+      "kind": "tick",
+      "rtt": 92
+    },
+    {
+      "at": 27019.525,
+      "kind": "tick",
+      "rtt": 92
+    },
+    {
+      "at": 27221.858,
+      "kind": "tick",
+      "rtt": 98
+    },
+    {
+      "at": 27424.337,
+      "kind": "tick",
+      "rtt": 104
+    },
+    {
+      "at": 27630.828,
+      "kind": "tick",
+      "rtt": 106
+    },
+    {
+      "at": 27835.183,
+      "kind": "tick",
+      "rtt": 105
+    },
+    {
+      "at": 28037.107,
+      "kind": "tick",
+      "rtt": 113
+    },
+    {
+      "at": 28238.973,
+      "kind": "tick",
+      "rtt": 115
+    },
+    {
+      "at": 28445.359,
+      "kind": "tick",
+      "rtt": 119
+    },
+    {
+      "at": 28653.038,
+      "kind": "tick",
+      "rtt": 127
+    },
+    {
+      "at": 28857.779,
+      "kind": "tick",
+      "rtt": 129
+    },
+    {
+      "at": 29067.455,
+      "kind": "tick",
+      "rtt": 133
+    },
+    {
+      "at": 29283.374,
+      "kind": "tick",
+      "rtt": 134
+    },
+    {
+      "at": 29491.397,
+      "kind": "tick",
+      "rtt": 140
+    },
+    {
+      "at": 29694.682,
+      "kind": "tick",
+      "rtt": 142
+    },
+    {
+      "at": 29898.612,
+      "kind": "tick",
+      "rtt": 148
+    },
+    {
+      "at": 30099.864,
+      "kind": "tick",
+      "rtt": 151
+    },
+    {
+      "at": 30309.082,
+      "kind": "tick",
+      "rtt": 151
+    },
+    {
+      "at": 30510.168,
+      "kind": "tick",
+      "rtt": 155
+    },
+    {
+      "at": 30716.267,
+      "kind": "tick",
+      "rtt": 157
+    },
+    {
+      "at": 30919.174,
+      "kind": "tick",
+      "rtt": 162
+    },
+    {
+      "at": 31126.864,
+      "kind": "tick",
+      "rtt": 166
+    },
+    {
+      "at": 31335.371,
+      "kind": "tick",
+      "rtt": 166
+    },
+    {
+      "at": 31538.973,
+      "kind": "tick",
+      "rtt": 170
+    },
+    {
+      "at": 31743.406,
+      "kind": "tick",
+      "rtt": 170
+    },
+    {
+      "at": 31957.896,
+      "kind": "tick",
+      "rtt": 176
+    },
+    {
+      "at": 32061.629,
+      "kind": "tick",
+      "rtt": 178
+    },
+    {
+      "at": 32274.436,
+      "kind": "tick",
+      "rtt": 77
+    },
+    {
+      "at": 32481.63,
+      "kind": "tick",
+      "rtt": 73
+    },
+    {
+      "at": 32683.484,
+      "kind": "tick",
+      "rtt": 71
+    },
+    {
+      "at": 32891.973,
+      "kind": "tick",
+      "rtt": 74
+    },
+    {
+      "at": 33095.948,
+      "kind": "tick",
+      "rtt": 78
+    },
+    {
+      "at": 33302.222,
+      "kind": "tick",
+      "rtt": 84
+    },
+    {
+      "at": 33506.537,
+      "kind": "tick",
+      "rtt": 86
+    },
+    {
+      "at": 33711.714,
+      "kind": "tick",
+      "rtt": 82
+    },
+    {
+      "at": 33920.26,
+      "kind": "tick",
+      "rtt": 86
+    },
+    {
+      "at": 34123.04,
+      "kind": "tick",
+      "rtt": 90
+    },
+    {
+      "at": 34331.594,
+      "kind": "tick",
+      "rtt": 90
+    },
+    {
+      "at": 34536.924,
+      "kind": "tick",
+      "rtt": 94
+    },
+    {
+      "at": 34738.073,
+      "kind": "tick",
+      "rtt": 97
+    },
+    {
+      "at": 34948.469,
+      "kind": "tick",
+      "rtt": 103
+    },
+    {
+      "at": 35150.835,
+      "kind": "tick",
+      "rtt": 107
+    },
+    {
+      "at": 35352.278,
+      "kind": "tick",
+      "rtt": 113
+    },
+    {
+      "at": 35558.202,
+      "kind": "tick",
+      "rtt": 113
+    },
+    {
+      "at": 35761.878,
+      "kind": "tick",
+      "rtt": 120
+    },
+    {
+      "at": 35964.976,
+      "kind": "tick",
+      "rtt": 123
+    },
+    {
+      "at": 36178.162,
+      "kind": "tick",
+      "rtt": 127
+    },
+    {
+      "at": 36386.996,
+      "kind": "tick",
+      "rtt": 125
+    },
+    {
+      "at": 36590.472,
+      "kind": "tick",
+      "rtt": 127
+    },
+    {
+      "at": 36798.977,
+      "kind": "tick",
+      "rtt": 129
+    },
+    {
+      "at": 36934.708,
+      "kind": "hit",
+      "id": 2,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 36934.972,
+      "kind": "written",
+      "id": 2
+    },
+    {
+      "at": 37005.503,
+      "kind": "tick",
+      "rtt": 131
+    },
+    {
+      "at": 37037.402,
+      "kind": "hit",
+      "id": 3,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 37037.5,
+      "kind": "hit",
+      "id": 4,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 37037.65,
+      "kind": "written",
+      "id": 3
+    },
+    {
+      "at": 37037.726,
+      "kind": "written",
+      "id": 4
+    },
+    {
+      "at": 37209.804,
+      "kind": "tick",
+      "rtt": 135
+    },
+    {
+      "at": 37209.804,
+      "kind": "hp",
+      "hp": 654,
+      "maxHp": 707
+    },
+    {
+      "at": 37411.95,
+      "kind": "tick",
+      "rtt": 137
+    },
+    {
+      "at": 37411.95,
+      "kind": "hp",
+      "hp": 656,
+      "maxHp": 707
+    },
+    {
+      "at": 37449.059,
+      "kind": "hit",
+      "id": 5,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 37449.155,
+      "kind": "hit",
+      "id": 6,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 37449.18,
+      "kind": "hit",
+      "id": 7,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 37449.541,
+      "kind": "written",
+      "id": 5
+    },
+    {
+      "at": 37449.598,
+      "kind": "written",
+      "id": 6
+    },
+    {
+      "at": 37449.613,
+      "kind": "written",
+      "id": 7
+    },
+    {
+      "at": 37553.64,
+      "kind": "hit",
+      "id": 8,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 37553.74,
+      "kind": "hit",
+      "id": 9,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 37553.772,
+      "kind": "hit",
+      "id": 10,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 37553.892,
+      "kind": "written",
+      "id": 8
+    },
+    {
+      "at": 37553.951,
+      "kind": "written",
+      "id": 9
+    },
+    {
+      "at": 37553.973,
+      "kind": "written",
+      "id": 10
+    },
+    {
+      "at": 37617.815,
+      "kind": "tick",
+      "rtt": 143
+    },
+    {
+      "at": 37617.815,
+      "kind": "hp",
+      "hp": 617,
+      "maxHp": 707
+    },
+    {
+      "at": 37829.085,
+      "kind": "tick",
+      "rtt": 141
+    },
+    {
+      "at": 37829.085,
+      "kind": "hp",
+      "hp": 565,
+      "maxHp": 707
+    },
+    {
+      "at": 37861.05,
+      "kind": "hit",
+      "id": 11,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 37861.318,
+      "kind": "written",
+      "id": 11
+    },
+    {
+      "at": 38034.321,
+      "kind": "tick",
+      "rtt": 142
+    },
+    {
+      "at": 38034.321,
+      "kind": "hp",
+      "hp": 548,
+      "maxHp": 707
+    },
+    {
+      "at": 38067.162,
+      "kind": "hit",
+      "id": 12,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 38067.422,
+      "kind": "written",
+      "id": 12
+    },
+    {
+      "at": 38246.693,
+      "kind": "tick",
+      "rtt": 150
+    },
+    {
+      "at": 38246.693,
+      "kind": "hp",
+      "hp": 532,
+      "maxHp": 707
+    },
+    {
+      "at": 38376.223,
+      "kind": "hit",
+      "id": 13,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 38376.397,
+      "kind": "written",
+      "id": 13
+    },
+    {
+      "at": 38450.612,
+      "kind": "tick",
+      "rtt": 156
+    },
+    {
+      "at": 38450.612,
+      "kind": "hp",
+      "hp": 533,
+      "maxHp": 707
+    },
+    {
+      "at": 38479.232,
+      "kind": "hit",
+      "id": 14,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 38479.492,
+      "kind": "written",
+      "id": 14
+    },
+    {
+      "at": 38658.183,
+      "kind": "tick",
+      "rtt": 160
+    },
+    {
+      "at": 38658.183,
+      "kind": "hp",
+      "hp": 499,
+      "maxHp": 707
+    },
+    {
+      "at": 38769.123,
+      "kind": "tick",
+      "rtt": 162
+    },
+    {
+      "at": 38769.123,
+      "kind": "hp",
+      "hp": 500,
+      "maxHp": 707
+    },
+    {
+      "at": 38788.979,
+      "kind": "hit",
+      "id": 15,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 38789.052,
+      "kind": "hit",
+      "id": 16,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 38789.213,
+      "kind": "written",
+      "id": 15
+    },
+    {
+      "at": 38789.268,
+      "kind": "written",
+      "id": 16
+    },
+    {
+      "at": 38976.494,
+      "kind": "tick",
+      "rtt": 67
+    },
+    {
+      "at": 38976.494,
+      "kind": "hp",
+      "hp": 466,
+      "maxHp": 707
+    },
+    {
+      "at": 39179.066,
+      "kind": "tick",
+      "rtt": 67
+    },
+    {
+      "at": 39179.066,
+      "kind": "hp",
+      "hp": 468,
+      "maxHp": 707
+    },
+    {
+      "at": 39201.255,
+      "kind": "hit",
+      "id": 17,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 39201.48,
+      "kind": "written",
+      "id": 17
+    },
+    {
+      "at": 39304.341,
+      "kind": "hit",
+      "id": 18,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 39304.538,
+      "kind": "written",
+      "id": 18
+    },
+    {
+      "at": 39380.049,
+      "kind": "tick",
+      "rtt": 68
+    },
+    {
+      "at": 39380.049,
+      "kind": "hp",
+      "hp": 433,
+      "maxHp": 707
+    },
+    {
+      "at": 39510.146,
+      "kind": "hit",
+      "id": 19,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 39510.356,
+      "kind": "written",
+      "id": 19
+    },
+    {
+      "at": 39583.248,
+      "kind": "tick",
+      "rtt": 74
+    },
+    {
+      "at": 39583.248,
+      "kind": "hp",
+      "hp": 417,
+      "maxHp": 707
+    },
+    {
+      "at": 39783.723,
+      "kind": "tick",
+      "rtt": 76
+    },
+    {
+      "at": 39783.723,
+      "kind": "hp",
+      "hp": 418,
+      "maxHp": 707
+    },
+    {
+      "at": 39990.483,
+      "kind": "tick",
+      "rtt": 82
+    },
+    {
+      "at": 39990.483,
+      "kind": "hp",
+      "hp": 420,
+      "maxHp": 707
+    },
+    {
+      "at": 40196.351,
+      "kind": "tick",
+      "rtt": 90
+    },
+    {
+      "at": 40196.351,
+      "kind": "hp",
+      "hp": 421,
+      "maxHp": 707
+    },
+    {
+      "at": 40402.212,
+      "kind": "tick",
+      "rtt": 90
+    },
+    {
+      "at": 40402.212,
+      "kind": "hp",
+      "hp": 423,
+      "maxHp": 707
+    },
+    {
+      "at": 40605.962,
+      "kind": "tick",
+      "rtt": 99
+    },
+    {
+      "at": 40605.962,
+      "kind": "hp",
+      "hp": 424,
+      "maxHp": 707
+    },
+    {
+      "at": 40815.802,
+      "kind": "tick",
+      "rtt": 99
+    },
+    {
+      "at": 40815.802,
+      "kind": "hp",
+      "hp": 426,
+      "maxHp": 707
+    },
+    {
+      "at": 41022.456,
+      "kind": "tick",
+      "rtt": 103
+    },
+    {
+      "at": 41022.456,
+      "kind": "hp",
+      "hp": 428,
+      "maxHp": 707
+    },
+    {
+      "at": 41224.301,
+      "kind": "tick",
+      "rtt": 111
+    },
+    {
+      "at": 41224.301,
+      "kind": "hp",
+      "hp": 429,
+      "maxHp": 707
+    },
+    {
+      "at": 41427.411,
+      "kind": "tick",
+      "rtt": 116
+    },
+    {
+      "at": 41427.411,
+      "kind": "hp",
+      "hp": 444,
+      "maxHp": 707
+    },
+    {
+      "at": 41630.693,
+      "kind": "tick",
+      "rtt": 120
+    },
+    {
+      "at": 41630.693,
+      "kind": "hp",
+      "hp": 446,
+      "maxHp": 707
+    },
+    {
+      "at": 41834.685,
+      "kind": "tick",
+      "rtt": 123
+    },
+    {
+      "at": 41834.685,
+      "kind": "hp",
+      "hp": 447,
+      "maxHp": 707
+    },
+    {
+      "at": 42042.188,
+      "kind": "tick",
+      "rtt": 129
+    },
+    {
+      "at": 42042.188,
+      "kind": "hp",
+      "hp": 449,
+      "maxHp": 707
+    },
+    {
+      "at": 42243.513,
+      "kind": "tick",
+      "rtt": 135
+    },
+    {
+      "at": 42243.513,
+      "kind": "hp",
+      "hp": 450,
+      "maxHp": 707
+    },
+    {
+      "at": 42446.457,
+      "kind": "tick",
+      "rtt": 139
+    },
+    {
+      "at": 42446.457,
+      "kind": "hp",
+      "hp": 452,
+      "maxHp": 707
+    },
+    {
+      "at": 42648.733,
+      "kind": "tick",
+      "rtt": 149
+    },
+    {
+      "at": 42648.733,
+      "kind": "hp",
+      "hp": 453,
+      "maxHp": 707
+    },
+    {
+      "at": 42850.452,
+      "kind": "tick",
+      "rtt": 150
+    },
+    {
+      "at": 42850.452,
+      "kind": "hp",
+      "hp": 455,
+      "maxHp": 707
+    },
+    {
+      "at": 43052.023,
+      "kind": "tick",
+      "rtt": 158
+    },
+    {
+      "at": 43052.023,
+      "kind": "hp",
+      "hp": 456,
+      "maxHp": 707
+    },
+    {
+      "at": 43255.898,
+      "kind": "tick",
+      "rtt": 160
+    },
+    {
+      "at": 43255.898,
+      "kind": "hp",
+      "hp": 458,
+      "maxHp": 707
+    },
+    {
+      "at": 43458.455,
+      "kind": "tick",
+      "rtt": 168
+    },
+    {
+      "at": 43458.455,
+      "kind": "hp",
+      "hp": 460,
+      "maxHp": 707
+    },
+    {
+      "at": 43666.857,
+      "kind": "tick",
+      "rtt": 170
+    },
+    {
+      "at": 43666.857,
+      "kind": "hp",
+      "hp": 461,
+      "maxHp": 707
+    },
+    {
+      "at": 43871.399,
+      "kind": "tick",
+      "rtt": 176
+    },
+    {
+      "at": 43871.399,
+      "kind": "hp",
+      "hp": 463,
+      "maxHp": 707
+    },
+    {
+      "at": 44079.344,
+      "kind": "tick",
+      "rtt": 179
+    },
+    {
+      "at": 44079.344,
+      "kind": "hp",
+      "hp": 464,
+      "maxHp": 707
+    },
+    {
+      "at": 44283.285,
+      "kind": "tick",
+      "rtt": 183
+    },
+    {
+      "at": 44283.285,
+      "kind": "hp",
+      "hp": 466,
+      "maxHp": 707
+    },
+    {
+      "at": 44491.199,
+      "kind": "tick",
+      "rtt": 189
+    },
+    {
+      "at": 44491.199,
+      "kind": "hp",
+      "hp": 527,
+      "maxHp": 707
+    },
+    {
+      "at": 44693.127,
+      "kind": "tick",
+      "rtt": 193
+    },
+    {
+      "at": 44693.127,
+      "kind": "hp",
+      "hp": 529,
+      "maxHp": 707
+    },
+    {
+      "at": 44895.272,
+      "kind": "tick",
+      "rtt": 197
+    },
+    {
+      "at": 44895.272,
+      "kind": "hp",
+      "hp": 590,
+      "maxHp": 707
+    },
+    {
+      "at": 45097.826,
+      "kind": "tick",
+      "rtt": 197
+    },
+    {
+      "at": 45097.826,
+      "kind": "hp",
+      "hp": 592,
+      "maxHp": 707
+    },
+    {
+      "at": 45298.275,
+      "kind": "tick",
+      "rtt": 213
+    },
+    {
+      "at": 45298.275,
+      "kind": "hp",
+      "hp": 667,
+      "maxHp": 707
+    },
+    {
+      "at": 45504.269,
+      "kind": "tick",
+      "rtt": 210
+    },
+    {
+      "at": 45504.269,
+      "kind": "hp",
+      "hp": 669,
+      "maxHp": 707
+    },
+    {
+      "at": 45704.631,
+      "kind": "tick",
+      "rtt": 213
+    },
+    {
+      "at": 45704.631,
+      "kind": "hp",
+      "hp": 670,
+      "maxHp": 707
+    },
+    {
+      "at": 45906.865,
+      "kind": "tick",
+      "rtt": 217
+    },
+    {
+      "at": 45906.865,
+      "kind": "hp",
+      "hp": 672,
+      "maxHp": 707
+    },
+    {
+      "at": 46109.985,
+      "kind": "tick",
+      "rtt": 223
+    },
+    {
+      "at": 46109.985,
+      "kind": "hp",
+      "hp": 673,
+      "maxHp": 707
+    },
+    {
+      "at": 46222.153,
+      "kind": "tick",
+      "rtt": 227
+    },
+    {
+      "at": 46222.153,
+      "kind": "hp",
+      "hp": 675,
+      "maxHp": 707
+    },
+    {
+      "at": 46425.292,
+      "kind": "tick",
+      "rtt": 136
+    },
+    {
+      "at": 46425.292,
+      "kind": "hp",
+      "hp": 676,
+      "maxHp": 707
+    },
+    {
+      "at": 46628.543,
+      "kind": "tick",
+      "rtt": 136
+    },
+    {
+      "at": 46628.543,
+      "kind": "hp",
+      "hp": 678,
+      "maxHp": 707
+    },
+    {
+      "at": 46828.317,
+      "kind": "tick",
+      "rtt": 140
+    },
+    {
+      "at": 46828.317,
+      "kind": "hp",
+      "hp": 679,
+      "maxHp": 707
+    },
+    {
+      "at": 47028.853,
+      "kind": "tick",
+      "rtt": 147
+    },
+    {
+      "at": 47028.853,
+      "kind": "hp",
+      "hp": 681,
+      "maxHp": 707
+    },
+    {
+      "at": 47231.817,
+      "kind": "tick",
+      "rtt": 49
+    },
+    {
+      "at": 47231.817,
+      "kind": "hp",
+      "hp": 683,
+      "maxHp": 707
+    },
+    {
+      "at": 47433.856,
+      "kind": "tick",
+      "rtt": 49
+    },
+    {
+      "at": 47433.856,
+      "kind": "hp",
+      "hp": 684,
+      "maxHp": 707
+    },
+    {
+      "at": 47636.052,
+      "kind": "tick",
+      "rtt": 57
+    },
+    {
+      "at": 47636.052,
+      "kind": "hp",
+      "hp": 686,
+      "maxHp": 707
+    },
+    {
+      "at": 47837.41,
+      "kind": "tick",
+      "rtt": 62
+    },
+    {
+      "at": 47837.41,
+      "kind": "hp",
+      "hp": 687,
+      "maxHp": 707
+    },
+    {
+      "at": 48045.791,
+      "kind": "tick",
+      "rtt": 66
+    },
+    {
+      "at": 48045.791,
+      "kind": "hp",
+      "hp": 689,
+      "maxHp": 707
+    },
+    {
+      "at": 48261.148,
+      "kind": "tick",
+      "rtt": 84
+    },
+    {
+      "at": 48261.148,
+      "kind": "hp",
+      "hp": 690,
+      "maxHp": 707
+    },
+    {
+      "at": 48472.064,
+      "kind": "tick",
+      "rtt": 86
+    },
+    {
+      "at": 48472.064,
+      "kind": "hp",
+      "hp": 692,
+      "maxHp": 707
+    },
+    {
+      "at": 48678.108,
+      "kind": "tick",
+      "rtt": 88
+    },
+    {
+      "at": 48678.108,
+      "kind": "hp",
+      "hp": 693,
+      "maxHp": 707
+    },
+    {
+      "at": 48881.184,
+      "kind": "tick",
+      "rtt": 92
+    },
+    {
+      "at": 48881.184,
+      "kind": "hp",
+      "hp": 695,
+      "maxHp": 707
+    },
+    {
+      "at": 49086.765,
+      "kind": "tick",
+      "rtt": 95
+    },
+    {
+      "at": 49086.765,
+      "kind": "hp",
+      "hp": 707,
+      "maxHp": 707
+    },
+    {
+      "at": 49294.545,
+      "kind": "tick",
+      "rtt": 99
+    },
+    {
+      "at": 49497.158,
+      "kind": "tick",
+      "rtt": 102
+    },
+    {
+      "at": 49702.648,
+      "kind": "tick",
+      "rtt": 107
+    },
+    {
+      "at": 49906.585,
+      "kind": "tick",
+      "rtt": 110
+    },
+    {
+      "at": 50112.47,
+      "kind": "tick",
+      "rtt": 114
+    },
+    {
+      "at": 50112.47,
+      "kind": "hp",
+      "hp": 707,
+      "maxHp": 707
+    },
+    {
+      "at": 50317.728,
+      "kind": "tick",
+      "rtt": 114
+    },
+    {
+      "at": 50521.705,
+      "kind": "tick",
+      "rtt": 121
+    },
+    {
+      "at": 50725.577,
+      "kind": "tick",
+      "rtt": 121
+    },
+    {
+      "at": 50931.467,
+      "kind": "tick",
+      "rtt": 131
+    },
+    {
+      "at": 51136.004,
+      "kind": "tick",
+      "rtt": 133
+    },
+    {
+      "at": 51342.786,
+      "kind": "tick",
+      "rtt": 141
+    },
+    {
+      "at": 51544.494,
+      "kind": "tick",
+      "rtt": 143
+    },
+    {
+      "at": 51755.19,
+      "kind": "tick",
+      "rtt": 144
+    },
+    {
+      "at": 51964.859,
+      "kind": "tick",
+      "rtt": 152
+    },
+    {
+      "at": 52081.33,
+      "kind": "tick",
+      "rtt": 158
+    },
+    {
+      "at": 52283.331,
+      "kind": "tick",
+      "rtt": 59
+    },
+    {
+      "at": 52498.133,
+      "kind": "tick",
+      "rtt": 65
+    },
+    {
+      "at": 52702.51,
+      "kind": "tick",
+      "rtt": 67
+    },
+    {
+      "at": 52910.896,
+      "kind": "tick",
+      "rtt": 73
+    },
+    {
+      "at": 53113.954,
+      "kind": "tick",
+      "rtt": 74
+    },
+    {
+      "at": 53329.362,
+      "kind": "tick",
+      "rtt": 74
+    },
+    {
+      "at": 53535.003,
+      "kind": "tick",
+      "rtt": 181
+    },
+    {
+      "at": 53738.053,
+      "kind": "tick",
+      "rtt": 187
+    },
+    {
+      "at": 53945.461,
+      "kind": "tick",
+      "rtt": 82
+    },
+    {
+      "at": 54146.526,
+      "kind": "tick",
+      "rtt": 88
+    },
+    {
+      "at": 54347.805,
+      "kind": "tick",
+      "rtt": 96
+    },
+    {
+      "at": 54548.841,
+      "kind": "tick",
+      "rtt": 98
+    },
+    {
+      "at": 54750.186,
+      "kind": "tick",
+      "rtt": 101
+    },
+    {
+      "at": 54957.165,
+      "kind": "tick",
+      "rtt": 107
+    },
+    {
+      "at": 55161.107,
+      "kind": "tick",
+      "rtt": 109
+    },
+    {
+      "at": 55365.946,
+      "kind": "tick",
+      "rtt": 111
+    },
+    {
+      "at": 55571.662,
+      "kind": "tick",
+      "rtt": 111
+    },
+    {
+      "at": 55774.932,
+      "kind": "tick",
+      "rtt": 113
+    },
+    {
+      "at": 55981.149,
+      "kind": "tick",
+      "rtt": 114
+    },
+    {
+      "at": 56183.093,
+      "kind": "tick",
+      "rtt": 114
+    },
+    {
+      "at": 56392.35,
+      "kind": "tick",
+      "rtt": 123
+    },
+    {
+      "at": 56598.772,
+      "kind": "tick",
+      "rtt": 129
+    },
+    {
+      "at": 56805.295,
+      "kind": "tick",
+      "rtt": 135
+    },
+    {
+      "at": 57009.475,
+      "kind": "tick",
+      "rtt": 141
+    },
+    {
+      "at": 57217.781,
+      "kind": "tick",
+      "rtt": 145
+    },
+    {
+      "at": 57418.177,
+      "kind": "tick",
+      "rtt": 149
+    },
+    {
+      "at": 57624.822,
+      "kind": "tick",
+      "rtt": 153
+    },
+    {
+      "at": 57827.68,
+      "kind": "tick",
+      "rtt": 160
+    },
+    {
+      "at": 58035.233,
+      "kind": "tick",
+      "rtt": 164
+    },
+    {
+      "at": 58236.823,
+      "kind": "tick",
+      "rtt": 170
+    },
+    {
+      "at": 58448.297,
+      "kind": "tick",
+      "rtt": 172
+    },
+    {
+      "at": 58561.177,
+      "kind": "tick",
+      "rtt": 178
+    },
+    {
+      "at": 58590.173,
+      "kind": "hit",
+      "id": 20,
+      "amount": 1,
+      "assumed": false
+    },
+    {
+      "at": 58590.424,
+      "kind": "written",
+      "id": 20
+    },
+    {
+      "at": 58764.07,
+      "kind": "tick",
+      "rtt": 77
+    },
+    {
+      "at": 58764.07,
+      "kind": "hp",
+      "hp": 704,
+      "maxHp": 707
+    },
+    {
+      "at": 58898.355,
+      "kind": "hit",
+      "id": 21,
+      "amount": 90,
+      "assumed": false
+    },
+    {
+      "at": 58898.547,
+      "kind": "written",
+      "id": 21
+    },
+    {
+      "at": 58968.531,
+      "kind": "tick",
+      "rtt": 78
+    },
+    {
+      "at": 58968.531,
+      "kind": "hp",
+      "hp": 656,
+      "maxHp": 707
+    },
+    {
+      "at": 59171.173,
+      "kind": "tick",
+      "rtt": 80
+    },
+    {
+      "at": 59171.173,
+      "kind": "hp",
+      "hp": 653,
+      "maxHp": 707
+    },
+    {
+      "at": 59372.901,
+      "kind": "tick",
+      "rtt": 86
+    },
+    {
+      "at": 59372.901,
+      "kind": "hp",
+      "hp": 650,
+      "maxHp": 707
+    },
+    {
+      "at": 59517.423,
+      "kind": "hit",
+      "id": 22,
+      "amount": 90,
+      "assumed": false
+    },
+    {
+      "at": 59517.626,
+      "kind": "written",
+      "id": 22
+    },
+    {
+      "at": 59585.208,
+      "kind": "tick",
+      "rtt": 86
+    },
+    {
+      "at": 59585.208,
+      "kind": "hp",
+      "hp": 589,
+      "maxHp": 707
+    },
+    {
+      "at": 59793.5,
+      "kind": "tick",
+      "rtt": 92
+    },
+    {
+      "at": 59793.5,
+      "kind": "hp",
+      "hp": 586,
+      "maxHp": 707
+    },
+    {
+      "at": 59995.884,
+      "kind": "tick",
+      "rtt": 96
+    },
+    {
+      "at": 59995.884,
+      "kind": "hp",
+      "hp": 583,
+      "maxHp": 707
+    },
+    {
+      "at": 60032.929,
+      "kind": "hit",
+      "id": 23,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 60033.123,
+      "kind": "written",
+      "id": 23
+    },
+    {
+      "at": 60136.026,
+      "kind": "hit",
+      "id": 24,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 60136.26,
+      "kind": "written",
+      "id": 24
+    },
+    {
+      "at": 60202.314,
+      "kind": "tick",
+      "rtt": 102
+    },
+    {
+      "at": 60202.314,
+      "kind": "hp",
+      "hp": 561,
+      "maxHp": 707
+    },
+    {
+      "at": 60342.375,
+      "kind": "hit",
+      "id": 25,
+      "amount": 90,
+      "assumed": false
+    },
+    {
+      "at": 60342.458,
+      "kind": "hit",
+      "id": 26,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 60342.608,
+      "kind": "written",
+      "id": 25
+    },
+    {
+      "at": 60342.686,
+      "kind": "written",
+      "id": 26
+    },
+    {
+      "at": 60405.123,
+      "kind": "tick",
+      "rtt": 107
+    },
+    {
+      "at": 60405.123,
+      "kind": "hp",
+      "hp": 540,
+      "maxHp": 707
+    },
+    {
+      "at": 60444.832,
+      "kind": "hit",
+      "id": 27,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 60444.911,
+      "kind": "hit",
+      "id": 28,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 60444.923,
+      "kind": "hit",
+      "id": 29,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 60445.067,
+      "kind": "written",
+      "id": 27
+    },
+    {
+      "at": 60445.178,
+      "kind": "written",
+      "id": 28
+    },
+    {
+      "at": 60445.191,
+      "kind": "written",
+      "id": 29
+    },
+    {
+      "at": 60547.999,
+      "kind": "hit",
+      "id": 30,
+      "amount": 1,
+      "assumed": false
+    },
+    {
+      "at": 60548.228,
+      "kind": "written",
+      "id": 30
+    },
+    {
+      "at": 60608.375,
+      "kind": "tick",
+      "rtt": 109
+    },
+    {
+      "at": 60608.375,
+      "kind": "hp",
+      "hp": 407,
+      "maxHp": 707
+    },
+    {
+      "at": 60816.922,
+      "kind": "tick",
+      "rtt": 115
+    },
+    {
+      "at": 60816.922,
+      "kind": "hp",
+      "hp": 404,
+      "maxHp": 707
+    },
+    {
+      "at": 61020.289,
+      "kind": "tick",
+      "rtt": 115
+    },
+    {
+      "at": 61020.289,
+      "kind": "hp",
+      "hp": 401,
+      "maxHp": 707
+    },
+    {
+      "at": 61063.059,
+      "kind": "hit",
+      "id": 31,
+      "amount": 90,
+      "assumed": false
+    },
+    {
+      "at": 61063.326,
+      "kind": "written",
+      "id": 31
+    },
+    {
+      "at": 61227.725,
+      "kind": "tick",
+      "rtt": 115
+    },
+    {
+      "at": 61227.725,
+      "kind": "hp",
+      "hp": 339,
+      "maxHp": 707
+    },
+    {
+      "at": 61371.955,
+      "kind": "hit",
+      "id": 32,
+      "amount": 50,
+      "assumed": false
+    },
+    {
+      "at": 61372.162,
+      "kind": "written",
+      "id": 32
+    },
+    {
+      "at": 61434.141,
+      "kind": "tick",
+      "rtt": 113
+    },
+    {
+      "at": 61434.141,
+      "kind": "hp",
+      "hp": 336,
+      "maxHp": 707
+    },
+    {
+      "at": 61578.136,
+      "kind": "hit",
+      "id": 33,
+      "amount": 90,
+      "assumed": false
+    },
+    {
+      "at": 61578.419,
+      "kind": "written",
+      "id": 33
+    },
+    {
+      "at": 61638.045,
+      "kind": "tick",
+      "rtt": 121
+    },
+    {
+      "at": 61638.045,
+      "kind": "hp",
+      "hp": 315,
+      "maxHp": 707
+    },
+    {
+      "at": 61682.097,
+      "kind": "hit",
+      "id": 34,
+      "amount": 1,
+      "assumed": false
+    },
+    {
+      "at": 61682.403,
+      "kind": "written",
+      "id": 34
+    },
+    {
+      "at": 61844.986,
+      "kind": "tick",
+      "rtt": 127
+    },
+    {
+      "at": 61844.986,
+      "kind": "hp",
+      "hp": 254,
+      "maxHp": 707
+    },
+    {
+      "at": 62048.562,
+      "kind": "tick",
+      "rtt": 130
+    },
+    {
+      "at": 62048.562,
+      "kind": "hp",
+      "hp": 251,
+      "maxHp": 707
+    },
+    {
+      "at": 62248.964,
+      "kind": "tick",
+      "rtt": 133
+    },
+    {
+      "at": 62248.964,
+      "kind": "hp",
+      "hp": 248,
+      "maxHp": 707
+    },
+    {
+      "at": 62457.312,
+      "kind": "tick",
+      "rtt": 139
+    },
+    {
+      "at": 62457.312,
+      "kind": "hp",
+      "hp": 244,
+      "maxHp": 707
+    },
+    {
+      "at": 62663.7,
+      "kind": "tick",
+      "rtt": 139
+    },
+    {
+      "at": 62663.7,
+      "kind": "hp",
+      "hp": 241,
+      "maxHp": 707
+    },
+    {
+      "at": 62871.282,
+      "kind": "tick",
+      "rtt": 145
+    },
+    {
+      "at": 62871.282,
+      "kind": "hp",
+      "hp": 238,
+      "maxHp": 707
+    },
+    {
+      "at": 63073.976,
+      "kind": "tick",
+      "rtt": 155
+    },
+    {
+      "at": 63073.976,
+      "kind": "hp",
+      "hp": 235,
+      "maxHp": 707
+    },
+    {
+      "at": 63278.238,
+      "kind": "tick",
+      "rtt": 156
+    },
+    {
+      "at": 63278.238,
+      "kind": "hp",
+      "hp": 232,
+      "maxHp": 707
+    },
+    {
+      "at": 63487.458,
+      "kind": "tick",
+      "rtt": 162
+    },
+    {
+      "at": 63487.458,
+      "kind": "hp",
+      "hp": 229,
+      "maxHp": 707
+    },
+    {
+      "at": 63690.182,
+      "kind": "tick",
+      "rtt": 168
+    },
+    {
+      "at": 63690.182,
+      "kind": "hp",
+      "hp": 226,
+      "maxHp": 707
+    },
+    {
+      "at": 63901.547,
+      "kind": "tick",
+      "rtt": 170
+    },
+    {
+      "at": 63901.547,
+      "kind": "hp",
+      "hp": 222,
+      "maxHp": 707
+    },
+    {
+      "at": 64110.991,
+      "kind": "tick",
+      "rtt": 170
+    },
+    {
+      "at": 64110.991,
+      "kind": "hp",
+      "hp": 219,
+      "maxHp": 707
+    },
+    {
+      "at": 64229.393,
+      "kind": "tick",
+      "rtt": 176
+    },
+    {
+      "at": 64229.393,
+      "kind": "hp",
+      "hp": 216,
+      "maxHp": 707
+    },
+    {
+      "at": 64429.15,
+      "kind": "tick",
+      "rtt": 76
+    },
+    {
+      "at": 64429.15,
+      "kind": "hp",
+      "hp": 213,
+      "maxHp": 707
+    },
+    {
+      "at": 64634.075,
+      "kind": "tick",
+      "rtt": 80
+    },
+    {
+      "at": 64634.075,
+      "kind": "hp",
+      "hp": 210,
+      "maxHp": 707
+    },
+    {
+      "at": 64838.373,
+      "kind": "tick",
+      "rtt": 86
+    },
+    {
+      "at": 64838.373,
+      "kind": "hp",
+      "hp": 220,
+      "maxHp": 707
+    },
+    {
+      "at": 65044.589,
+      "kind": "tick",
+      "rtt": 88
+    },
+    {
+      "at": 65044.589,
+      "kind": "hp",
+      "hp": 217,
+      "maxHp": 707
+    },
+    {
+      "at": 65246.425,
+      "kind": "tick",
+      "rtt": 90
+    },
+    {
+      "at": 65246.425,
+      "kind": "hp",
+      "hp": 214,
+      "maxHp": 707
+    },
+    {
+      "at": 65447.129,
+      "kind": "tick",
+      "rtt": 94
+    },
+    {
+      "at": 65447.129,
+      "kind": "hp",
+      "hp": 211,
+      "maxHp": 707
+    },
+    {
+      "at": 65648.028,
+      "kind": "tick",
+      "rtt": 98
+    },
+    {
+      "at": 65648.028,
+      "kind": "hp",
+      "hp": 212,
+      "maxHp": 707
+    },
+    {
+      "at": 65853.802,
+      "kind": "tick",
+      "rtt": 104
+    },
+    {
+      "at": 65853.802,
+      "kind": "hp",
+      "hp": 213,
+      "maxHp": 707
+    },
+    {
+      "at": 66055.095,
+      "kind": "tick",
+      "rtt": 109
+    },
+    {
+      "at": 66055.095,
+      "kind": "hp",
+      "hp": 214,
+      "maxHp": 707
+    },
+    {
+      "at": 66256.829,
+      "kind": "tick",
+      "rtt": 111
+    },
+    {
+      "at": 66462.127,
+      "kind": "tick",
+      "rtt": 113
+    },
+    {
+      "at": 66462.127,
+      "kind": "hp",
+      "hp": 215,
+      "maxHp": 707
+    },
+    {
+      "at": 66667.267,
+      "kind": "tick",
+      "rtt": 121
+    },
+    {
+      "at": 66667.267,
+      "kind": "hp",
+      "hp": 216,
+      "maxHp": 707
+    },
+    {
+      "at": 66875.55,
+      "kind": "tick",
+      "rtt": 121
+    },
+    {
+      "at": 66875.55,
+      "kind": "hp",
+      "hp": 217,
+      "maxHp": 707
+    },
+    {
+      "at": 67076.073,
+      "kind": "tick",
+      "rtt": 129
+    },
+    {
+      "at": 67076.073,
+      "kind": "hp",
+      "hp": 218,
+      "maxHp": 707
+    },
+    {
+      "at": 67283.021,
+      "kind": "tick",
+      "rtt": 136
+    },
+    {
+      "at": 67283.021,
+      "kind": "hp",
+      "hp": 219,
+      "maxHp": 707
+    },
+    {
+      "at": 67486.284,
+      "kind": "tick",
+      "rtt": 138
+    },
+    {
+      "at": 67486.284,
+      "kind": "hp",
+      "hp": 220,
+      "maxHp": 707
+    },
+    {
+      "at": 67693.829,
+      "kind": "tick",
+      "rtt": 140
+    },
+    {
+      "at": 67693.829,
+      "kind": "hp",
+      "hp": 221,
+      "maxHp": 707
+    },
+    {
+      "at": 67896.59,
+      "kind": "tick",
+      "rtt": 144
+    },
+    {
+      "at": 67896.59,
+      "kind": "hp",
+      "hp": 223,
+      "maxHp": 707
+    },
+    {
+      "at": 68105.363,
+      "kind": "tick",
+      "rtt": 154
+    },
+    {
+      "at": 68105.363,
+      "kind": "hp",
+      "hp": 224,
+      "maxHp": 707
+    },
+    {
+      "at": 68308.187,
+      "kind": "tick",
+      "rtt": 149
+    },
+    {
+      "at": 68308.187,
+      "kind": "hp",
+      "hp": 226,
+      "maxHp": 707
+    },
+    {
+      "at": 68514.913,
+      "kind": "tick",
+      "rtt": 157
+    },
+    {
+      "at": 68514.913,
+      "kind": "hp",
+      "hp": 327,
+      "maxHp": 707
+    },
+    {
+      "at": 68720.617,
+      "kind": "tick",
+      "rtt": 155
+    },
+    {
+      "at": 68720.617,
+      "kind": "hp",
+      "hp": 329,
+      "maxHp": 707
+    },
+    {
+      "at": 68928.738,
+      "kind": "tick",
+      "rtt": 158
+    },
+    {
+      "at": 68928.738,
+      "kind": "hp",
+      "hp": 430,
+      "maxHp": 707
+    },
+    {
+      "at": 69131.972,
+      "kind": "tick",
+      "rtt": 162
+    },
+    {
+      "at": 69131.972,
+      "kind": "hp",
+      "hp": 432,
+      "maxHp": 707
+    },
+    {
+      "at": 69333.507,
+      "kind": "tick",
+      "rtt": 166
+    },
+    {
+      "at": 69333.507,
+      "kind": "hp",
+      "hp": 433,
+      "maxHp": 707
+    },
+    {
+      "at": 69537.625,
+      "kind": "tick",
+      "rtt": 166
+    },
+    {
+      "at": 69537.625,
+      "kind": "hp",
+      "hp": 435,
+      "maxHp": 707
+    },
+    {
+      "at": 69742.575,
+      "kind": "tick",
+      "rtt": 168
+    },
+    {
+      "at": 69742.575,
+      "kind": "hp",
+      "hp": 436,
+      "maxHp": 707
+    },
+    {
+      "at": 69945.64,
+      "kind": "tick",
+      "rtt": 168
+    },
+    {
+      "at": 69945.64,
+      "kind": "hp",
+      "hp": 438,
+      "maxHp": 707
+    },
+    {
+      "at": 70156.62,
+      "kind": "tick",
+      "rtt": 174
+    },
+    {
+      "at": 70156.62,
+      "kind": "hp",
+      "hp": 440,
+      "maxHp": 707
+    },
+    {
+      "at": 70361.291,
+      "kind": "tick",
+      "rtt": 174
+    },
+    {
+      "at": 70361.291,
+      "kind": "hp",
+      "hp": 441,
+      "maxHp": 707
+    },
+    {
+      "at": 70561.978,
+      "kind": "tick",
+      "rtt": 180
+    },
+    {
+      "at": 70561.978,
+      "kind": "hp",
+      "hp": 443,
+      "maxHp": 707
+    },
+    {
+      "at": 70765.963,
+      "kind": "tick",
+      "rtt": 177
+    },
+    {
+      "at": 70765.963,
+      "kind": "hp",
+      "hp": 458,
+      "maxHp": 707
+    },
+    {
+      "at": 70969.784,
+      "kind": "tick",
+      "rtt": 181
+    },
+    {
+      "at": 70969.784,
+      "kind": "hp",
+      "hp": 460,
+      "maxHp": 707
+    },
+    {
+      "at": 71173.142,
+      "kind": "tick",
+      "rtt": 183
+    },
+    {
+      "at": 71173.142,
+      "kind": "hp",
+      "hp": 461,
+      "maxHp": 707
+    },
+    {
+      "at": 71382.977,
+      "kind": "tick",
+      "rtt": 189
+    },
+    {
+      "at": 71382.977,
+      "kind": "hp",
+      "hp": 463,
+      "maxHp": 707
+    },
+    {
+      "at": 71588.856,
+      "kind": "tick",
+      "rtt": 193
+    },
+    {
+      "at": 71588.856,
+      "kind": "hp",
+      "hp": 464,
+      "maxHp": 707
+    },
+    {
+      "at": 71790.886,
+      "kind": "tick",
+      "rtt": 198
+    },
+    {
+      "at": 71790.886,
+      "kind": "hp",
+      "hp": 466,
+      "maxHp": 707
+    },
+    {
+      "at": 71996.822,
+      "kind": "tick",
+      "rtt": 198
+    },
+    {
+      "at": 71996.822,
+      "kind": "hp",
+      "hp": 467,
+      "maxHp": 707
+    },
+    {
+      "at": 72203.252,
+      "kind": "tick",
+      "rtt": 209
+    },
+    {
+      "at": 72203.252,
+      "kind": "hp",
+      "hp": 469,
+      "maxHp": 707
+    },
+    {
+      "at": 72405.029,
+      "kind": "tick",
+      "rtt": 209
+    },
+    {
+      "at": 72405.029,
+      "kind": "hp",
+      "hp": 471,
+      "maxHp": 707
+    },
+    {
+      "at": 72610.032,
+      "kind": "tick",
+      "rtt": 213
+    },
+    {
+      "at": 72610.032,
+      "kind": "hp",
+      "hp": 472,
+      "maxHp": 707
+    },
+    {
+      "at": 72813.115,
+      "kind": "tick",
+      "rtt": 211
+    },
+    {
+      "at": 72813.115,
+      "kind": "hp",
+      "hp": 474,
+      "maxHp": 707
+    },
+    {
+      "at": 73014.422,
+      "kind": "tick",
+      "rtt": 215
+    },
+    {
+      "at": 73014.422,
+      "kind": "hp",
+      "hp": 475,
+      "maxHp": 707
+    },
+    {
+      "at": 73234.959,
+      "kind": "tick",
+      "rtt": 219
+    },
+    {
+      "at": 73234.959,
+      "kind": "hp",
+      "hp": 477,
+      "maxHp": 707
+    },
+    {
+      "at": 73343.865,
+      "kind": "tick",
+      "rtt": 221
+    },
+    {
+      "at": 73343.865,
+      "kind": "hp",
+      "hp": 478,
+      "maxHp": 707
+    },
+    {
+      "at": 73555.238,
+      "kind": "tick",
+      "rtt": 130
+    },
+    {
+      "at": 73555.238,
+      "kind": "hp",
+      "hp": 480,
+      "maxHp": 707
+    },
+    {
+      "at": 73756.755,
+      "kind": "tick",
+      "rtt": 133
+    },
+    {
+      "at": 73756.755,
+      "kind": "hp",
+      "hp": 481,
+      "maxHp": 707
+    },
+    {
+      "at": 73963.254,
+      "kind": "tick",
+      "rtt": 143
+    },
+    {
+      "at": 73963.254,
+      "kind": "hp",
+      "hp": 483,
+      "maxHp": 707
+    },
+    {
+      "at": 74168.111,
+      "kind": "tick",
+      "rtt": 143
+    },
+    {
+      "at": 74168.111,
+      "kind": "hp",
+      "hp": 485,
+      "maxHp": 707
+    },
+    {
+      "at": 74375.375,
+      "kind": "tick",
+      "rtt": 151
+    },
+    {
+      "at": 74375.375,
+      "kind": "hp",
+      "hp": 486,
+      "maxHp": 707
+    },
+    {
+      "at": 74577.329,
+      "kind": "tick",
+      "rtt": 153
+    },
+    {
+      "at": 74577.329,
+      "kind": "hp",
+      "hp": 502,
+      "maxHp": 707
+    },
+    {
+      "at": 74778.191,
+      "kind": "tick",
+      "rtt": 156
+    },
+    {
+      "at": 74778.191,
+      "kind": "hp",
+      "hp": 503,
+      "maxHp": 707
+    },
+    {
+      "at": 74988.853,
+      "kind": "tick",
+      "rtt": 158
+    },
+    {
+      "at": 74988.853,
+      "kind": "hp",
+      "hp": 505,
+      "maxHp": 707
+    },
+    {
+      "at": 75190.816,
+      "kind": "tick",
+      "rtt": 164
+    },
+    {
+      "at": 75190.816,
+      "kind": "hp",
+      "hp": 506,
+      "maxHp": 707
+    },
+    {
+      "at": 75402.293,
+      "kind": "tick",
+      "rtt": 166
+    },
+    {
+      "at": 75402.293,
+      "kind": "hp",
+      "hp": 508,
+      "maxHp": 707
+    },
+    {
+      "at": 75610.455,
+      "kind": "tick",
+      "rtt": 174
+    },
+    {
+      "at": 75610.455,
+      "kind": "hp",
+      "hp": 509,
+      "maxHp": 707
+    },
+    {
+      "at": 75812.824,
+      "kind": "tick",
+      "rtt": 178
+    },
+    {
+      "at": 75812.824,
+      "kind": "hp",
+      "hp": 511,
+      "maxHp": 707
+    },
+    {
+      "at": 76014.556,
+      "kind": "tick",
+      "rtt": 182
+    },
+    {
+      "at": 76014.556,
+      "kind": "hp",
+      "hp": 512,
+      "maxHp": 707
+    },
+    {
+      "at": 76223.498,
+      "kind": "tick",
+      "rtt": 185
+    },
+    {
+      "at": 76223.498,
+      "kind": "hp",
+      "hp": 514,
+      "maxHp": 707
+    },
+    {
+      "at": 76428.704,
+      "kind": "tick",
+      "rtt": 191
+    },
+    {
+      "at": 76428.704,
+      "kind": "hp",
+      "hp": 516,
+      "maxHp": 707
+    },
+    {
+      "at": 76631.34,
+      "kind": "tick",
+      "rtt": 195
+    },
+    {
+      "at": 76631.34,
+      "kind": "hp",
+      "hp": 517,
+      "maxHp": 707
+    },
+    {
+      "at": 76831.658,
+      "kind": "tick",
+      "rtt": 199
+    },
+    {
+      "at": 76831.658,
+      "kind": "hp",
+      "hp": 519,
+      "maxHp": 707
+    },
+    {
+      "at": 77032.703,
+      "kind": "tick",
+      "rtt": 199
+    },
+    {
+      "at": 77032.703,
+      "kind": "hp",
+      "hp": 520,
+      "maxHp": 707
+    },
+    {
+      "at": 77235.097,
+      "kind": "tick",
+      "rtt": 213
+    },
+    {
+      "at": 77235.097,
+      "kind": "hp",
+      "hp": 522,
+      "maxHp": 707
+    },
+    {
+      "at": 77440.864,
+      "kind": "tick",
+      "rtt": 113
+    },
+    {
+      "at": 77440.864,
+      "kind": "hp",
+      "hp": 523,
+      "maxHp": 707
+    },
+    {
+      "at": 77643.643,
+      "kind": "tick",
+      "rtt": 115
+    },
+    {
+      "at": 77643.643,
+      "kind": "hp",
+      "hp": 525,
+      "maxHp": 707
+    },
+    {
+      "at": 77848.144,
+      "kind": "tick",
+      "rtt": 117
+    },
+    {
+      "at": 77848.144,
+      "kind": "hp",
+      "hp": 526,
+      "maxHp": 707
+    },
+    {
+      "at": 78055.043,
+      "kind": "tick",
+      "rtt": 119
+    },
+    {
+      "at": 78055.043,
+      "kind": "hp",
+      "hp": 528,
+      "maxHp": 707
+    },
+    {
+      "at": 78258.217,
+      "kind": "tick",
+      "rtt": 125
+    },
+    {
+      "at": 78258.217,
+      "kind": "hp",
+      "hp": 530,
+      "maxHp": 707
+    },
+    {
+      "at": 78463.384,
+      "kind": "tick",
+      "rtt": 127
+    },
+    {
+      "at": 78463.384,
+      "kind": "hp",
+      "hp": 545,
+      "maxHp": 707
+    },
+    {
+      "at": 78671.008,
+      "kind": "tick",
+      "rtt": 133
+    },
+    {
+      "at": 78671.008,
+      "kind": "hp",
+      "hp": 546,
+      "maxHp": 707
+    },
+    {
+      "at": 78874.975,
+      "kind": "tick",
+      "rtt": 140
+    },
+    {
+      "at": 78874.975,
+      "kind": "hp",
+      "hp": 548,
+      "maxHp": 707
+    },
+    {
+      "at": 79075.896,
+      "kind": "tick",
+      "rtt": 142
+    },
+    {
+      "at": 79075.896,
+      "kind": "hp",
+      "hp": 549,
+      "maxHp": 707
+    },
+    {
+      "at": 79280.834,
+      "kind": "tick",
+      "rtt": 146
+    },
+    {
+      "at": 79280.834,
+      "kind": "hp",
+      "hp": 551,
+      "maxHp": 707
+    },
+    {
+      "at": 79481.978,
+      "kind": "tick",
+      "rtt": 153
+    },
+    {
+      "at": 79481.978,
+      "kind": "hp",
+      "hp": 552,
+      "maxHp": 707
+    },
+    {
+      "at": 79683.141,
+      "kind": "tick",
+      "rtt": 157
+    },
+    {
+      "at": 79683.141,
+      "kind": "hp",
+      "hp": 554,
+      "maxHp": 707
+    },
+    {
+      "at": 79887.445,
+      "kind": "tick",
+      "rtt": 162
+    },
+    {
+      "at": 79887.445,
+      "kind": "hp",
+      "hp": 555,
+      "maxHp": 707
+    },
+    {
+      "at": 79999.725,
+      "kind": "tick",
+      "rtt": 166
+    },
+    {
+      "at": 79999.725,
+      "kind": "hp",
+      "hp": 557,
+      "maxHp": 707
+    },
+    {
+      "at": 80202.129,
+      "kind": "tick",
+      "rtt": 66
+    },
+    {
+      "at": 80202.129,
+      "kind": "hp",
+      "hp": 559,
+      "maxHp": 707
+    },
+    {
+      "at": 80409.436,
+      "kind": "tick",
+      "rtt": 70
+    },
+    {
+      "at": 80409.436,
+      "kind": "hp",
+      "hp": 560,
+      "maxHp": 707
+    },
+    {
+      "at": 80621.398,
+      "kind": "tick",
+      "rtt": 80
+    },
+    {
+      "at": 80621.398,
+      "kind": "hp",
+      "hp": 562,
+      "maxHp": 707
+    },
+    {
+      "at": 80825.924,
+      "kind": "tick",
+      "rtt": 78
+    },
+    {
+      "at": 80825.924,
+      "kind": "hp",
+      "hp": 563,
+      "maxHp": 707
+    },
+    {
+      "at": 81031.253,
+      "kind": "tick",
+      "rtt": 79
+    },
+    {
+      "at": 81031.253,
+      "kind": "hp",
+      "hp": 565,
+      "maxHp": 707
+    },
+    {
+      "at": 81233.379,
+      "kind": "tick",
+      "rtt": 82
+    },
+    {
+      "at": 81233.379,
+      "kind": "hp",
+      "hp": 626,
+      "maxHp": 707
+    },
+    {
+      "at": 81434.661,
+      "kind": "tick",
+      "rtt": 88
+    },
+    {
+      "at": 81434.661,
+      "kind": "hp",
+      "hp": 627,
+      "maxHp": 707
+    },
+    {
+      "at": 82207.874,
+      "kind": "reset"
+    },
+    {
+      "at": 83200.651,
+      "kind": "reset"
+    },
+    {
+      "at": 83279.088,
+      "kind": "reset"
+    },
+    {
+      "at": 84216.975,
+      "kind": "reset"
+    },
+    {
+      "at": 84256.118,
+      "kind": "hp",
+      "hp": 627,
+      "maxHp": 707
+    },
+    {
+      "at": 84257.614,
+      "kind": "tick",
+      "rtt": 0
+    },
+    {
+      "at": 84257.614,
+      "kind": "hp",
+      "hp": 642,
+      "maxHp": 707
+    },
+    {
+      "at": 84450.58,
+      "kind": "tick",
+      "rtt": 78
+    },
+    {
+      "at": 84450.58,
+      "kind": "hp",
+      "hp": 707,
+      "maxHp": 707
+    },
+    {
+      "at": 84651.807,
+      "kind": "tick",
+      "rtt": 78
+    },
+    {
+      "at": 84858.98,
+      "kind": "tick",
+      "rtt": 80
+    },
+    {
+      "at": 85063.123,
+      "kind": "tick",
+      "rtt": 91
+    },
+    {
+      "at": 85266.027,
+      "kind": "tick",
+      "rtt": 95
+    }
+  ]
+}
