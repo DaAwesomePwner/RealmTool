@@ -392,14 +392,14 @@ export class Session {
       const queued = this.beforeConnect;
       this.beforeConnect = [];
       this.beforeConnectBytes = 0;
-      for (const item of queued) this.write(item.data, false, item.kind, undefined, item.observation, null, true);
+      for (const item of queued) this.write(item.data, false, item.kind, undefined, item.observation);
       this.env.post({ type: 'connected', id: this.id, generation });
       this.helloTimer = setTimeout(() => retryHello(), this.env.helloTimeoutMs);
     });
   }
 
   private write(data: Buffer, toClient: boolean, kind: WriteKind, done?: (error?: Error | null) => void,
-    observation: Observation | null = null, origin: string | null = null, wasQueued = false): boolean {
+    observation: Observation | null = null, origin: string | null = null): boolean {
     if (this.closed) {
       if (observation !== null) this.notifyDropped(observation);
       return false;
@@ -446,7 +446,7 @@ export class Session {
           if (!module.prepare.has(name) || !module.hooks.prepareWrite) continue;
           prepared.push(module); // A throwing hook still owns an outcome.
           this.call(module, 'prepareWrite', () => module.hooks.prepareWrite!({ token, packet: decode(), kind, now,
-            observationId: wasQueued ? null : observationId, origin }), undefined);
+            observationId, origin }), undefined);
         }
       }
       if (this.closed) {

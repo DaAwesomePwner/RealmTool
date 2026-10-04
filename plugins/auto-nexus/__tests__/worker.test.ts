@@ -196,6 +196,61 @@ describe('Collision HP worker wiring', () => {
     expect(h.sample().status.prediction.pendingDamage).toBe(action === 'release' ? 0 : 200);
   });
 
+  it.each([false, true])('charges a pre-connect queued report once and reconciles its delivery (new generation: %s)', async changeGeneration => {
+    const observed = vi.spyOn(SafetyEngine.prototype, 'observe');
+    const prepared = vi.spyOn(SafetyEngine.prototype, 'preparePredictionWrite');
+    const delivered = vi.spyOn(SafetyEngine.prototype, 'reportDelivered');
+    const h = await harness();
+    // Delay the real connect callback so reports traverse Session's pre-connect queue.
+    const connect = net.Socket.prototype.connect;
+    const connected: (() => void)[] = [];
+    vi.spyOn(net.Socket.prototype, 'connect').mockImplementation(function (this: net.Socket, ...args: any[]) {
+      const done = args.pop() as () => void;
+      args.push(() => connected.push(done));
+      return Reflect.apply(connect, this, args);
+    });
+    const beginConnect = async () => {
+      h.session['connect']({ host: '127.0.0.1', port: h.server.port }, helloBytes(factory, Buffer.alloc(0)));
+      await until(() => connected.length > 0, 'delayed upstream connect');
+      return connected.shift()!;
+    };
+    // Seed an HP anchor in the current epoch without completing the upstream connection.
+    const engine = observed.mock.contexts[0] as SafetyEngine;
+    const anchor = () => {
+      engine.observe(packet('MAPINFO', { name: 'Realm' }), 1000);
+      engine.observe(packet('CREATESUCCESS', { objectId: 1, charId: 1 }), 1000);
+      engine.observe(packet('NEWTICK', hpData(1000, 1, 1000)), 1000);
+    };
+    let flush = await beginConnect(); anchor();
+    h.game.send(hit());
+    await until(() => h.session['beforeConnect'].length === 1, 'queued hit');
+    const observationId = h.session['beforeConnect'][0].observation!.id;
+    expect(h.sample().status.prediction.pendingDamage).toBe(200);
+    expect(prepared).not.toHaveBeenCalled(); expect(delivered).not.toHaveBeenCalled();
+    if (changeGeneration) {
+      const epoch = h.sample().status.epoch;
+      flush = await beginConnect();
+      expect(h.sample().status.prediction.pendingDamage).toBe(0);
+      expect(h.sample().status.epoch).toBeGreaterThan(epoch);
+      anchor();
+    }
+    flush();
+    const upstream = h.server.peers.at(-1)!;
+    await until(() => upstream.frames.length === 2, 'HELLO and queued hit written');
+    expect(h.sample().status.prediction.pendingDamage).toBe(200);
+    expect(prepared).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: 'PLAYERHIT' }), expect.any(Number), observationId);
+    expect(delivered).toHaveBeenCalledExactlyOnceWith(observationId, expect.any(Number), true);
+    for (let tick = 2; tick <= 8; ++tick) {
+      h.advance(200);
+      const count = h.packets('NEWTICK').length;
+      upstream.send(bytes('NEWTICK', hpData(1000, tick, 1000)));
+      await until(() => h.packets('NEWTICK').length > count, 'reconciliation tick');
+    }
+    expect(h.sample().status.prediction).toMatchObject({ pendingDamage: 0, retiredCount: 1 });
+    expect(delivered).toHaveBeenCalledTimes(1);
+    expect(upstream.errors).toEqual([]);
+  });
+
   it.each(['injected', 'rewritten', 'renamed'] as const)('assesses %s reports before their RC4 and preserves subsequent cipher alignment', async kind => {
     const delivered = vi.spyOn(SafetyEngine.prototype, 'reportDelivered');
     const h = await harness({}, { clientVerdict: ['PLAYERHIT', 'PLAYERTEXT'] });
