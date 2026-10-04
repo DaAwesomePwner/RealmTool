@@ -27,7 +27,7 @@ HTTP bearer authentication has one exception: CORS preflight (`OPTIONS`) has no 
 Validation (coordinator, outside the sandbox, 2026-10-04, final branch state):
 - `npx tsc --noEmit` and `npx tsc --noEmit -p ui` pass, and `npx vitest run` passes **1306 tests in 69 files**.
 - `cargo test --offline --manifest-path src-tauri/Cargo.toml` passes **11/11**, including on a checkout without `dist/`. The bundle resources live in `src-tauri/tauri.bundle.conf.json`, which only `tools/build-app.ts` passes to `tauri build --config`.
-- The final installer was rebuilt with the stderr fix: `RealmTool_0.1.0_x64-setup.exe` 24.10 MiB, measured installed at **100,300,681 bytes (95.65 MiB)**. The silent uninstall removed the directory and the leftover install-location key.
+- The final installer was rebuilt at the branch tip (stderr fix + helper tracking): `RealmTool_0.1.0_x64-setup.exe` 24.09 MiB, measured installed at **100,308,920 bytes (95.66 MiB)**. The silent uninstall removed the directory and the leftover install-location key.
 - `node tools/smoke-package.ts` passed on the port-busy path (the user's Realm Engine holds 2050), with a clean exit code 0. The full path (running proxy, four built-ins) needs 2050 free; run it with Realm Engine closed.
 - Every task was implemented by a Codex agent, verified by the coordinator and approved by an independent Codex review. Review fix rounds: T2, T5, T7, T8 (twice) and T9 (twice).
 
