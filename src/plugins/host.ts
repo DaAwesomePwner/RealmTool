@@ -72,8 +72,9 @@ class Plugin implements PluginContext {
     this.settings = new SettingsStore(definition.settings?.validate?.bind(definition.settings), () => host.changed());
   }
 
-  get enabled(): boolean { return this.enabledValue; }
+  get enabled(): boolean { return !this.failed && this.enabledValue; }
   set enabled(value: boolean) {
+    if (this.failed) return;
     this.enabledValue = value;
     for (const callback of this.enabledCallbacks) {
       try { callback(value); } catch (error) { log.error(this.name, 'Enable callback failed', error); }
@@ -81,9 +82,12 @@ class Plugin implements PluginContext {
     this.host.changed();
   }
 
-  registerSetting(key: string, def: Omit<SettingDef, 'key'>, onChange?: (value: any) => void): void { this.settings.register(key, def, onChange); }
+  registerSetting(key: string, def: Omit<SettingDef, 'key'>, onChange?: (value: any) => void): void {
+    if (!this.failed) this.settings.register(key, def, onChange);
+  }
   getSetting<T = any>(key: string): T { return this.settings.get<T>(key); }
   updateSetting(key: string, value: unknown): boolean {
+    if (this.failed) return false;
     const accepted = this.settings.update(key, value);
     // SettingsStore buttons notify their callbacks without its store-wide change
     // callback. Every accepted context update still schedules a profile snapshot.
@@ -92,20 +96,23 @@ class Plugin implements PluginContext {
   }
 
   hookPacket(name: string, fn: PacketHook, options: { prepend?: boolean } = {}): void {
+    if (this.failed) return;
     this.require('packets');
     this.host.addHook(this, name, fn, !!options.prepend);
   }
   observePacket(name: string, fn: PacketHook): void {
+    if (this.failed) return;
     this.require('packets');
     this.host.addObserver(this, name, fn);
   }
   hookCommand(name: string, fn: CommandHook): void {
+    if (this.failed) return;
     this.require('commands');
     this.host.addCommand(this, name.replace(/^\//, '').toLowerCase(), fn);
   }
   on(event: ConnectionEvent, fn: (client: ClientConnection) => void): void { this.host.addListener({ plugin: this, event, fn }); }
-  onEnabledChange(fn: (enabled: boolean) => void): void { this.enabledCallbacks.push(fn); }
-  registerCleanup(fn: () => void): void { this.cleanups.push(fn); }
+  onEnabledChange(fn: (enabled: boolean) => void): void { if (!this.failed) this.enabledCallbacks.push(fn); }
+  registerCleanup(fn: () => void): void { if (!this.failed) this.cleanups.push(fn); }
   setData(key: string, value: unknown): void { this.data.set(key, value); }
   broadcastData(type: string, data: unknown): void { this.host.broadcast(this, type, data); }
   createPacket(name: string): Packet {
@@ -171,11 +178,7 @@ export class PluginHost {
   }
 
   stop(): void {
-    for (const plugin of this.plugins.values()) {
-      for (const cleanup of plugin.cleanups) {
-        try { cleanup(); } catch (error) { log.error(plugin.name, 'Cleanup failed', error); }
-      }
-    }
+    for (const plugin of this.plugins.values()) this.cleanup(plugin);
     this.proxy.off('session', this.onSession);
     this.proxy.off('routed', this.onRouted);
     this.proxy.off('closed', this.onClosed);
@@ -200,6 +203,7 @@ export class PluginHost {
   // ── called by Plugin / Client ─────────────────────────────
 
   addHook(plugin: Plugin, name: string, fn: PacketHook, prepend: boolean): void {
+    if (plugin.failed) return;
     this.direction(name);
     const list = this.hooks.get(name) ?? [];
     if (prepend) list.unshift({ plugin, fn }); else list.push({ plugin, fn });
@@ -208,17 +212,19 @@ export class PluginHost {
   }
 
   addObserver(plugin: Plugin, name: string, fn: PacketHook): void {
+    if (plugin.failed) return;
     this.direction(name);
     this.observers.set(name, [...(this.observers.get(name) ?? []), { plugin, fn }]);
     this.refreshInterest();
   }
 
   addCommand(plugin: Plugin, name: string, fn: CommandHook): void {
+    if (plugin.failed) return;
     this.commands.set(name, [...(this.commands.get(name) ?? []), { plugin, fn }]);
     this.refreshInterest();
   }
 
-  addListener(listener: Listener): void { this.listeners.push(listener); }
+  addListener(listener: Listener): void { if (!listener.plugin.failed) this.listeners.push(listener); }
 
   broadcast(plugin: Plugin, type: string, data: unknown): void { this.onData?.(plugin.pluginId, type, data); }
 
@@ -247,13 +253,11 @@ export class PluginHost {
     this.plugins.set(definition.id, plugin);
     try {
       definition.register(plugin);
+      this.applyProfile(plugin);
     } catch (error) {
       log.error('Plugins', `${definition.name} failed to load and is disabled`, error);
-      plugin.failed = true;
-      this.unregister(plugin);
-      return;
+      this.fail(plugin);
     }
-    this.applyProfile(plugin);
   }
 
   private applyProfile(plugin: Plugin): void {
@@ -274,6 +278,18 @@ export class PluginHost {
       if (!plugin.updateSetting(key, value)) log.warn('Plugins', `${plugin.name}: ignored an invalid saved value for ${key}`);
     }
     if (typeof entry?.enabled === 'boolean') plugin.enabled = entry.enabled;
+  }
+
+  private fail(plugin: Plugin): void {
+    plugin.failed = true;
+    this.unregister(plugin);
+    this.cleanup(plugin);
+  }
+
+  private cleanup(plugin: Plugin): void {
+    for (const cleanup of plugin.cleanups.splice(0)) {
+      try { cleanup(); } catch (error) { log.error(plugin.name, 'Cleanup failed', error); }
+    }
   }
 
   private unregister(plugin: Plugin): void {
@@ -321,7 +337,7 @@ export class PluginHost {
 
   private emitConnection(event: ConnectionEvent, client: Client): void {
     for (const listener of this.listeners) {
-      if (listener.event !== event || !listener.plugin.enabled) continue;
+      if (listener.event !== event || listener.plugin.failed || !listener.plugin.enabled) continue;
       try { listener.fn(client); } catch (error) { log.error(listener.plugin.name, `${event} handler failed`, error); }
     }
   }
@@ -369,7 +385,7 @@ export class PluginHost {
 
   private run(list: Registered<PacketHook>[] | undefined, client: Client, packet: Packet, kind: string): void {
     for (const { plugin, fn } of list ?? []) {
-      if (!plugin.enabled) continue;
+      if (plugin.failed || !plugin.enabled) continue;
       try {
         // Observers get an independent decode, including independent Buffer
         // fields, so their mutations cannot affect hooks, verdicts or each other.
@@ -393,7 +409,7 @@ export class PluginHost {
     const [command, ...args] = text.slice(1).trimEnd().toLowerCase().split(/\s+/);
     let consumed = false;
     for (const { plugin, fn } of this.commands.get(command) ?? []) {
-      if (!plugin.enabled) continue;
+      if (plugin.failed || !plugin.enabled) continue;
       try {
         fn(client, command, args);
         consumed = true;

@@ -96,6 +96,41 @@ describe('PluginHost', () => {
     h.host.stop();
   });
 
+  it('disables a plugin when defaults migration also throws and loads later plugins', () => {
+    quietLogs();
+    vi.spyOn(ProfileStore.prototype, 'load').mockReturnValue({ schemaVersion: 1, plugins: {
+      bad: { enabled: true, settings: { n: 3 } },
+    } });
+    const migrate = vi.fn(() => { throw new Error('migration failed'); });
+    const cleanup = vi.fn();
+    const bad = vi.fn();
+    const later = vi.fn();
+    let h!: Harness;
+    expect(() => {
+      h = startHost([
+        plugin('bad', ctx => {
+          ctx.hookPacket('TEXT', bad);
+          ctx.registerCleanup(cleanup);
+        }, { settings: { migrate } }),
+        plugin('later', ctx => ctx.observePacket('TEXT', later)),
+      ]);
+    }).not.toThrow();
+    expect(migrate.mock.calls).toEqual([[{ n: 3 }, true], [undefined, false]]);
+    expect(h.host.loaded()).toEqual(['later']);
+    expect(h.host.context('bad')).toBeUndefined();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(h.proxy.interest.verdict?.server).toEqual([]);
+    expect(records.filter(r => r.level === 'error')).toEqual([
+      expect.objectContaining({ module: 'Plugins', message: expect.stringContaining('bad failed to load and is disabled') }),
+    ]);
+    h.packet(h.connect(), 'TEXT', textData());
+    expect(bad).not.toHaveBeenCalled();
+    expect(later).toHaveBeenCalledTimes(1);
+    expect(h.proxy.forwards).toHaveLength(1);
+    h.host.stop();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it('forwards original bytes when serialization throws null', () => {
     quietLogs();
     const h = startHost([plugin('p', ctx => ctx.hookPacket('TEXT', (_c, packet) => {
@@ -472,6 +507,68 @@ describe('PluginHost', () => {
     ]);
     expect(h.host.loaded()).toEqual(['good']);
     expect(h.proxy.interest.verdict?.server).toEqual(['NEWTICK']);
+  });
+
+  it('cleans up a failed plugin immediately and ignores its delayed registrations', async () => {
+    quietLogs();
+    const failed = vi.fn();
+    const cleanup = vi.fn();
+    const lateCleanup = vi.fn();
+    const later = vi.fn();
+    const delayed = vi.fn();
+    let failedContext!: PluginContext;
+    const h = startHost([
+      plugin('bad', ctx => {
+        failedContext = ctx;
+        const register = () => {
+          ctx.hookPacket('TEXT', failed);
+          ctx.observePacket('HELLO', failed);
+          ctx.hookCommand('bad', failed);
+          ctx.on('clientConnected', failed);
+          ctx.on('clientDisconnected', failed);
+        };
+        register();
+        ctx.registerSetting('n', { label: 'N', type: 'number', value: 1 }, failed);
+        ctx.onEnabledChange(failed);
+        ctx.registerCleanup(() => { throw new Error('cleanup failed'); });
+        ctx.registerCleanup(() => { cleanup(); register(); });
+        queueMicrotask(() => {
+          delayed();
+          register();
+          ctx.onEnabledChange(failed);
+          ctx.enabled = true;
+          ctx.registerCleanup(lateCleanup);
+        });
+        throw new Error('register failed');
+      }),
+      plugin('later', ctx => ctx.observePacket('TEXT', later)),
+    ]);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(delayed).not.toHaveBeenCalled();
+    const interest = vi.spyOn(h.proxy, 'setInterest');
+    await Promise.resolve();
+    expect(delayed).toHaveBeenCalledTimes(1);
+    expect(failedContext.enabled).toBe(false);
+    expect(failedContext.updateSetting('n', 2)).toBe(false);
+    expect(interest).not.toHaveBeenCalled();
+    expect(h.host.loaded()).toEqual(['later']);
+    expect(h.proxy.interest.verdict).toEqual({ client: [], server: [] });
+    expect(h.proxy.interest.observe?.client).toEqual([]);
+    const id = h.connect();
+    h.packet(id, 'TEXT', textData());
+    h.packet(id, 'HELLO', helloData(), { observeOnly: true });
+    expect(h.packet(id, 'PLAYERTEXT', { text: '/bad' })!.data).not.toBeNull();
+    h.close(id);
+    expect(failed).not.toHaveBeenCalled();
+    expect(later).toHaveBeenCalledTimes(1);
+    expect(h.proxy.forwards).toHaveLength(2);
+    expect(records.filter(r => r.level === 'error')).toEqual([
+      expect.objectContaining({ message: expect.stringContaining('bad failed to load and is disabled') }),
+      expect.objectContaining({ module: 'bad', message: expect.stringContaining('Cleanup failed') }),
+    ]);
+    h.host.stop();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(lateCleanup).not.toHaveBeenCalled();
   });
 
   it('rejects duplicate ids and unsupported API versions', () => {
