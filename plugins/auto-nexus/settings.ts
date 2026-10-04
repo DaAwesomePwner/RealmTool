@@ -2,6 +2,7 @@
 import type { SettingDef } from '../../src/plugins/api.ts';
 
 export const DEFAULTS = Object.freeze({
+  PreHitPrediction: true,
   ForceAutoNexusHealth: 25,
   ShowChatMessageOnNexus: true,
   EscapeRetryCount: 4,
@@ -9,6 +10,7 @@ export const DEFAULTS = Object.freeze({
 });
 
 export const SETTING_DEFS: readonly SettingDef[] = [
+  { key: 'PreHitPrediction', label: 'Collision HP', type: 'boolean', value: DEFAULTS.PreHitPrediction },
   { key: 'ForceAutoNexusHealth', label: 'Nexus Health (0%: confirmed server zero only)', type: 'range', value: DEFAULTS.ForceAutoNexusHealth, min: 0, max: 100, step: 1 },
   { key: 'ShowChatMessageOnNexus', label: 'Show Chat Message on Nexus', advanced: true, type: 'boolean', value: DEFAULTS.ShowChatMessageOnNexus },
   { key: 'EscapeRetryCount', label: 'Escape Retries', advanced: true, type: 'range', value: DEFAULTS.EscapeRetryCount, min: 0, max: 10, step: 1 },
