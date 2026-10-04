@@ -68,6 +68,58 @@ export function register(ctx: PluginContext, loader: () => SafetyCatalogLoad = l
   // Worker timestamps use the process-wide monotonic clock, not wall time.
   // Generation notifications are ordered on this session's worker channel.
   const views = new WeakMap<ClientConnection, { generation: number; sample?: Extract<AutoNexusEvent, { type: 'status' }> }>();
+  let lastPublished = -Infinity;
+  let pending: ClientConnection | undefined;
+  let publishTimer: ReturnType<typeof setTimeout> | undefined;
+  function publish(data: Record<string, unknown>): void {
+    ctx.setData('status', data);
+    ctx.broadcastData('status', data);
+  }
+  function flushStatus(): void {
+    publishTimer = undefined;
+    const client = pending;
+    pending = undefined;
+    if (disposed || !client?.connected) return;
+    const view = views.get(client);
+    const sample = view?.sample;
+    const now = performance.now();
+    const age = sample ? now - sample.sampledAt : NaN;
+    if (!sample || sample.generation !== view?.generation || !Number.isFinite(age) || age < 0 || age > 2000) return;
+    const { status, collisionHp, catalog } = sample;
+    // Explicitly select fields: worker packets and private connection data never enter the UI.
+    const safeCatalog = catalog.state === 'ready'
+      ? { state: catalog.state, gameBuild: catalog.gameBuild, projectiles: catalog.projectiles, tiles: catalog.tiles }
+      : { state: catalog.state, reason: catalog.reason };
+    lastPublished = now;
+    publish({ clientId: client.clientId, collisionHp, catalog: safeCatalog,
+      protectionState: status.protectionState, automaticEligible: status.automaticEligible,
+      confirmedHp: status.confirmedHp, maxHp: status.maxHp, lowerHp: status.lowerHp,
+      pendingDamage: status.prediction?.pendingDamage ?? 0, pendingCount: status.prediction?.pendingCount ?? 0,
+      attemptPhase: status.attemptPhase, sampledAgeMs: age });
+  }
+  function scheduleStatus(client: ClientConnection): void {
+    const view = views.get(client);
+    const sample = view?.sample;
+    const age = sample ? performance.now() - sample.sampledAt : NaN;
+    if (!Number.isFinite(age) || age < 0 || age > 2000) {
+      if (view) view.sample = undefined;
+      return;
+    }
+    pending = client;
+    if (publishTimer !== undefined) return;
+    const wait = 250 - (performance.now() - lastPublished);
+    if (wait <= 0) flushStatus();
+    else publishTimer = setTimeout(flushStatus, wait);
+  }
+  ctx.on('clientDisconnected', client => {
+    views.delete(client);
+    if (pending === client) {
+      pending = undefined;
+      clearTimeout(publishTimer); publishTimer = undefined;
+    }
+    if (!disposed) publish({ clientId: client.clientId, state: 'disconnected' });
+  });
+  ctx.registerCleanup(() => { clearTimeout(publishTimer); publishTimer = undefined; pending = undefined; });
   ctx.worker.onMessage((client, message) => {
     if (disposed || !message || typeof message !== 'object' || !('type' in message)) return;
     const event = message as AutoNexusEvent;
@@ -77,6 +129,7 @@ export function register(ctx: PluginContext, loader: () => SafetyCatalogLoad = l
       if (current && event.generation < current.generation) return;
       views.set(client, { generation: event.generation, sample: event });
       notifyFallback(client, event);
+      scheduleStatus(client);
     } else if (event.type === 'decision') {
       const { decision, writeDelayMs } = event;
       const current = views.get(client);
