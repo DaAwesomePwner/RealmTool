@@ -8,7 +8,7 @@ import type { PacketFactory } from '../protocol/PacketFactory.ts';
 import type { Destination, Router } from '../routing/router.ts';
 import type { Interest } from './interest.ts';
 import type { CloseSide, WorkerEvent } from './messages.ts';
-import type { HeldPacket, TransportState, WorkerModule, WorkerSessionContext, WorkerSessionModule, WriteKind } from './modules.ts';
+import type { HeldPacket, PendingDelivery, TransportState, WorkerModule, WorkerSessionContext, WorkerSessionModule, WriteKind } from './modules.ts';
 import { SessionAutomation } from './automation.ts';
 
 export interface SessionEnv {
@@ -49,6 +49,7 @@ interface ActiveModule {
   id: string;
   client: Set<string>;
   server: Set<string>;
+  prepare: Set<string>;
   written: Set<string>;
   writtenServer: Set<string>;
   hooks: WorkerSessionModule;
@@ -93,6 +94,7 @@ export class Session {
   private serverOrder: number[] = [];
   private sequence = 0;
   private observations = 0;
+  private writeTokens = 0;
   private pendingBytes = 0;
   private beforeConnect: Queued[] = [];
   private beforeConnectBytes = 0;
@@ -106,6 +108,7 @@ export class Session {
       id: module.id,
       client: new Set(module.observe?.client ?? []),
       server: new Set(module.observe?.server ?? []),
+      prepare: new Set(module.prepare ?? []),
       written: new Set(module.written ?? []),
       writtenServer: new Set(module.writtenServer ?? []),
       hooks: module.createSession(this.context(module.id)),
@@ -174,6 +177,7 @@ export class Session {
       writePriority: (data, toClient, done, origin) => this.write(data, toClient, 'priority', done, null, origin),
       transport: () => this.transport(),
       held: () => this.held(),
+      pendingDelivery: () => this.pendingDelivery(),
       post: message => this.env.post({ type: 'module', moduleId, id: this.id, message }),
     };
   }
@@ -195,6 +199,17 @@ export class Session {
         this.call(module, 'dropped', () => module.hooks.dropped?.(observation.id, observation.name, observation.fromClient, now), undefined);
       }
     }
+  }
+
+  private pendingDelivery(): PendingDelivery[] {
+    const out: PendingDelivery[] = [];
+    for (const pending of this.pending.values()) {
+      const { observation, receivedAt, generation, result } = pending;
+      if (result === null || (!observation.fromClient && generation !== this.generation)) continue;
+      out.push({ observationId: observation.id, name: observation.name, fromClient: observation.fromClient,
+        receivedAt, generation, state: result === undefined ? 'awaiting' : 'ready' });
+    }
+    return out;
   }
 
   private transport(): TransportState {
@@ -252,6 +267,13 @@ export class Session {
     for (const module of this.modules) {
       if ((fromClient ? module.client : module.server).has(name)) {
         this.call(module, 'observe', () => module.hooks.observe?.(decode(), fromClient, now, observationId), undefined);
+      }
+      if (this.closed) return;
+    }
+    for (const module of this.modules) {
+      if (this.call(module, 'suppressEntry', () => module.hooks.suppressEntry?.(name, fromClient) ?? false, false)) {
+        this.notifyDropped({ id: observationId, name, fromClient });
+        return;
       }
       if (this.closed) return;
     }
@@ -370,14 +392,14 @@ export class Session {
       const queued = this.beforeConnect;
       this.beforeConnect = [];
       this.beforeConnectBytes = 0;
-      for (const item of queued) this.write(item.data, false, item.kind, undefined, item.observation);
+      for (const item of queued) this.write(item.data, false, item.kind, undefined, item.observation, null, true);
       this.env.post({ type: 'connected', id: this.id, generation });
       this.helloTimer = setTimeout(() => retryHello(), this.env.helloTimeoutMs);
     });
   }
 
   private write(data: Buffer, toClient: boolean, kind: WriteKind, done?: (error?: Error | null) => void,
-    observation: Observation | null = null, origin: string | null = null): boolean {
+    observation: Observation | null = null, origin: string | null = null, wasQueued = false): boolean {
     if (this.closed) {
       if (observation !== null) this.notifyDropped(observation);
       return false;
@@ -391,12 +413,6 @@ export class Session {
     const name = this.env.factory.getPacketName(data[4], direction);
     let packet: Packet | null = null;
     const decode = (): Packet => (packet ??= this.env.factory.createFromBytes(data, direction));
-    for (const module of this.modules) {
-      if (!this.call(module, 'allowWrite', () => module.hooks.allowWrite?.(name, toClient, kind, decode) ?? true, true)) {
-        if (observation !== null) this.notifyDropped(observation);
-        return false;
-      }
-    }
     if (!toClient && !this.serverReady) {
       if (kind === 'priority') {
         if (observation !== null) this.notifyDropped(observation);
@@ -411,21 +427,60 @@ export class Session {
       this.beforeConnect.push({ data: Buffer.from(data), kind, observation });
       return true;
     }
+    // A renamed client frame no longer delivers its original observation. Retire it
+    // before modules assess the replacement, including when that replacement is vetoed.
+    if (!toClient && observation !== null && name !== observation.name) {
+      this.notifyDropped(observation);
+      observation = null;
+    }
+    const observationId = observation !== null && name === observation.name ? observation.id : null;
+    const token = ++this.writeTokens;
+    const prepared: ActiveModule[] = [];
+    let accepted = false;
     let out = data;
-    if (toClient && name === 'RECONNECT') {
-      const rewritten = this.destination ? this.env.router.rewriteReconnect(decode(), this.destination) : null;
-      if (!rewritten) {
-        this.env.post({ type: 'diagnostic', id: this.id, message: 'Dropped a malformed RECONNECT; the current route is unchanged' });
+    try {
+      if (!toClient) {
+        const now = this.env.now();
+        for (const module of this.modules) {
+          if (this.closed) break;
+          if (!module.prepare.has(name) || !module.hooks.prepareWrite) continue;
+          prepared.push(module); // A throwing hook still owns an outcome.
+          this.call(module, 'prepareWrite', () => module.hooks.prepareWrite!({ token, packet: decode(), kind, now,
+            observationId: wasQueued ? null : observationId, origin }), undefined);
+        }
+      }
+      if (this.closed) {
         if (observation !== null) this.notifyDropped(observation);
         return false;
       }
-      out = rewritten;
-      // Final-write subscribers must see the rewritten bytes, never the original route.
-      packet = null;
-    }
-    if (!this.writeRaw(out, toClient, done)) {
-      if (observation !== null) this.notifyDropped(observation);
-      return false;
+      for (const module of this.modules) {
+        const allowed = this.call(module, 'allowWrite', () => module.hooks.allowWrite?.(name, toClient, kind, decode) ?? true, true);
+        if (!allowed || this.closed) {
+          if (observation !== null) this.notifyDropped(observation);
+          return false;
+        }
+      }
+      if (toClient && name === 'RECONNECT') {
+        const rewritten = this.destination ? this.env.router.rewriteReconnect(decode(), this.destination) : null;
+        if (!rewritten) {
+          this.env.post({ type: 'diagnostic', id: this.id, message: 'Dropped a malformed RECONNECT; the current route is unchanged' });
+          if (observation !== null) this.notifyDropped(observation);
+          return false;
+        }
+        out = rewritten;
+        // Final-write subscribers must see the rewritten bytes, never the original route.
+        packet = null;
+      }
+      accepted = this.writeRaw(out, toClient, done);
+      if (!accepted) {
+        if (observation !== null) this.notifyDropped(observation);
+        return false;
+      }
+    } finally {
+      const now = this.env.now();
+      for (const module of prepared) {
+        this.call(module, 'writeOutcome', () => module.hooks.writeOutcome?.(token, accepted, now), undefined);
+      }
     }
     if (observation !== null && name !== observation.name) this.notifyDropped(observation);
     if (toClient) {
@@ -433,11 +488,10 @@ export class Session {
       const decodeWritten = (): Packet => (packet ??= this.env.factory.createFromBytes(out, direction));
       for (const module of this.modules) {
         if (module.writtenServer.has(name)) {
-          this.call(module, 'writtenServer', () => module.hooks.writtenServer?.(decodeWritten(), kind, now), undefined);
+          this.call(module, 'writtenServer', () => module.hooks.writtenServer?.(decodeWritten(), kind, now, observationId), undefined);
         }
       }
     } else {
-      const observationId = observation !== null && name === observation.name ? observation.id : null;
       const now = this.env.now();
       for (const module of this.modules) {
         if (module.written.has(name)) this.call(module, 'written', () => module.hooks.written?.(decode(), kind, now, observationId, origin), undefined);
