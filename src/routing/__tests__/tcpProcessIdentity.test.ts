@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
-import { parseTcpOwnerTable, readTcpProcessIdentity, type TcpOwnerRow, type TcpOwnerSource } from '../tcpProcessIdentity.ts';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  parseTcpOwnerTable, readTcpProcessIdentity, setTcpOwnerSource, tcpOwnerSourceError, type TcpOwnerRow, type TcpOwnerSource,
+} from '../tcpProcessIdentity.ts';
 
 const LOOPBACK = 0x0100007f;
 const ESTABLISHED = 5;
@@ -40,5 +42,21 @@ describe('TCP process identity', () => {
     expect(readTcpProcessIdentity(50123, 2050, source([{ ...gameRow, state: 2 }]))).toBeNull();
     expect(readTcpProcessIdentity(50123, 2050, source([gameRow], null))).toBeNull();
     expect(readTcpProcessIdentity(0, 2050, source([gameRow]))).toBeNull();
+  });
+});
+
+describe('tcpOwnerSourceError', () => {
+  afterEach(() => setTcpOwnerSource(undefined));
+
+  it('reports a working source as null and a missing one with a reason', () => {
+    setTcpOwnerSource(source([gameRow]));
+    expect(tcpOwnerSourceError()).toBeNull();
+    setTcpOwnerSource(null);
+    expect(tcpOwnerSourceError()).toBe('TCP owner lookup unavailable');
+  });
+
+  it.runIf(process.platform === 'win32')('loads koffi and the Win32 TCP table on Windows', () => {
+    setTcpOwnerSource(undefined);
+    expect(tcpOwnerSourceError()).toBeNull();
   });
 });
