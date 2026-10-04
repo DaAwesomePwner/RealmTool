@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { describeError } from '../util/describeError.ts';
 import { RC4_KEYS } from '../protocol/constants.ts';
 import { FrameDecoder, isWholeFrame } from '../protocol/frames.ts';
 import { RC4Cipher } from '../protocol/RC4Cipher.ts';
@@ -211,7 +212,7 @@ export class Session {
     try {
       return fn();
     } catch (error) {
-      this.env.post({ type: 'diagnostic', id: this.id, message: `Worker module ${module.id}.${hook} failed: ${(error as Error).message}` });
+      this.env.post({ type: 'diagnostic', id: this.id, message: `Worker module ${module.id}.${hook} failed: ${describeError(error)}` });
       return fallback;
     }
   }
