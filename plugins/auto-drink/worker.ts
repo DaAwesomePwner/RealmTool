@@ -10,7 +10,8 @@ export function createAutoDrinkModule(): WorkerModule {
   const controllers = new Set<AutoDrinkController>();
   return {
     id: 'auto-drink', priority: 10,
-    observe: { server: ['MAPINFO', 'CREATESUCCESS', 'UPDATE', 'NEWTICK', 'DAMAGE', 'DEATH', 'RECONNECT'], client: ['ESCAPE'] },
+    observe: { server: ['MAPINFO', 'CREATESUCCESS', 'UPDATE', 'NEWTICK', 'DAMAGE', 'DEATH'], client: ['ESCAPE'] },
+    writtenServer: ['RECONNECT'],
     written: ['MOVE', 'PONG', 'PLAYERSHOOT', 'USEITEM', 'INVENTORYSWAP', 'INVDROP', 'ESCAPE'],
     configure(value) {
       const next = validateConfig(value);
@@ -51,6 +52,9 @@ export function createAutoDrinkModule(): WorkerModule {
         },
         written(packet, _kind, _now, _observationId, origin) {
           if (origin !== 'auto-drink') controller.observeOutgoing(packet);
+        },
+        writtenServer(packet) {
+          if (packet.name === 'RECONNECT') controller.escape();
         },
         allowWrite(name, toClient, kind, decode) {
           return toClient || kind !== 'injected' || name !== 'INVENTORYSWAP' || !controller.blocksInjectedSwap(decode());

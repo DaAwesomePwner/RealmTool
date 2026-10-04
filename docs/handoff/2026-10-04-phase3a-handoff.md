@@ -10,7 +10,7 @@ Collision HP is absent: no `PreHitPrediction` setting is offered or saved. **Pha
 
 The eight Task 8 integration cases use both real worker modules and both plugin facades, loopback game/server sockets and real RC4. An independent fake-server thread verifies ESCAPE and its first retry arrive during a 500 ms main-thread plugin stall. Other cases cover default retries, accepted versus dropped transfers, priority/disarm, decoded potion use, own-use stock acknowledgement, and one startup configuration batch.
 
-Validation in the Task 8 worktree: `npx.cmd tsc --noEmit` passed; `npx.cmd vitest run --configLoader native` passed **820 tests in 42 files**, including all eight new integration cases. The native loader is required by the worker sandbox. The coordinator still needs to run the standard `npm run check` outside the sandbox and verify CI. The live smoke test remains the user's task; this integration work does not launch the game or the application proxy against a live server.
+Validation after the final review fixes: `npx.cmd tsc --noEmit` passed; `npx.cmd vitest run --configLoader native` passed **832 tests in 42 files**. The eight realtime integration cases also passed three consecutive focused runs. The native loader is required by the worker sandbox. Auto Drink regressions cover catalog build changes and failure status, plus held, dropped, malformed and accepted RECONNECTs. The live smoke test remains the user's task; this integration work does not launch the game or the application proxy against a live server.
 
 ## Catalog regeneration after a game update
 
@@ -26,7 +26,7 @@ The default source is `%LOCALAPPDATA%\RealmOfTheMadGod\Production`. For another 
 npm run gen:catalogs -- --game-dir "C:\path\to\Production"
 ```
 
-The generator reads Objects XML TextAssets from `RotMG Exalt_Data/resources.assets` and the Unity `build-guid` from `RotMG Exalt_Data/boot.config`, then writes `data/catalogs/consumables.json`. Review the printed item count, size and build stamp, run `npm run check`, and restart RealmTool. Runtime loading validates JSON and checks the installed build; a missing, invalid or mismatched catalog supplies no consumables. Do not edit its build stamp to bypass this check.
+The generator reads Objects XML TextAssets from `RotMG Exalt_Data/resources.assets` and the Unity `build-guid` from `RotMG Exalt_Data/boot.config`, then writes `data/catalogs/consumables.json`. Review the printed item count, size and build stamp, run `npm run check`, and restart RealmTool. Runtime loading validates JSON and checks the installed build at startup and on every new game connection while Auto Drink is enabled, as well as when enabling it (the host gates connection events for disabled plugins). A missing, invalid, unknown-build or mismatched catalog supplies no consumables and its failure reason stays visible in status. When the installed build matches the loaded catalog again, verified consumables are restored. Do not edit its build stamp to bypass this check.
 
 The bundled catalog is stamped `15a3ce058fe946c792c23558bdb10e2c`. The integration fixture reads that stamp dynamically into a temporary game directory, so it exercises the real build check without depending on the workstation's installation. This task does not regenerate the bundled catalog or validate the current live game build.
 

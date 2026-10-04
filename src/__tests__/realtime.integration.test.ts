@@ -1,10 +1,11 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import autoNexus from '../../plugins/auto-nexus/index.ts';
-import autoDrink from '../../plugins/auto-drink/index.ts';
+import { createAutoDrinkPlugin } from '../../plugins/auto-drink/index.ts';
 import type { AutoDrinkStatus } from '../auto-drink/AutoDrinkTypes.ts';
 import { ProfileStore, writeJsonAtomic, type Profile } from '../config/store.ts';
 import { loadConsumables } from '../data/consumables.ts';
@@ -37,7 +38,9 @@ const position = { x: 1.5, y: 2.5 };
 async function fixture(options: { drink?: boolean; profile?: Profile; plugins?: PluginDefinition[]; snapshot?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'realmtool-realtime-'));
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
-  const loaded = loadConsumables();
+  const catalogLoader = () => loadConsumables({ appDataDir: root,
+    bundledPath: fileURLToPath(new URL('../../data/catalogs/consumables.json', import.meta.url)) });
+  const loaded = catalogLoader();
   if (!loaded.ok) throw new Error(loaded.reason);
   const item = loaded.catalog.items.find(item => item.name === 'Health Potion');
   if (!item) throw new Error('Bundled catalog must contain Health Potion');
@@ -73,7 +76,8 @@ async function fixture(options: { drink?: boolean; profile?: Profile; plugins?: 
   proxy.on('module', event => { if (event.moduleId === 'startup-snapshot') snapshot = event.message; });
   const batches = vi.spyOn(proxy, 'configureModules');
   const singles = vi.spyOn(proxy, 'configureModule');
-  const plugins = new PluginHost({ proxy, factory, profile, gameDir, definitions: [autoNexus, autoDrink, ...(options.plugins ?? [])] });
+  const plugins = new PluginHost({ proxy, factory, profile, gameDir,
+    definitions: [autoNexus, createAutoDrinkPlugin(catalogLoader), ...(options.plugins ?? [])] });
   cleanups.push(() => plugins.stop());
   plugins.start();
   expect(plugins.loaded()).toContain('auto-nexus');
