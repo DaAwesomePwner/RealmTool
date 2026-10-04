@@ -29,7 +29,7 @@ export interface SettingDef {
 }
 
 /** What a plugin may do. Context methods throw when a plugin uses a capability it didn't declare. */
-export type Capability = 'packets' | 'commands' | 'notifications' | 'inject';
+export type Capability = 'packets' | 'commands' | 'notifications' | 'inject' | 'worker';
 
 export const PLUGIN_API_VERSION = 1;
 
@@ -57,8 +57,21 @@ export type PacketHook = (client: ClientConnection, packet: Packet) => void;
 export type CommandHook = (client: ClientConnection, command: string, args: string[]) => void;
 export type ConnectionEvent = 'clientConnected' | 'clientDisconnected';
 
+export interface WorkerChannel {
+  /** Module-wide configuration for this plugin's worker module (module id = plugin id). Coalesced: while the host is starting or applying a profile only the last value per plugin is kept, and all plugins' values are sent in one batch. */
+  configure(config: unknown): void;
+  /** A message for this plugin's worker module instance on one game connection. Ignored when that client is no longer connected. */
+  send(client: ClientConnection, message: unknown): void;
+  /** Session messages from the worker module. Delivered while the plugin is disabled (status keeps flowing); removed on cleanup. */
+  onMessage(handler: (client: ClientConnection, message: unknown) => void): void;
+}
+
 export interface PluginContext {
   readonly pluginId: string;
+  /** Resolved Exalt installation directory, or null when unavailable. */
+  readonly gameDir: string | null;
+  /** Throws unless the plugin declares the worker capability. */
+  readonly worker: WorkerChannel;
   name: string;
   category: string;
   /** Setting this always notifies onEnabledChange listeners, even if the value is unchanged. */

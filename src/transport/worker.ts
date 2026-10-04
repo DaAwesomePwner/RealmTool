@@ -8,6 +8,7 @@ import { Interest } from './interest.ts';
 import type { WorkerCommand, WorkerEvent, WorkerInit } from './messages.ts';
 import { Session, type SessionEnv } from './session.ts';
 import { WORKER_MODULES } from './workerModules.ts';
+import type { WorkerModule } from './modules.ts';
 
 const TICK_MS = 8;
 const init = workerData as WorkerInit;
@@ -15,13 +16,24 @@ const port = parentPort;
 if (!port) throw new Error('src/transport/worker.ts must run as a worker thread');
 const post = (event: WorkerEvent): void => port.postMessage(event);
 
+function configureModule(module: WorkerModule, config: unknown): void {
+  try {
+    module.configure?.(config);
+  } catch (error) {
+    post({ type: 'diagnostic', message: `module ${module.id} rejected its configuration: ${error instanceof Error ? error.message : String(error)}` });
+  }
+}
+
+function configureModules(configs: Record<string, unknown>): void {
+  for (const module of WORKER_MODULES) {
+    if (Object.hasOwn(configs, module.id)) configureModule(module, configs[module.id]);
+  }
+}
+
 if (init.host !== '127.0.0.1') {
   post({ type: 'fault', message: `Refusing to listen on ${init.host}: RealmTool listens only on 127.0.0.1` });
 } else {
-  for (const module of WORKER_MODULES) {
-    const config = init.moduleConfig[module.id];
-    if (config !== undefined) module.configure?.(config);
-  }
+  configureModules(init.moduleConfig);
 
   const sessions = new Map<string, Session>();
   const env: SessionEnv = {
@@ -71,7 +83,12 @@ if (init.host !== '127.0.0.1') {
       return;
     }
     if (command.type === 'module' && command.id === undefined) {
-      WORKER_MODULES.find(module => module.id === command.moduleId)?.configure?.(command.message);
+      const module = WORKER_MODULES.find(module => module.id === command.moduleId);
+      if (module) configureModule(module, command.message);
+      return;
+    }
+    if (command.type === 'modules') {
+      configureModules(command.configs);
       return;
     }
     const session = sessions.get(command.id ?? '');

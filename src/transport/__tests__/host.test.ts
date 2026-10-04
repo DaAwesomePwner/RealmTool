@@ -11,6 +11,68 @@ const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(); });
 
 describe('ProxyHost', () => {
+  function moduleHost(moduleConfig: Record<string, unknown> = {}) {
+    const host = new ProxyHost({ schema: loadSchema(), listenPort: 0, moduleConfig,
+      workerUrl: new URL('./fixtures/modules-worker.ts', import.meta.url) });
+    cleanups.push(() => host.stop());
+    const messages: unknown[] = [];
+    const diagnostics: string[] = [];
+    host.on('module', event => messages.push(event.message));
+    host.on('diagnostic', event => diagnostics.push(event.message));
+    return { host, messages, diagnostics };
+  }
+
+  it('caches single and batch module configurations in worker init and across restart', async () => {
+    const { host, messages } = moduleHost({ a: 1, untouched: 9 });
+    host.configureModule('a', 2);
+    host.configureModules({ b: 3 });
+    await host.start();
+    expect(messages).toContainEqual({ init: { a: 2, b: 3, untouched: 9 } });
+    host.configureModule('a', 4);
+    host.configureModules({ b: 5 });
+    await host.stop();
+    messages.length = 0;
+    await host.start();
+    expect(messages).toContainEqual({ init: { a: 4, b: 5, untouched: 9 } });
+  });
+
+  it('applies a live batch in registry order in one command before observing the next frame', async () => {
+    const server = new FakeServer();
+    await server.listen();
+    cleanups.push(() => server.close());
+    const { host, messages } = moduleHost({ a: 1, b: 2 });
+    host['options'].resolveTarget = () => ({ host: '127.0.0.1', port: server.port });
+    const port = await host.start();
+    const game = await connectGame(port);
+    cleanups.push(() => game.destroy());
+    game.send(helloBytes(factory, Buffer.alloc(0)));
+    await until(() => server.peers[0]?.frames.length === 1, 'fixture HELLO');
+    messages.length = 0;
+    host.configureModules({ b: 20, a: 10 });
+    // Wait for the worker acknowledgment: socket and MessagePort arrivals are independent.
+    await until(() => messages.some(message => !!message && typeof message === 'object' && 'configured' in message), 'batch applied');
+    game.send(frame(factory.getPacketId('ESCAPE')!));
+    await until(() => messages.some(message => !!message && typeof message === 'object' && 'observed' in message), 'module observation');
+    expect(messages).toEqual([
+      { command: { type: 'modules', configs: { b: 20, a: 10 } } },
+      { configured: { a: 10, b: 20 }, order: ['a', 'b', 'a', 'b'] },
+      { observed: { a: 10, b: 20 } },
+    ]);
+  });
+
+  it.each(['init', 'single', 'batch'] as const)('isolates a rejected %s configuration and keeps the worker and previous config', async mode => {
+    const { host, messages, diagnostics } = moduleHost({ a: mode === 'init' ? 'invalid' : 1, b: 2 });
+    await host.start();
+    if (mode === 'single') host.configureModule('a', 'invalid');
+    if (mode === 'batch') host.configureModules({ a: 'invalid', b: 3 });
+    await until(() => diagnostics.length === 1, 'configuration rejection');
+    expect(diagnostics).toEqual(['module a rejected its configuration: expected a number']);
+    messages.length = 0;
+    host.configureModule('b', 4);
+    await until(() => messages.some(message => !!message && typeof message === 'object' && 'configured' in message), 'worker still handles configs');
+    expect(messages).toContainEqual(expect.objectContaining({ configured: { a: mode === 'init' ? 0 : 1, b: 4 } }));
+  });
+
   it('runs sessions in the worker thread and supplies helper targets from the main thread', async () => {
     const server = new FakeServer();
     await server.listen();

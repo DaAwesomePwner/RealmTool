@@ -1,0 +1,513 @@
+{
+  "schemaVersion": 1,
+  "gameBuild": "15a3ce058fe946c792c23558bdb10e2c",
+  "source": {
+    "objectsSha256": "33f72e674c332bda509c2897ae857a4117a2930e003c65f34a0400b5856758f1"
+  },
+  "items": [
+    {
+      "type": 284,
+      "name": "Bottled Honey",
+      "hp": 0,
+      "mp": 0,
+      "healingDurationMs": 10000,
+      "quickslot": true
+    },
+    {
+      "type": 1799,
+      "name": "Healing Ichor",
+      "hp": 150,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2594,
+      "name": "Health Potion",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2595,
+      "name": "Magic Potion",
+      "hp": 0,
+      "mp": 200,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2623,
+      "name": "Snake Oil",
+      "hp": 0,
+      "mp": 0,
+      "healingDurationMs": 1000,
+      "quickslot": true
+    },
+    {
+      "type": 2632,
+      "name": "Elixir of Health",
+      "hp": 125,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2633,
+      "name": "Elixir of Health",
+      "hp": 125,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2634,
+      "name": "Elixir of Magic",
+      "hp": 0,
+      "mp": 250,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2689,
+      "name": "Elixir of Health",
+      "hp": 125,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2736,
+      "name": "Minor Health Potion",
+      "hp": 50,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2781,
+      "name": "Minor Magic Potion",
+      "hp": 0,
+      "mp": 100,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2795,
+      "name": "Greater Health Potion",
+      "hp": 200,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2796,
+      "name": "Greater Magic Potion",
+      "hp": 0,
+      "mp": 400,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2797,
+      "name": "Elixir of Magic",
+      "hp": 0,
+      "mp": 250,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2798,
+      "name": "Elixir of Magic",
+      "hp": 0,
+      "mp": 250,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2836,
+      "name": "Elixir of Health",
+      "hp": 125,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2837,
+      "name": "Elixir of Health",
+      "hp": 125,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2838,
+      "name": "Elixir of Health",
+      "hp": 125,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2839,
+      "name": "Elixir of Health",
+      "hp": 125,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2840,
+      "name": "Elixir of Magic",
+      "hp": 0,
+      "mp": 250,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2841,
+      "name": "Elixir of Magic",
+      "hp": 0,
+      "mp": 250,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2842,
+      "name": "Elixir of Magic",
+      "hp": 0,
+      "mp": 250,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2843,
+      "name": "Elixir of Magic",
+      "hp": 0,
+      "mp": 250,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 2868,
+      "name": "Fire Water",
+      "hp": 230,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2869,
+      "name": "Cream Spirit",
+      "hp": 0,
+      "mp": 460,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2870,
+      "name": "Chardonnay",
+      "hp": 150,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2871,
+      "name": "Melon Liqueur",
+      "hp": 0,
+      "mp": 300,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2872,
+      "name": "Cabernet",
+      "hp": 150,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2873,
+      "name": "Vintage Port",
+      "hp": 0,
+      "mp": 300,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2874,
+      "name": "Sauvignon Blanc",
+      "hp": 150,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2875,
+      "name": "Muscat",
+      "hp": 0,
+      "mp": 300,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2876,
+      "name": "Rice Wine",
+      "hp": 150,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 2877,
+      "name": "Shiraz",
+      "hp": 0,
+      "mp": 150,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 3090,
+      "name": "Coral Juice",
+      "hp": 100,
+      "mp": 200,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 3098,
+      "name": "Pollen Powder",
+      "hp": 0,
+      "mp": 200,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 3105,
+      "name": "Holy Water",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 3163,
+      "name": "Mad God Ale",
+      "hp": 100,
+      "mp": 200,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 3164,
+      "name": "Oryx Stout",
+      "hp": 200,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 3165,
+      "name": "Realm-wheat Hefeweizen",
+      "hp": 0,
+      "mp": 400,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 3265,
+      "name": "Draconis Potion",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 3267,
+      "name": "Saint Paddy's Brew",
+      "hp": 100,
+      "mp": 200,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 4253,
+      "name": "Royal Jelly",
+      "hp": 0,
+      "mp": 0,
+      "healingDurationMs": 10000,
+      "quickslot": true
+    },
+    {
+      "type": 8764,
+      "name": "Potion of Health5",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 8765,
+      "name": "Potion of Health6",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 8779,
+      "name": "Potion of Health1",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 8780,
+      "name": "Potion of Health4",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 8795,
+      "name": "Potion of Health3",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 8798,
+      "name": "Potion of Health2",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": false
+    },
+    {
+      "type": 9077,
+      "name": "Candy Corn",
+      "hp": 100,
+      "mp": 200,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 10243,
+      "name": "Gluhwein",
+      "hp": 100,
+      "mp": 200,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 10244,
+      "name": "Grog",
+      "hp": 200,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 10245,
+      "name": "Cranberry Punch",
+      "hp": 0,
+      "mp": 400,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 16874,
+      "name": "Candy of Ominous Spells",
+      "hp": 50,
+      "mp": 50,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 20534,
+      "name": "Tofu Delicacy",
+      "hp": 0,
+      "mp": 0,
+      "healingDurationMs": 1200000,
+      "quickslot": false
+    },
+    {
+      "type": 23863,
+      "name": "Spectral Prison Ration",
+      "hp": 120,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 28901,
+      "name": "Cactus Juice",
+      "hp": 120,
+      "mp": 240,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 35253,
+      "name": "Herbal Tincture",
+      "hp": 0,
+      "mp": 0,
+      "healingDurationMs": 1000,
+      "quickslot": true
+    },
+    {
+      "type": 41476,
+      "name": "Divine Snake Oil",
+      "hp": 0,
+      "mp": 0,
+      "healingDurationMs": 1000,
+      "quickslot": true
+    },
+    {
+      "type": 48095,
+      "name": "Cubic Jelly",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 48156,
+      "name": "Neutralized Acid",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 48157,
+      "name": "Katalonian Battery",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 48158,
+      "name": "Horned Fruit",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    },
+    {
+      "type": 48159,
+      "name": "Bubblolecule",
+      "hp": 100,
+      "mp": 0,
+      "healingDurationMs": 0,
+      "quickslot": true
+    }
+  ]
+}

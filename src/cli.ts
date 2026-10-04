@@ -8,7 +8,7 @@ import { DEFAULT_HELPER_PATH, installHelper, uninstallHelper } from './game/help
 import { describeLaunchTarget, findLaunchTarget, openLaunchTarget, type LaunchTarget } from './game/gameLauncher.ts';
 import { GAME_PORT } from './protocol/constants.ts';
 import type { PluginDefinition } from './plugins/api.ts';
-import { PluginHost } from './plugins/host.ts';
+import { PluginHost, type ProxyLike } from './plugins/host.ts';
 import { createFactory, loadSchema } from './protocol/schema.ts';
 import { createTargetResolver, parseTargetFile, removeStaleTargetFiles } from './routing/targetResolver.ts';
 import { tcpOwnerSourceError } from './routing/tcpProcessIdentity.ts';
@@ -91,7 +91,7 @@ export function resolveGameDir(options: CliOptions): string | null {
 }
 
 export interface RunDeps {
-  createHost(options: ProxyHostOptions): Pick<ProxyHost, 'on' | 'off' | 'start' | 'stop' | 'setInterest' | 'forward' | 'inject'>;
+  createHost(options: ProxyHostOptions): ProxyLike & Pick<ProxyHost, 'start' | 'stop'>;
   plugins: readonly PluginDefinition[];
   profileDir(): string;
   launch(onError: (error: Error) => void, override?: string): LaunchTarget | null;
@@ -147,7 +147,7 @@ export async function runProxy(options: CliOptions, gameDir: string, deps: RunDe
   let dispose: (() => void) | undefined;
   let plugins: PluginHost | undefined;
   try {
-    plugins = new PluginHost({ proxy: host, factory, definitions: deps.plugins, profile: new ProfileStore({ dir: deps.profileDir() }) });
+    plugins = new PluginHost({ proxy: host, factory, definitions: deps.plugins, profile: new ProfileStore({ dir: deps.profileDir() }), gameDir });
     plugins.start();
     log.info('Plugins', `Loaded ${plugins.loaded().join(', ') || 'no plugins'}`);
 
