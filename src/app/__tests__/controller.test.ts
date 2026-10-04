@@ -71,6 +71,98 @@ describe('AppController lifecycle', () => {
     expect(deps.createHost).not.toHaveBeenCalled();
   });
 
+  it('saves the discovered first-run folder before installing the helper', async () => {
+    await controller.shutdown();
+    config = new AppConfigStore(join(root, 'first-run'));
+    const save = vi.spyOn(config, 'addHelperDir');
+    const install = vi.mocked(deps.installHelper!);
+    install.mockImplementation((dir, path) => {
+      expect(JSON.parse(readFileSync(join(config.dir, 'config.json'), 'utf8')))
+        .toMatchObject({ gameDir: game, helperDirs: [game] });
+      return installHelper(dir, path);
+    });
+    controller = make();
+    await controller.startProxy();
+    expect(save.mock.invocationCallOrder[0]).toBeLessThan(install.mock.invocationCallOrder[0]);
+    expect(new AppConfigStore(config.dir).get()).toMatchObject({ gameDir: game, helperDirs: [game] });
+  });
+
+  it.each(['disabled', 'write error'])('cleans up and never installs when saving fails: %s', async failure => {
+    await controller.shutdown();
+    if (failure === 'disabled') {
+      writeFileSync(join(config.dir, 'config.json'), JSON.stringify({ schemaVersion: 2 }));
+      config = new AppConfigStore(config.dir);
+    } else {
+      rmSync(join(config.dir, 'config.json'));
+      mkdirSync(join(config.dir, 'config.json'));
+    }
+    controller = make();
+    await expect(controller.startProxy()).rejects.toThrow('Could not save the game folder; the helper was not installed');
+    expect(deps.installHelper).not.toHaveBeenCalled();
+    expect(existsSync(join(game, HELPER_FILE))).toBe(false);
+    expect(controller.state().proxy).toMatchObject({ state: 'failed', port: null });
+    expect(hosts[0].stop).toHaveBeenCalledOnce();
+    expect(hosts[0].configured.at(-1)).toEqual({ fixture: { enabled: false } });
+    expect(controller.plugins()).toEqual([]);
+    expect(hosts[0].listenerCount('session')).toBe(0);
+  });
+
+  it('records explicit helper installation before modifying the game folder', async () => {
+    await controller.shutdown();
+    config = new AppConfigStore(join(root, 'manual-install'));
+    deps.installHelper = vi.fn((dir, path) => {
+      expect(new AppConfigStore(config.dir).get()).toMatchObject({ gameDir: game, helperDirs: [game] });
+      return installHelper(dir, path);
+    });
+    controller = make();
+    await controller.installHelper();
+    expect(deps.installHelper).toHaveBeenCalledOnce();
+  });
+
+  it('does not install explicitly when config saving is disabled', async () => {
+    await controller.shutdown();
+    writeFileSync(join(config.dir, 'config.json'), JSON.stringify({ schemaVersion: 2 }));
+    config = new AppConfigStore(config.dir); controller = make();
+    await expect(controller.installHelper()).rejects.toThrow('Could not save the game folder; the helper was not installed');
+    expect(deps.installHelper).not.toHaveBeenCalled();
+  });
+
+  it('retains previously installed folders when switching game folders', async () => {
+    const other = join(root, 'other'); mkdirSync(other);
+    writeFileSync(join(other, 'RotMG Exalt.exe'), 'fixture');
+    await controller.startProxy(); await controller.stopProxy();
+    await controller.setGameDir(other);
+    expect(config.get().helperDirs).toEqual([game]);
+    expect(existsSync(join(game, HELPER_FILE))).toBe(true);
+    await controller.startProxy();
+    expect(new AppConfigStore(config.dir).get().helperDirs).toEqual([game, other]);
+  });
+
+  it('preserves a target recorded by another store when restarting the proxy', async () => {
+    const other = join(root, 'other');
+    await controller.startProxy(); await controller.stopProxy();
+    new AppConfigStore(config.dir).addHelperDir(other);
+    await controller.startProxy();
+    expect(new AppConfigStore(config.dir).get().helperDirs).toEqual([game, other]);
+  });
+
+  it.each(['removed', 'restored', 'not-installed', 'foreign'] as const)('forgets the target after uninstall returns %s', async status => {
+    await controller.shutdown();
+    const other = join(root, 'other');
+    config.update({ helperDirs: [game.toUpperCase(), other] });
+    deps.uninstallHelper = vi.fn(() => status); controller = make();
+    expect(await controller.uninstallHelper()).toBe(status);
+    expect(new AppConfigStore(config.dir).get().helperDirs).toEqual([other]);
+  });
+
+  it('retains the target when helper uninstall throws', async () => {
+    await controller.shutdown();
+    config.update({ helperDirs: [game] });
+    deps.uninstallHelper = () => { throw new Error('locked'); }; controller = make();
+    await expect(controller.uninstallHelper()).rejects.toThrow('locked');
+    expect(config.get().helperDirs).toEqual([game]);
+  });
+
   it('installs only after listen and rejects concurrent operations', async () => {
     let listen!: (port: number) => void;
     deps.createHost = () => {
