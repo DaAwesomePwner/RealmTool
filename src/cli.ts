@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'node:url';
+import { statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { BUILTIN_PLUGINS } from '../plugins/index.ts';
@@ -51,7 +52,7 @@ Options:
   --fallback <ip>    Server to use when the helper recorded none
   --launcher <exe>    RotMG Exalt Launcher.exe to open (default: auto-detect Deca, then Steam)
   --no-launch        start: don't open the launcher
-  --quiet            uninstall-helper: suppress success output (uses saved game directory)
+  --quiet            uninstall-helper: suppress success output (uses all saved helper directories)
   -h, --help         Show this help
 `;
 
@@ -168,6 +169,43 @@ export async function runProxy(options: CliOptions, gameDir: string, deps: RunDe
   }
 }
 
+function forgetHelperDirs(config: AppConfigStore, processed: Set<string>): void {
+  if (!processed.size) return;
+  try { config.removeHelperDirs([...processed]); }
+  catch { /* Uninstallation must still finish if config saving is unavailable. */ }
+}
+
+function uninstallSavedHelpers(): number {
+  const store = new AppConfigStore(), config = store.get();
+  const dirs = new Map<string, string>();
+  for (const dir of [...config.helperDirs, ...(config.gameDir ? [config.gameDir] : [])]) {
+    const path = resolve(dir), key = path.toLowerCase();
+    if (!dirs.has(key)) dirs.set(key, path);
+  }
+  const processed = new Set<string>();
+  let code = 0;
+  for (const [key, dir] of dirs) {
+    try {
+      if (!statSync(dir).isDirectory()) { processed.add(key); continue; }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') processed.add(key);
+      // Keep targets we could not inspect so a later uninstall can retry them.
+      continue;
+    }
+    try {
+      uninstallHelper(dir);
+      // All returned statuses, including foreign, mean no helper remains to remove.
+      processed.add(key);
+    } catch (error) {
+      log.error('Helper', `${dir}: ${(error as Error).message}`);
+      code = 1;
+    }
+  }
+  forgetHelperDirs(store, processed);
+  return code;
+}
+
 export async function main(argv: string[]): Promise<number> {
   let options: CliOptions;
   try {
@@ -220,12 +258,8 @@ export async function main(argv: string[]): Promise<number> {
     console.log(dirs.length ? dirs.join('\n') : 'No Exalt install found. Pass --game-dir or set ROTMG_PATH.');
     return dirs.length ? 0 : 1;
   }
-  if (options.command === 'uninstall-helper' && options.quiet && !options.gameDir) {
-    options.gameDir = new AppConfigStore().get().gameDir ?? undefined;
-    // An unused desktop installation has no helper to restore. Do not discover
-    // and modify an unrelated game installation during a quiet app uninstall.
-    if (!options.gameDir && options.quiet) return 0;
-  }
+  // Quiet app uninstall only visits recorded targets, never discovery or overrides.
+  if (options.command === 'uninstall-helper' && options.quiet) return uninstallSavedHelpers();
   const gameDir = resolveGameDir(options);
   if (!gameDir) {
     log.error('Game', options.gameDir
@@ -235,12 +269,16 @@ export async function main(argv: string[]): Promise<number> {
   }
   try {
     if (options.command === 'install-helper') {
+      const store = new AppConfigStore();
+      try { store.addHelperDir(gameDir); }
+      catch (cause) { throw new Error('Could not save the game folder; the helper was not installed', { cause }); }
       const result = installHelper(gameDir, options.helper);
       log.info('Helper', `${result.status} at ${result.target}${result.backedUp ? ' (previous winhttp.dll backed up)' : ''}`);
       return 0;
     }
     if (options.command === 'uninstall-helper') {
       const status = uninstallHelper(gameDir);
+      forgetHelperDirs(new AppConfigStore(), new Set([gameDir.toLowerCase()]));
       if (!options.quiet) log.info('Helper', `${status} (${gameDir})`);
       return 0;
     }

@@ -258,6 +258,9 @@ export class AppController extends EventEmitter<ControllerEvents> {
   }
   private install(dir: string): InstallResult {
     try {
+      // Persist recovery targets before the installer can back up or replace a DLL.
+      try { this.config.addHelperDir(dir); }
+      catch (cause) { throw new Error('Could not save the game folder; the helper was not installed', { cause }); }
       const result = this.deps.installHelper(dir, this.resources.helperDll);
       log.info('Helper', `${result.status} at ${result.target}${result.backedUp ? ' (previous winhttp.dll backed up)' : ''}`);
       return result;
@@ -267,7 +270,12 @@ export class AppController extends EventEmitter<ControllerEvents> {
   uninstallHelper(): Promise<UninstallStatus> {
     return this.operation('uninstalling helper', async () => {
       if (this.host) throw new Error('Stop the proxy before uninstalling the helper');
-      try { return this.deps.uninstallHelper(this.gameDir()); }
+      try {
+        const dir = this.gameDir();
+        const status = this.deps.uninstallHelper(dir);
+        this.config.removeHelperDirs([dir]);
+        return status;
+      }
       finally { this.refreshHelper(); this.changed(); }
     });
   }
