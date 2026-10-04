@@ -24,7 +24,13 @@ function emit(level: LogLevel, module: string, message: string): void {
     else if (level === 'warn') console.warn(line);
     else console.log(line);
   }
-  for (const sink of sinks) sink(record);
+  for (const sink of sinks) {
+    try { sink(record); }
+    catch {
+      sinks.delete(sink);
+      console.warn('[log] Removed a failing log sink.');
+    }
+  }
 }
 
 export const log = {
