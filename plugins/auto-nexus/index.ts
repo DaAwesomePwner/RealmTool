@@ -12,7 +12,7 @@ export function register(ctx: PluginContext): void {
   const configuration = (enabled = ctx.enabled): AutoNexusConfig => ({ settings: safetySettings({ enabled,
     thresholdPct: ctx.getSetting('ForceAutoNexusHealth'), notification: ctx.getSetting('ShowChatMessageOnNexus'),
     retryCount: ctx.getSetting('EscapeRetryCount'), retryMs: ctx.getSetting('EscapeRetryIntervalMs'),
-  }) });
+  }), catalog: null, catalogState: { state: 'fallback', reason: 'not loaded' } });
   const sync = () => ctx.worker.configure(configuration());
   for (const { key, ...def } of SETTING_DEFS) ctx.registerSetting(key, def, () => {
     sync();

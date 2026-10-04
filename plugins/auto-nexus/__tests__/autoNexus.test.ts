@@ -41,13 +41,15 @@ describe('Auto Nexus facade', () => {
     ]);
     const f = fixture();
     for (const def of SETTING_DEFS) expect(f.ctx.getSetting(def.key)).toBe(def.value);
-    expect(f.h.proxy.configured).toEqual([{ 'auto-nexus': { settings: { enabled: true, preHitPrediction: true, thresholdPct: 25, notification: true, retryCount: 4, retryMs: 400, reactionMs: 400 } } }]);
+    expect(f.h.proxy.configured).toEqual([{ 'auto-nexus': { settings: { enabled: true, preHitPrediction: true, thresholdPct: 25, notification: true, retryCount: 4, retryMs: 400, reactionMs: 400 },
+      catalog: null, catalogState: { state: 'fallback', reason: 'not loaded' } } }]);
   });
 
   it.each([true, false])('publishes one complete saved startup configuration, enabled=%s', enabled => {
     const f = fixture({ ForceAutoNexusHealth: 19, ShowChatMessageOnNexus: false, EscapeRetryCount: 6.9, EscapeRetryIntervalMs: 700,
       PredictionModel: 'v1', BurstGuard: true, ReactionWindowMs: 900, InstantNexus: true, PreHitPrediction: true }, enabled);
-    expect(f.h.proxy.configured).toEqual([{ 'auto-nexus': { settings: { enabled, preHitPrediction: true, thresholdPct: 19, notification: false, retryCount: 6, retryMs: 700, reactionMs: 400 } } }]);
+    expect(f.h.proxy.configured).toEqual([{ 'auto-nexus': { settings: { enabled, preHitPrediction: true, thresholdPct: 19, notification: false, retryCount: 6, retryMs: 700, reactionMs: 400 },
+      catalog: null, catalogState: { state: 'fallback', reason: 'not loaded' } } }]);
     expect(f.snapshot().settings).toEqual({ ForceAutoNexusHealth: 19, ShowChatMessageOnNexus: false, EscapeRetryCount: 6, EscapeRetryIntervalMs: 700 });
   });
 
