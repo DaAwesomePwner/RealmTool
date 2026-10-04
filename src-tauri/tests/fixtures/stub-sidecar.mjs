@@ -1,11 +1,13 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 const token = process.env.REALMTOOL_API_TOKEN;
 delete process.env.REALMTOOL_API_TOKEN;
 if (!token || !process.env.REALMTOOL_RESOURCES || process.env.REALMTOOL_UI_ORIGINS !== 'http://tauri.localhost') process.exit(2);
 const mode = process.argv[3];
+if (mode === 'koffi-exit') createRequire(import.meta.url)('../../../node_modules/koffi');
 if (mode === 'print-pid-then-ready') console.log(`PID ${process.pid}`);
 const server = http.createServer((req, res) => {
   if (req.headers.authorization !== `Bearer ${token}` || req.headers.host !== `127.0.0.1:${server.address().port}`) {

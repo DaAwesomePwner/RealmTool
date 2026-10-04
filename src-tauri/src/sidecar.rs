@@ -225,7 +225,7 @@ impl Sidecar {
             .env_remove("NODE_PATH")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         let mut child = spawn_suspended_in_job(&mut command, &job)?;
         if resume_main_thread(&child).is_err() {
             let _ = child.kill();
@@ -238,6 +238,16 @@ impl Sidecar {
             job: Some(job),
             info: BackendInfo { port: 0, token },
         };
+        let mut stderr = sidecar
+            .child
+            .stderr
+            .take()
+            .ok_or("Backend stderr is unavailable")?;
+        thread::spawn(move || {
+            // Koffi needs a real stderr handle on exit. Drain without exposing
+            // potentially sensitive output or letting a full pipe block the child.
+            let _ = io::copy(&mut stderr, &mut io::sink());
+        });
         let (tx, rx) = mpsc::sync_channel(1);
         thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
@@ -619,6 +629,16 @@ mod tests {
         child.shutdown().unwrap();
         assert!(start.elapsed() < Duration::from_secs(3));
         assert!(child.child.try_wait().unwrap().unwrap().success());
+    }
+
+    #[test]
+    fn koffi_loaded_sidecar_exits_successfully_on_shutdown() {
+        let mut child = stub("koffi-exit");
+        assert!(child.proxy_running().unwrap());
+        child.shutdown().unwrap();
+        let status = child.child.try_wait().unwrap().unwrap();
+        assert!(status.success(), "Koffi-loaded backend exited with {status}");
+        assert_eq!(status.code(), Some(0));
     }
 
     #[test]
