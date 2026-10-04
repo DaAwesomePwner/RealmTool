@@ -56,16 +56,30 @@ export function readTcpProcessIdentity(
 }
 
 let win32Source: TcpOwnerSource | null | undefined;
+let win32LoadError: string | null = null;
 
 /** Replace the OS source (tests); `undefined` restores lazy Win32 loading. */
 export function setTcpOwnerSource(source: TcpOwnerSource | null | undefined): void {
   win32Source = source;
+  win32LoadError = null;
+}
+
+/**
+ * Load the TCP owner source now (startup preflight) and say why it is unavailable,
+ * or null when it loaded. Without it no connection can be matched to the helper's target.
+ */
+export function tcpOwnerSourceError(): string | null {
+  if (win32TcpOwnerSource()) return null;
+  return win32LoadError ?? 'TCP owner lookup unavailable';
 }
 
 function win32TcpOwnerSource(): TcpOwnerSource | null {
   if (win32Source !== undefined) return win32Source;
   win32Source = null;
-  if (process.platform !== 'win32') return null;
+  if (process.platform !== 'win32') {
+    win32LoadError = `TCP owner lookup needs Windows (running on ${process.platform})`;
+    return null;
+  }
   try {
     const koffi = createRequire(import.meta.url)('koffi');
     const iphlpapi = koffi.load('iphlpapi.dll');
@@ -95,7 +109,8 @@ function win32TcpOwnerSource(): TcpOwnerSource | null {
       },
     };
   } catch (error) {
-    log.warn('Routing', `TCP owner lookup unavailable (koffi/Win32 load failed): ${(error as Error).message}`);
+    win32LoadError = `TCP owner lookup unavailable (koffi/Win32 load failed): ${(error as Error).message}`;
+    log.warn('Routing', win32LoadError);
     win32Source = null;
   }
   return win32Source;
