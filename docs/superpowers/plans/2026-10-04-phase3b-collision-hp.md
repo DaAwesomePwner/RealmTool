@@ -34,12 +34,21 @@ Projectile and damaging-tile metadata come from a generated, build-stamped `data
 - No native-health, forecast, telemetry, reaction-learning, recorder, dashboard or status-relay code, and no `DamageLedger` debt engine (R§2, ruling R7). The coordinator's write-receipt callback stays (the guard needs it).
 - Messages and docs never describe report suppression or Collision HP as survival protection (design §3 "Hit model").
 
-## Rulings for this phase (the controller's; R2 needs the user's confirmation)
+## Rulings for this phase (the controller's; R2 decided by the user on 2026-10-04)
 
 Each ruling ends with what it costs if it turns out wrong.
 
 - **R1 Default ON.** Default ON for new profiles, empty settings and 3a profiles; explicit OFF respected; no migration flag needed (3a never saved the key). *Cost:* none.
-- **R2 Degraded ON for a missing, invalid, unknown-build or mismatched safety catalog.** The engine gets an **empty** catalog, never stale metadata. Every reported hit then goes through REC's unknown path (`max(200, raw)`), and status shows `degraded: <reason>` with the regeneration command. Prediction stays ON and is not silently saved as OFF. The alternative is to suspend prediction (server HP only) until the catalog is regenerated. *Cost:* after a game update, escapes come earlier (over-conservative) until `npm run gen:catalogs`. **User to confirm.**
+- **R2 Server-HP fallback for a missing, invalid, unknown-build or mismatched safety catalog** (the user's ruling, 2026-10-04, replacing the proposed "degraded ON"). Collision HP is suspended and Auto Nexus runs server-HP-only, behaving exactly as with Collision HP OFF, until a valid catalog for the installed build is in use. The engine never sees stale metadata.
+  - The saved `PreHitPrediction` is never changed by a fallback (never saved as false).
+  - The worker reports the **effective** mode as `collisionHp: 'on' | 'off' | 'fallback'`. `fallback` means the setting is ON but no usable catalog exists.
+  - **The fallback must be obvious:**
+    - a load-log warning;
+    - one in-game notification per new game connection while in fallback: `Collision HP FALLBACK: server HP only (<reason>). Run npm run gen:catalogs and restart RealmTool.`;
+    - `/an` and the decision notification say `Collision HP fallback (server HP only)` plus the reason, never plain "on" or "off".
+  - When a later build check passes (on `clientConnected` or enable), prediction resumes.
+  - Entering or leaving fallback is a mode change: prediction debt is retired and the server HP anchor kept (R11).
+  - *Cost:* after a game update, Auto Nexus reacts only to server HP (later than Collision HP would) until `npm run gen:catalogs` and a restart.
 - **R3 `deliveryStalled` requires remaining assessed loss > 0.** REC uses the pending entry *count*, which includes zero or fully credited entries (R§8.4). *Cost:* a divergence from REC, pinned by a test.
 - **R4 Unresolved-report occurrence numbers come from a monotonic per-epoch serial.** They never restart after REC's 12 s window, so they can't collide with an older unresolved id that still carries debt (R§8.5). *Cost:* none expected.
 - **R5 Zero threshold:** explicit server zero and a known positive maxHP in both modes. REC's ON branch skips the maxHP check (R§8.8). *Cost:* none.
@@ -59,7 +68,7 @@ Each ruling ends with what it costs if it turns out wrong.
 1. **The main thread is stalled (slow plugin hook, GC) while a PLAYERHIT crosses the predicted threshold.** The worker writes ESCAPE on that report. The triggering report is never written upstream, and nothing reaches the main thread before the ESCAPE is written. Pinned in Tasks 6 and 8.
 2. **A PLAYERHIT held for a main-thread verdict, then released or dropped.** It is charged exactly once on receipt. Released: its delivery age starts at its actual write. Dropped: its loss is kept, but its delivery association is not. Pinned in Tasks 2 and 6.
 3. **Server DAMAGE for a reported projectile arrives before or after the PLAYERHIT, including a measured 0.** It is charged once. Repeated unknown or multi-hit reports are never forgiven by one DAMAGE. Pinned in Task 5.
-4. **The safety catalog is missing, corrupt, overridden by a bad file, or from another build.** Auto Nexus runs degraded ON with no stale metadata (R2), status says why, and Auto Drink and the rest of RealmTool keep working. Pinned in Tasks 4, 6 and 7.
+4. **The safety catalog is missing, corrupt, overridden by a bad file, or from another build.** Auto Nexus falls back to server HP only with no stale metadata (R2), the fallback is obvious in chat, status and logs, and Auto Drink and the rest of RealmTool keep working. Pinned in Tasks 4, 6 and 7.
 5. **A 3a profile is upgraded, or Collision HP is toggled mid-fight.** Upgrading gives ON; an explicit OFF stays OFF. Toggling retires prediction debt but keeps server HP, its age and the escape lifecycle, and never creates healing. Pinned in Tasks 5 and 7.
 
 ---
@@ -142,7 +151,7 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
   /** Catalog state shown in status; the engine sees only the SafetyCatalog. */
   export type SafetyCatalogState =
     | { state: 'ready'; gameBuild: string; projectiles: number; tiles: number }
-    | { state: 'degraded'; reason: string };
+    | { state: 'fallback'; reason: string };
   ```
 - [ ] **Step 1:** Write the file exactly as above (doc comments included). `npm run check`.
 - [ ] **Step 2: Commit** `feat(safety): Collision HP catalog contract`
@@ -417,12 +426,13 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
   // messages.ts
   export interface AutoNexusConfig {
     settings: SafetySettings;
-    /** null = no usable catalog: the worker installs an empty catalog (ruling R2). */
+    /** null = no usable catalog: Collision HP falls back to server HP only (ruling R2). */
     catalog: SafetyCatalogFile | null;
     catalogState: SafetyCatalogState;
   }
   // AutoNexusEvent 'status' and 'decision' carry status.preHitPrediction / lowerHp / prediction (Task 5) plus:
   //   catalog: SafetyCatalogState
+  //   collisionHp: 'on' | 'off' | 'fallback'   // effective mode (ruling R2)
   ```
 - **Wiring** (R§3, items 1–6; R§1):
   - `observe`: server `MAPINFO, CREATESUCCESS, UPDATE, NEWTICK, DAMAGE, DEATH, ENEMYSHOOT, AOE, GOTO`; client `PLAYERHIT, AOEACK, GROUNDDAMAGE`. Call `engine.observe(packet, now, observationId)`. For pending server `ENEMYSHOOT`/`AOE`, compute `engine.stalledDanger` right after observation and keep it keyed by observation id.
@@ -433,7 +443,7 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
     3. `advance(now)`.
 
     Release cached stalled losses on `writtenServer` (with observation id) and on `dropped`.
-  - `configure`: validate settings and catalog (`validateSafetyCatalog`) before touching any session, then call `setCatalog(toSafetyCatalog(file))`, or an empty catalog when null. Configuration is still rejected whole.
+  - `configure`: validate settings and catalog (`validateSafetyCatalog`) before touching any session, then call `setCatalog(toSafetyCatalog(file))`. When the catalog is null, install an empty catalog and configure the engine with an **effective** `preHitPrediction: false` (server HP only) while the saved setting is ON; report `collisionHp: 'fallback'` (R2). Switching between fallback and ON is an engine mode change (debt retired, anchor kept). Configuration is still rejected whole.
   - Clear all per-session maps on `connectionChanged` and `close` (R10).
   - Priority 0, receipt-first guard arming, accepted-RECONNECT transition and the 3a guard hooks are unchanged.
 - [ ] **Step 1: Write the failing tests** (`worker.test.ts`, existing session harness):
@@ -442,7 +452,7 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
   3. An injected PLAYERHIT and a plugin-rewritten PLAYERHIT are assessed at preparation and can trigger ESCAPE before their own RC4.
   4. Stalled delivery: an ENEMYSHOOT held > 100 ms behind a verdict, with positive pending loss and stalled loss reaching the threshold → ESCAPE. The same with zero pending loss → none (R3). A verdict-dropped ENEMYSHOOT behind a hold is excluded at once.
   5. Explicit OFF (`preHitPrediction: false`): reports are forwarded and add no debt; all 3a server-HP behavior is unchanged.
-  6. A `null` catalog → degraded ON: a known projectile is charged `max(200, raw)` as assumed, and status carries `catalog.state === 'degraded'`. An invalid catalog object rejects the whole configuration and keeps the previous one.
+  6. A `null` catalog with the setting ON → server-HP fallback: a PLAYERHIT is forwarded and adds no debt, server-HP escapes still work, and status carries `collisionHp: 'fallback'` and `catalog.state === 'fallback'`. A later config with a valid catalog resumes prediction (`collisionHp: 'on'`) without inventing debt. An invalid catalog object rejects the whole configuration and keeps the previous one.
   7. A reconnect clears per-session prediction state, and a surviving held client report is assessed afresh in the new epoch.
   8. Replace 3a's "worker rejects enabling prediction" test (`worker.test.ts:137`) with: enabling prediction is accepted and reflected in status.
 - [ ] **Step 2: Run** `npx vitest run plugins/auto-nexus`. Expected: the new tests fail.
@@ -463,11 +473,12 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
 - Produces: setting `{ key: 'PreHitPrediction', label: 'Collision HP', type: 'boolean', value: true }` and `DEFAULTS.PreHitPrediction = true`. `register(ctx, loader = loadSafetyCatalog, buildReader = readGameBuild)` is injectable like Auto Drink's.
 - **Behavior:**
   - **Migration:** the existing `migrate` supplies true when the key is absent. Explicit false survives; non-boolean values throw (strict validation); other retired keys are discarded.
-  - **Catalog:** load it at registration; check the build against `ctx.gameDir` at startup, on `clientConnected` and on enable, as Auto Drink does (`plugins/auto-drink/index.ts`). Any failure → `catalog: null`, `catalogState: { state: 'degraded', reason }`, with reasons worded like Auto Drink's ("catalog is for game build A but the installed game is B; run npm run gen:catalogs").
+  - **Catalog:** load it at registration; check the build against `ctx.gameDir` at startup, on `clientConnected` and on enable, as Auto Drink does (`plugins/auto-drink/index.ts`). Any failure → `catalog: null`, `catalogState: { state: 'fallback', reason }` (server HP only, R2), with reasons worded like Auto Drink's ("catalog is for game build A but the installed game is B; run npm run gen:catalogs").
   - **Text:**
     - load log: "Collision HP on by default (server HP is the floor); server-HP-only is an opt-out";
     - the decision notification shows `Server HP x/y; estimated HP z` when ON and labels "Collision HP on/off";
-    - `/an` reports the mode from **fresh worker status** (3a's generation and 2 s freshness rules), plus pending damage/count, assumed count, and catalog state/build/reason when degraded;
+    - `/an` reports the effective mode (`on` / `off` / `fallback (server HP only)`) from **fresh worker status** (3a's generation and 2 s freshness rules), plus pending damage/count, assumed count, and the catalog build when ready or the reason when in fallback;
+    - while in fallback with Auto Nexus enabled: a load-log warning, and one in-game notification per new game connection with the exact R2 text;
     - `/reset` says that pending loss reconciles from server evidence and can't be erased by command.
 
     Remove every "Collision HP is not available yet" and "prediction off — server HP threshold only" string that would now be false.
@@ -476,8 +487,9 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
   - migration: absent key, `{}` and a 3a-shaped profile → true; explicit false → false; `'false'`/`0`/`null` → throws;
   - catalog ok → ready state in config;
   - catalog missing, invalid, mismatched build, or unknown game dir → `catalog: null` with the reason;
-  - a build change between startup and `clientConnected` → degraded config before that session's reports;
-  - `/an` text for ON fresh, OFF fresh, stale status and degraded catalog;
+  - a build change between startup and `clientConnected` → fallback config before that session's reports, and the fallback chat notification once for that connection;
+  - a build that matches again on a later `clientConnected` → catalog restored, no fallback notification;
+  - `/an` text for ON fresh, OFF fresh, fallback, and stale status;
   - `/reset` text;
   - decision notification text in both modes.
 - [ ] **Step 2: Run** `npx vitest run plugins/auto-nexus`. Expected: fail.
@@ -498,12 +510,12 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
   2. Server DAMAGE for a reported projectile, before and after the report: charged once (observed through `/an` status or the decision text).
   3. Stalled ENEMYSHOOT behind a held verdict with pending loss → ESCAPE within about 100 ms + tick; the same after a drop verdict → none.
   4. A profile with explicit `PreHitPrediction: false` → reports forwarded, server-HP behavior exactly as 3a.
-  5. A missing safety catalog → degraded ON, assumed hit charged, Auto Drink unaffected.
+  5. A missing safety catalog → server-HP fallback: the client sees the fallback notification, a PLAYERHIT below the predicted threshold is forwarded (no Collision HP escape), a server-HP crossing still escapes, and Auto Drink is unaffected.
   6. Auto Drink is disarmed by a Collision HP escape for that generation.
 
   Run the integration file three times in a row; all runs must pass.
 - [ ] **Step 2: Docs.**
-  - README: Collision HP on by default, the opt-out, `npm run gen:catalogs` now writing two catalogs, and the degraded-catalog behavior.
+  - README: Collision HP on by default, the opt-out, `npm run gen:catalogs` now writing two catalogs, and the server-HP fallback when the safety catalog is missing or out of date.
   - Handoff: the phase state; rulings R1–R12 with their outcome (R2 as confirmed by the user); validation numbers; the catalog regeneration procedure; and the live smoke test below.
 - [ ] **Step 3: Run** `npm run check`.
 - [ ] **Step 4: Commit** `test(realtime): Collision HP end to end through the worker; docs`
@@ -514,6 +526,7 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
 3. With RealmTool stopped, set `PreHitPrediction: false` in the profile. `/an` shows "Collision HP off", and the 3a behavior is unchanged. Restore the setting.
 4. Normal play near the 25% threshold (a few hits from low-tier enemies): no early escapes at high HP.
 5. Ctrl+C. The profile has `PreHitPrediction` only if it was changed.
+6. Optional fallback check: with RealmTool stopped, rename `data/catalogs/safety.json`, start, connect. The chat shows the `Collision HP FALLBACK` notice and `/an` says fallback. Restore the file.
 
 ---
 
