@@ -299,6 +299,35 @@ it('R5: zero threshold with unknown maxHP never triggers ON until maxHP becomes 
   f.send('UPDATE', { newObjs: [{ status: { objectId: 1, data: [{ id: 0, value: 707 }] } }] });
   expect(f.escape.mock.calls[0][0]).toMatchObject({ reason: 'server HP threshold', confirmedHp: 0 });
 });
+it('retires a dropped AoE by observation id without changing HP or lifecycle', () => {
+  const f = fixture(); f.hit(1, 10);
+  for (const [id, damage] of [[1, 500], [2, 20]]) {
+    const p = createPacket(1, 'AOE', 'server');
+    p.isDefined = true; p.data = { position: { x: 1, y: 1 }, radius: 2, damage };
+    f.engine.observe(p, f.now(), id);
+  }
+  const before = f.engine.status();
+  f.engine.retireArea(1);
+  expect(f.engine.status()).toEqual(before);
+  f.engine.retireArea(999);
+  expect(f.engine.status()).toEqual(before);
+  f.send('AOEACK', { position: { x: 1, y: 1 } }, true);
+  expect(f.engine.status()).toMatchObject({ confirmedHp: 707, lowerHp: 677,
+    prediction: { pendingDamage: 30 } });
+  f.engine.retireArea(2);
+  expect(f.engine.status().prediction?.pendingDamage).toBe(30);
+  expect(f.escape).not.toHaveBeenCalled();
+});
+it('retiring an unknown AoE observation leaves FIFO correspondence unchanged', () => {
+  const f = fixture();
+  f.send('AOE', { position: { x: 1, y: 1 }, radius: 2, damage: 40 });
+  f.send('AOE', { position: { x: 1, y: 1 }, radius: 2, damage: 20 });
+  f.engine.retireArea(999);
+  f.send('AOEACK', { position: { x: 1, y: 1 } }, true);
+  expect(f.engine.status().prediction?.pendingDamage).toBe(40);
+  f.send('AOEACK', { position: { x: 1, y: 1 } }, true);
+  expect(f.engine.status().prediction?.pendingDamage).toBe(60);
+});
 it('R9: cleanup prunes areas older than 10 seconds and the next ACK consumes the fresh area', () => {
   const f = fixture();
   f.send('AOE', { position: { x: 1, y: 1 }, radius: 2, damage: 500 });

@@ -124,9 +124,10 @@ export const autoNexusModule: WorkerModule = {
         deliveries.delete(token);
         engine.reportDelivered(deliveryId, now, accepted);
       },
-      dropped(observationId, _name, _fromClient, now) {
+      dropped(observationId, _name, fromClient, now) {
         if (closed) return;
         stalledLosses.delete(observationId);
+        if (!fromClient) engine.retireArea(observationId);
         if (unpreparedReports.delete(observationId)) engine.reportDelivered(observationId, now, false);
       },
       writtenServer(packet, _kind, now, observationId) {
