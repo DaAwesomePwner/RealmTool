@@ -45,6 +45,12 @@ it('serve prints READY before background auto-start completes and keeps the API 
     expect(start).toHaveBeenCalledOnce(); expect(launch).not.toHaveBeenCalled();
     const logs = await (await fetch(`${url}/api/logs?since=0`, { headers })).json() as { records: StoredLog[] };
     expect(logs.records).toContainEqual(expect.objectContaining({ level: 'error', message: expect.stringContaining('RotMG Exalt.exe') }));
+    const before = logs.records.at(-1)?.seq ?? 0;
+    log.info('ServeTest', 'single API record');
+    const updated = await (await fetch(`${url}/api/logs?since=${before}`, { headers })).json() as { records: StoredLog[]; next: number };
+    expect(updated.records).toHaveLength(1);
+    expect(updated.records[0]).toMatchObject({ seq: before + 1, message: 'single API record' });
+    expect(updated.next).toBe(before + 1);
     const res = await fetch(`${url}/api/shutdown`, { method: 'POST', headers, body: '{}' });
     expect(res.status).toBe(200); expect(await res.json()).toEqual({ ok: true });
     expect(await running).toBe(0); expect(ready).not.toContain(token);
