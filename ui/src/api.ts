@@ -2,16 +2,8 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 
 export interface BackendInfo { port: number; token: string }
 
-/** Wire shape from the Phase 5 Task 5 API contract; no backend runtime imports. */
-export interface AppState {
-  proxy: { state: 'stopped' | 'starting' | 'running' | 'stopping' | 'failed'; port: number | null; error: string | null };
-  game: { dir: string | null; candidates: string[]; launcher: string | null;
-    helper: { state: 'absent' | 'installed' | 'outdated' | 'foreign' | 'unknown'; backup: boolean } };
-  sessions: { open: number; connected: number };
-  profile: { active: string; available: string[] };
-  operation: string | null;
-  revision: number;
-}
+/** The backend's AppState, imported type-only so the bundle carries no backend code. */
+export type { AppState } from '../../src/app/controller.ts';
 
 export async function backendInfo(): Promise<BackendInfo> {
   if (isTauri()) return invoke<BackendInfo>('backend_info');
