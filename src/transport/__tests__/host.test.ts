@@ -53,7 +53,10 @@ describe('ProxyHost', () => {
     await until(() => messages.some(message => !!message && typeof message === 'object' && 'configured' in message), 'batch applied');
     game.send(frame(factory.getPacketId('ESCAPE')!));
     await until(() => messages.some(message => !!message && typeof message === 'object' && 'observed' in message), 'module observation');
-    expect(messages).toEqual([
+    // The real built-in modules also run in this worker and post status on their own schedule.
+    const fixtureMessages = messages.filter(message => !!message && typeof message === 'object'
+      && ['command', 'configured', 'observed'].some(key => key in message));
+    expect(fixtureMessages).toEqual([
       { command: { type: 'modules', configs: { b: 20, a: 10 } } },
       { configured: { a: 10, b: 20 }, order: ['a', 'b', 'a', 'b'] },
       { observed: { a: 10, b: 20 } },
