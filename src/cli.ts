@@ -32,6 +32,7 @@ export interface CliOptions {
   fallback?: string;
   launch: boolean;
   launcher?: string;
+  quiet?: boolean;
 }
 
 export const HELP = `Usage: realmtool <command> [options]
@@ -50,6 +51,7 @@ Options:
   --fallback <ip>    Server to use when the helper recorded none
   --launcher <exe>    RotMG Exalt Launcher.exe to open (default: auto-detect Deca, then Steam)
   --no-launch        start: don't open the launcher
+  --quiet            uninstall-helper: suppress success output (uses saved game directory)
   -h, --help         Show this help
 `;
 
@@ -70,6 +72,7 @@ export function parseCli(argv: string[]): CliOptions {
       fallback: { type: 'string' },
       launcher: { type: 'string' },
       'no-launch': { type: 'boolean', default: false },
+      quiet: { type: 'boolean' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -90,6 +93,7 @@ export function parseCli(argv: string[]): CliOptions {
     fallback,
     launch: !values['no-launch'],
     launcher,
+    quiet: values.quiet,
   };
 }
 
@@ -216,6 +220,12 @@ export async function main(argv: string[]): Promise<number> {
     console.log(dirs.length ? dirs.join('\n') : 'No Exalt install found. Pass --game-dir or set ROTMG_PATH.');
     return dirs.length ? 0 : 1;
   }
+  if (options.command === 'uninstall-helper' && options.quiet && !options.gameDir) {
+    options.gameDir = new AppConfigStore().get().gameDir ?? undefined;
+    // An unused desktop installation has no helper to restore. Do not discover
+    // and modify an unrelated game installation during a quiet app uninstall.
+    if (!options.gameDir && options.quiet) return 0;
+  }
   const gameDir = resolveGameDir(options);
   if (!gameDir) {
     log.error('Game', options.gameDir
@@ -230,7 +240,8 @@ export async function main(argv: string[]): Promise<number> {
       return 0;
     }
     if (options.command === 'uninstall-helper') {
-      log.info('Helper', `${uninstallHelper(gameDir)} (${gameDir})`);
+      const status = uninstallHelper(gameDir);
+      if (!options.quiet) log.info('Helper', `${status} (${gameDir})`);
       return 0;
     }
     return await runProxy(options, gameDir);
