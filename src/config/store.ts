@@ -1,4 +1,4 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs';
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { log } from '../util/log.ts';
@@ -25,16 +25,29 @@ export function emptyProfile(): Profile {
 
 /** Write via a temp file in the same folder, fsync, then rename over the target. */
 export function writeJsonAtomic(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
   const temp = `${path}.tmp-${process.pid}`;
-  const fd = openSync(temp, 'w');
+  let fd: number | undefined;
   try {
-    writeSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+    mkdirSync(dirname(path), { recursive: true });
+    const buffer = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+    fd = openSync(temp, 'w');
+    let offset = 0;
+    while (offset < buffer.length) {
+      const written = writeSync(fd, buffer, offset, buffer.length - offset);
+      if (written === 0) throw new Error('Could not make progress writing profile');
+      offset += written;
+    }
     fsyncSync(fd);
-  } finally {
     closeSync(fd);
+    fd = undefined;
+    renameSync(temp, path);
+  } catch (error) {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* preserve the original failure */ }
+    }
+    try { unlinkSync(temp); } catch { /* best-effort cleanup */ }
+    throw error;
   }
-  renameSync(temp, path);
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -58,42 +71,74 @@ export function normalizeProfile(value: unknown): Profile {
   return profile;
 }
 
+export interface ProfileFs {
+  readFile(path: string): string;
+  rename(from: string, to: string): void;
+  writeJson(path: string, value: unknown): void;
+}
+
+const defaultProfileFs: ProfileFs = {
+  readFile: path => readFileSync(path, 'utf8'),
+  rename: renameSync,
+  writeJson: writeJsonAtomic,
+};
+
+const errorDetail = (error: unknown): string =>
+  (error as NodeJS.ErrnoException)?.code ?? (error instanceof Error ? error.message : String(error));
+
 export interface ProfileStoreOptions {
   dir: string;
   name?: string;
   debounceMs?: number;
+  fs?: ProfileFs;
 }
 
 export class ProfileStore {
   readonly path: string;
   private readonly debounceMs: number;
+  private readonly fs: ProfileFs;
+  private savingDisabledForSession = false;
   private pending: Profile | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: ProfileStoreOptions) {
     this.path = join(options.dir, 'profiles', `${options.name ?? 'default'}.json`);
     this.debounceMs = options.debounceMs ?? 800;
+    this.fs = options.fs ?? defaultProfileFs;
+  }
+
+  get savingDisabled(): boolean {
+    return this.savingDisabledForSession;
   }
 
   load(): Profile {
     let text: string;
     try {
-      text = readFileSync(this.path, 'utf8');
+      text = this.fs.readFile(this.path);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyProfile();
-      throw error;
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return emptyProfile();
+      this.savingDisabledForSession = true;
+      log.warn('Config', `Could not read ${this.path} (${errorDetail(error)}); using defaults and not saving settings this session so the file is left untouched`);
+      return emptyProfile();
     }
     try {
       return normalizeProfile(JSON.parse(text.replace(/^\uFEFF/, '')));
     } catch (error) {
       const backup = `${this.path}.corrupt-${Date.now()}`;
-      try { renameSync(this.path, backup); } catch { /* keep going with defaults either way */ }
+      try {
+        this.fs.rename(this.path, backup);
+      } catch (backupError) {
+        this.savingDisabledForSession = true;
+        log.warn('Config', `Profile ${this.path} is unreadable (${errorDetail(error)}) and could not be backed up (${errorDetail(backupError)}); using defaults and not saving settings this session so the file is left untouched`);
+        return emptyProfile();
+      }
       log.warn('Config', `Profile ${this.path} is unreadable (${(error as Error).message}); kept it as ${backup} and started from defaults`);
       return emptyProfile();
     }
   }
 
   scheduleSave(profile: Profile): void {
+    if (this.savingDisabled) return;
     this.pending = profile;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => this.flush(), this.debounceMs);
@@ -101,11 +146,12 @@ export class ProfileStore {
 
   flush(): void {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    if (this.savingDisabled) return;
     const profile = this.pending;
-    this.pending = null;
     if (!profile) return;
     try {
-      writeJsonAtomic(this.path, profile);
+      this.fs.writeJson(this.path, profile);
+      this.pending = null;
     } catch (error) {
       log.error('Config', `Could not save ${this.path}`, error);
     }
