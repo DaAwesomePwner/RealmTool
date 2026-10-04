@@ -1,6 +1,6 @@
 # RealmTool — Design Spec
 
-**Status:** Phase 3b complete (2026-10-04): functional release gates done, including default-ON Collision HP. Phase 5 UI shell and installer remain required before any release; live smoke testing remains pending. Phases 3c and 4 remain post-release additions.
+**Status:** Phase 5 UI shell and installer implemented (2026-10-04), including the installed-size gate: 95.65 MiB. Phase 3b functional gates include default-ON Collision HP. Live smoke testing remains pending; see the [Phase 5 handoff](handoff/2026-10-04-phase5-handoff.md) for validation. Phases 3c and 4 remain post-release additions.
 **Repository:** private, `DaAwesomePwner/RealmTool`
 **Source of ported code:** `DaAwesomePwner/realm-engine-client` (MIT, © Evergreen-Techworks; see `NOTICE`). Research was done at `9ab4f8f`. Each phase ports from the **then-current `main`**, so Chat Filter fixes such as `88a66b2` are included.
 **Research inputs:** [`docs/research/`](research/) (four Codex read-only investigations of realm-engine-client)
@@ -32,12 +32,14 @@ It must be easy to add more plugins later, both built-in and user-supplied.
 
 | Metric | Realm Engine today | RealmTool target |
 |---|---|---|
-| Installed size | 525 MiB (`win-unpacked`) | **≤ 120 MiB** with UI shell; **≤ 90 MiB** headless |
+| Installed size | 525 MiB (`win-unpacked`) | **≤ 120 MiB** with UI shell; measured **95.65 MiB** (100,300,390 bytes) |
 | Shipped game data | 77 MiB raw XML + atlases | **≤ 2 MiB** generated JSON catalogs |
 | Native binaries | 2 MiB IL2CPP DLL + injector + redirector | **One** helper DLL ≤ 200 KiB, no injector |
 | Dashboard source | ~37.5k lines HTML/CSS/JS | **≤ 3k lines** |
 | Patch-day work | regenerate 1.8M lines of IL2CPP headers + offsets | packet defs + catalogs + O3 constants only |
 | Backend startup to "listening" | full XML parse first | **< 1 s**, no XML parse at startup |
+
+The headless ≤ 90 MiB target is dropped for v1 (P4): no supported Node runtime fits the complete package within that budget. v1 ships the UI package; the development CLI remains available.
 
 ## 2. Architecture
 
@@ -162,7 +164,7 @@ Each phase ends with working, tested software. **Release gate:** Phases 1, 2, 3a
 | 3b | **Auto Nexus Collision HP (default ON) - done** | HealthPredictor and DamageModel ported (no DamageLedger); safety catalog (projectiles, armor-pierce, multi-hit, damaging tiles) generated; collision assessment on PLAYERHIT/AOEACK/GROUNDDAMAGE receipt in the worker; stalled-delivery fail-safe; default flipped to ON; ported hpPrediction/playerDamage/strictHp/safetyLifecycle tests plus a default-ON regression test. **Required before any release** | Catalog freshness per game build; uncalibrated AoE/ground and %-HP damage (documented assumption: max(200, raw) per unknown hit) |
 | 3c | **O3 Helper (post-release addition)** | Not part of the first release. Ported after release, once everything else is wired up, with its two known bugs fixed (coin-branch early return skipping Dammah; no active-coin exception) and dedicated tests. Then a live test in Oryx's Sanctuary confirms that withholding `ENEMYHIT` actually prevents damage during shield, coin and Dammah phases, since the server may calculate enemy hits itself | Server-side hit calculation may make withholding ineffective |
 | 4 | **Anti-AFK (deferred, optional)** | First attempt: out-of-process `PostMessageW` click to the game window found by PID (no injection). Fallback only if needed: helper v2 with a WndProc subclass + pipe. Then the Anti-AFK plugin | Does the game accept out-of-process input? Needs live validation |
-| 5 | **UI shell + packaging** | Tauri 2 app: plugin cards with schema-rendered settings, launch, readiness, log, profiles; installer; size budget verified | Sidecar lifecycle; WebView2 availability |
+| 5 | **UI shell + packaging — done** | Tauri 2 app: plugin cards with schema-rendered settings, launch, readiness, log, profiles; per-user installer; installed size verified at 95.65 MiB | Live smoke test pending; WebView2 availability |
 | 6 | **User plugins + polish** | `.mjs` user plugins, plugin dev guide + example, Realm Engine profile importer, `refresh-data`, patch-day checklist | — |
 
 ## 6. Decisions made (with defaults) — confirm or override
