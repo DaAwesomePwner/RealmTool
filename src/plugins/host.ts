@@ -7,7 +7,7 @@ import type { InterestSpec } from '../transport/interest.ts';
 import { log } from '../util/log.ts';
 import {
   PLUGIN_API_VERSION, type Capability, type ClientConnection, type CommandHook, type ConnectionEvent,
-  type PacketHook, type PluginContext, type PluginDefinition, type ServerInfo, type SettingDef,
+  type PacketHook, type PluginContext, type PluginDefinition, type ServerInfo, type SettingDef, type WorkerChannel,
 } from './api.ts';
 import { IDENTITY_PACKETS, PlayerIdentity } from './identity.ts';
 import { SettingsStore } from './settings.ts';
@@ -18,7 +18,7 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export type ProxyLike = Pick<ProxyHost, 'on' | 'off' | 'setInterest' | 'forward' | 'inject'>;
+export type ProxyLike = Pick<ProxyHost, 'on' | 'off' | 'setInterest' | 'forward' | 'inject' | 'configureModules' | 'moduleCommand'>;
 
 export interface PluginHostOptions {
   proxy: ProxyLike;
@@ -62,6 +62,7 @@ class Plugin implements PluginContext {
   private enabledValue = true;
   private readonly enabledCallbacks: ((enabled: boolean) => void)[] = [];
   readonly cleanups: (() => void)[] = [];
+  readonly workerHandlers: ((client: ClientConnection, message: unknown) => void)[] = [];
   private readonly host: PluginHost;
 
   constructor(host: PluginHost, definition: PluginDefinition) {
@@ -80,6 +81,15 @@ class Plugin implements PluginContext {
       try { callback(value); } catch (error) { log.error(this.name, 'Enable callback failed', error); }
     }
     this.host.changed();
+  }
+
+  get worker(): WorkerChannel {
+    this.require('worker');
+    return {
+      configure: config => this.host.configureWorker(this, config),
+      send: (client, message) => this.host.sendWorker(this, client, message),
+      onMessage: handler => { if (!this.failed) this.workerHandlers.push(handler); },
+    };
   }
 
   registerSetting(key: string, def: Omit<SettingDef, 'key'>, onChange?: (value: any) => void): void {
@@ -147,6 +157,7 @@ export class PluginHost {
   private readonly commands = new Map<string, Registered<CommandHook>[]>();
   private listeners: Listener[] = [];
   private readonly clients = new Map<string, Client>();
+  private readonly pendingConfigs = new Map<string, unknown>();
   private loadedProfile: Profile = { schemaVersion: PROFILE_SCHEMA_VERSION, plugins: {} };
   private applying = false;
   private started = false;
@@ -173,7 +184,9 @@ export class PluginHost {
     this.proxy.on('routed', this.onRouted);
     this.proxy.on('closed', this.onClosed);
     this.proxy.on('packet', this.onPacket);
+    this.proxy.on('module', this.onModule);
     this.started = true;
+    this.flushConfigs();
     return interest;
   }
 
@@ -183,6 +196,8 @@ export class PluginHost {
     this.proxy.off('routed', this.onRouted);
     this.proxy.off('closed', this.onClosed);
     this.proxy.off('packet', this.onPacket);
+    this.proxy.off('module', this.onModule);
+    this.pendingConfigs.clear();
     this.started = false;
     this.profile.flush();
   }
@@ -225,6 +240,17 @@ export class PluginHost {
   }
 
   addListener(listener: Listener): void { if (!listener.plugin.failed) this.listeners.push(listener); }
+
+  configureWorker(plugin: Plugin, config: unknown): void {
+    if (plugin.failed) return;
+    this.pendingConfigs.set(plugin.pluginId, config);
+    if (this.started && !this.applying) this.flushConfigs();
+  }
+
+  sendWorker(plugin: Plugin, client: ClientConnection, message: unknown): void {
+    if (plugin.failed || !this.started || !client.connected || this.clients.get(client.clientId) !== client) return;
+    this.proxy.moduleCommand(plugin.pluginId, client.clientId, message);
+  }
 
   broadcast(plugin: Plugin, type: string, data: unknown): void { this.onData?.(plugin.pluginId, type, data); }
 
@@ -282,6 +308,7 @@ export class PluginHost {
 
   private fail(plugin: Plugin): void {
     plugin.failed = true;
+    this.pendingConfigs.delete(plugin.pluginId);
     this.unregister(plugin);
     this.cleanup(plugin);
   }
@@ -290,6 +317,14 @@ export class PluginHost {
     for (const cleanup of plugin.cleanups.splice(0)) {
       try { cleanup(); } catch (error) { log.error(plugin.name, 'Cleanup failed', error); }
     }
+    plugin.workerHandlers.length = 0;
+  }
+
+  private flushConfigs(): void {
+    if (this.pendingConfigs.size === 0) return;
+    const configs = Object.fromEntries(this.pendingConfigs);
+    this.pendingConfigs.clear();
+    this.proxy.configureModules(configs);
   }
 
   private unregister(plugin: Plugin): void {
@@ -359,6 +394,15 @@ export class PluginHost {
     client.connected = false;
     this.clients.delete(id);
     this.emitConnection('clientDisconnected', client);
+  };
+
+  private readonly onModule = ({ moduleId, id, message }: { moduleId: string; id?: string; message: unknown }): void => {
+    const plugin = this.plugins.get(moduleId);
+    const client = id === undefined ? undefined : this.clients.get(id);
+    if (!plugin || plugin.failed || !client || !client.connected) return;
+    for (const handler of plugin.workerHandlers) {
+      try { handler(client, message); } catch (error) { log.error(plugin.name, 'Worker message handler failed', error); }
+    }
   };
 
   private readonly onPacket = (event: PacketEvent): void => {
