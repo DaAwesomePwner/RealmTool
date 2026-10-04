@@ -14,5 +14,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "tools", "vitest.config.ts"]
+  "include": ["src", "plugins", "tools", "vitest.config.ts"]
 }
