@@ -21,7 +21,7 @@ async function fixture(buildReader: (dir: string) => Promise<string> = async () 
   const automation=new SessionAutomation();automation.reset(generation);
   const write=vi.fn(()=>true);
   const context:WorkerSessionContext={sessionId:'s',factory,automation,generation:()=>generation,now:()=>now,
-    writePriority:write,transport:()=>({available:true,backlog:false,upstreamBackpressure:false}),held:()=>[],post:e=>events.push(e as AutoDrinkEvent)};
+    writePriority:write,transport:()=>({available:true,backlog:false,upstreamBackpressure:false}),held:()=>[],pendingDelivery:()=>[],post:e=>events.push(e as AutoDrinkEvent)};
   const hooks=module.createSession(context);cleanups.push(()=>hooks.close?.());hooks.connectionChanged?.(generation);
   const packet=(name:string,data:Record<string,unknown>={})=>{const p=factory.createByName(name);p.data=data;return p;};
   const spawn=()=>{
@@ -58,7 +58,7 @@ it('subscribes to accepted RECONNECT writes and disarms without relying on Auto 
   const f = await fixture();
   expect(f.module.observe?.server).not.toContain('RECONNECT');
   expect(f.module.writtenServer).toContain('RECONNECT');
-  f.hooks.writtenServer?.(f.packet('RECONNECT'), 'normal', 0);
+  f.hooks.writtenServer?.(f.packet('RECONNECT'), 'normal', 0, null);
   expect(f.context.automation.escapeLatched()).toBe(false);
   f.advance();
   expect(f.write).not.toHaveBeenCalled();

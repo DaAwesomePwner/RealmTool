@@ -152,7 +152,7 @@ describe('Auto Nexus module lifecycle', () => {
     const messages: any[] = [];
     const writePriority = vi.fn((_data, _toClient, done) => { if (accept) done?.(); return accept; });
     const ctx: WorkerSessionContext = { sessionId: 'local', factory, automation, generation: () => generation, now: () => now,
-      writePriority, transport: () => ({ available: true, backlog: true, upstreamBackpressure: blocked }), held: () => [], post: m => messages.push(m) };
+      writePriority, transport: () => ({ available: true, backlog: true, upstreamBackpressure: blocked }), held: () => [], pendingDelivery: () => [], post: m => messages.push(m) };
     autoNexusModule.configure!(config()); const module = autoNexusModule.createSession(ctx); cleanups.push(() => module.close!());
     const observe = (name: string, data: Record<string, unknown>) => module.observe!(packet(name, data), false, now, 1);
     observe('MAPINFO', { name: 'Realm' }); observe('CREATESUCCESS', { objectId: 1 });
