@@ -19,6 +19,11 @@ const decode = (h: Harness, data: Buffer | null, dir: 'client' | 'server') => h.
 const helloData = () => ({ gameId: -2, buildVersion: 'b', accessToken: 'regression-secret-token', keyTime: -1, key: Buffer.alloc(0), gameNet: 'rotmg', playPlatform: 'rotmg', platformToken: '', userToken: '', clientIdentification: '' });
 
 describe('PluginHost', () => {
+  it.each([undefined, null, 'C:/fixture/game'])('passes gameDir through the harness without a capability (%s)', gameDir => {
+    const h = startHost([plugin('p', () => {}, { capabilities: [] })], { gameDir });
+    expect(h.host.context('p')!.gameDir).toBe(gameDir ?? null);
+    h.host.stop();
+  });
   it('coalesces registration and saved settings into one worker configuration batch', () => {
     quietLogs();
     vi.spyOn(ProfileStore.prototype, 'load').mockReturnValue({ schemaVersion: 1, plugins: {

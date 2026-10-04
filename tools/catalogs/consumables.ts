@@ -1,6 +1,7 @@
 // Adapted from realm-engine-client client/plugins/auto-drink/catalog.ts @ 88a66b2 (MIT, see NOTICE).
 import { XMLParser } from 'fast-xml-parser';
-import { validateConsumableItems, type AutoDrinkItem } from '../../src/data/consumables.ts';
+import { validateConsumableItems } from '../../src/data/consumables.ts';
+import type { AutoDrinkItem } from '../../src/auto-drink/AutoDrinkTypes.ts';
 
 const parser = new XMLParser({
   ignoreAttributes: false, attributeNamePrefix: '@_', parseTagValue: false, parseAttributeValue: false,
@@ -120,4 +121,3 @@ export function consumablesFromObjectsXml(objectsXml: string): AutoDrinkItem[] {
   }
   return validateConsumableItems([...items.values()].sort((a, b) => a.type - b.type));
 }
-

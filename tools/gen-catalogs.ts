@@ -3,7 +3,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { consumablesFromObjectsXml, objectFragments } from './catalogs/consumables.ts';
-import { extractXmlTextAssets, readBuildGuid } from './catalogs/unityText.ts';
+import { extractXmlTextAssets } from './catalogs/unityText.ts';
+import { readBuildGuid } from '../src/game/gameBuild.ts';
 import { validateConsumablesCatalog, type ConsumablesCatalog } from '../src/data/consumables.ts';
 
 export function generateCatalog(args: string[]): { catalog: ConsumablesCatalog; path: string; bytes: number } {

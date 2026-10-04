@@ -29,14 +29,14 @@ export class FakeProxy extends EventEmitter<HostEvents> {
 
 export interface PacketOptions { observeOnly?: boolean }
 
-export function startHost(definitions: readonly PluginDefinition[], options: { profileDir?: string; factory?: PacketFactory } = {}) {
+export function startHost(definitions: readonly PluginDefinition[], options: { profileDir?: string; factory?: PacketFactory; gameDir?: string | null } = {}) {
   const proxy = new FakeProxy();
   const factory = options.factory ?? createFactory();
   const profileDir = options.profileDir ?? mkdtempSync(join(tmpdir(), 'realmtool-plugins-'));
   const profile = new ProfileStore({ dir: profileDir, debounceMs: 0 });
   // EventEmitter's fluent on/off return this; Pick<ProxyHost> retains ProxyHost's
   // return type. The host uses only the seven methods implemented by this fake.
-  const host = new PluginHost({ proxy: proxy as unknown as ProxyLike, factory, definitions, profile });
+  const host = new PluginHost({ proxy: proxy as unknown as ProxyLike, factory, definitions, profile, gameDir: options.gameDir });
   host.start();
   let sequence = 0;
   return {
