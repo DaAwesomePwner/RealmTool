@@ -8,7 +8,7 @@ import { DEFAULT_HELPER_PATH, installHelper, uninstallHelper } from './game/help
 import { describeLaunchTarget, findLaunchTarget, openLaunchTarget, type LaunchTarget } from './game/gameLauncher.ts';
 import { GAME_PORT } from './protocol/constants.ts';
 import type { PluginDefinition } from './plugins/api.ts';
-import { PluginHost } from './plugins/host.ts';
+import { PluginHost, type ProxyLike } from './plugins/host.ts';
 import { createFactory, loadSchema } from './protocol/schema.ts';
 import { createTargetResolver, parseTargetFile, removeStaleTargetFiles } from './routing/targetResolver.ts';
 import { ProxyHost, type ProxyHostOptions } from './transport/host.ts';
@@ -87,7 +87,7 @@ export function resolveGameDir(options: CliOptions): string | null {
 }
 
 export interface RunDeps {
-  createHost(options: ProxyHostOptions): Pick<ProxyHost, 'on' | 'off' | 'start' | 'stop' | 'setInterest' | 'forward' | 'inject'>;
+  createHost(options: ProxyHostOptions): ProxyLike & Pick<ProxyHost, 'start' | 'stop'>;
   plugins: readonly PluginDefinition[];
   profileDir(): string;
   launch(onError: (error: Error) => void, override?: string): LaunchTarget | null;

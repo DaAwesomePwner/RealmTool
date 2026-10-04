@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { definePlugin, type PluginContext, type PluginDefinition } from '../api.ts';
+import { definePlugin, type ClientConnection, type PluginContext, type PluginDefinition, type WorkerChannel } from '../api.ts';
 import { log, type LogRecord } from '../../util/log.ts';
 import { startHost, textData, type Harness } from '../../testing/pluginHarness.ts';
 import { FakeProxy } from '../../testing/pluginHarness.ts';
@@ -19,6 +19,144 @@ const decode = (h: Harness, data: Buffer | null, dir: 'client' | 'server') => h.
 const helloData = () => ({ gameId: -2, buildVersion: 'b', accessToken: 'regression-secret-token', keyTime: -1, key: Buffer.alloc(0), gameNet: 'rotmg', playPlatform: 'rotmg', platformToken: '', userToken: '', clientIdentification: '' });
 
 describe('PluginHost', () => {
+  it('coalesces registration and saved settings into one worker configuration batch', () => {
+    quietLogs();
+    vi.spyOn(ProfileStore.prototype, 'load').mockReturnValue({ schemaVersion: 1, plugins: {
+      a: { enabled: false, settings: { n: 3, m: 4 } },
+      b: { enabled: true, settings: { n: 7, m: 8 } },
+    } });
+    const h = startHost(['a', 'b'].map(id => plugin(id, ctx => {
+      const configure = () => ctx.worker.configure({ n: ctx.getSetting('n'), m: ctx.getSetting('m'), enabled: ctx.enabled });
+      ctx.worker.configure('initial');
+      ctx.registerSetting('n', { label: 'N', type: 'number', value: 1 }, configure);
+      ctx.registerSetting('m', { label: 'M', type: 'number', value: 2 }, configure);
+      ctx.onEnabledChange(configure);
+      configure();
+    }, { capabilities: ['worker'] })));
+    expect(h.host.loaded()).toEqual(['a', 'b']);
+    expect(h.proxy.configured).toEqual([{
+      a: { n: 3, m: 4, enabled: false }, b: { n: 7, m: 8, enabled: true },
+    }]);
+    h.host.stop();
+  });
+
+  it('sends each worker configuration immediately after startup', () => {
+    quietLogs();
+    const h = startHost([plugin('p', () => {}, { capabilities: ['worker'] })]);
+    expect(h.proxy.configured).toEqual([]);
+    h.host.context('p')!.worker.configure({ value: 1 });
+    h.host.context('p')!.worker.configure(undefined);
+    expect(h.proxy.configured).toEqual([{ p: { value: 1 } }, { p: undefined }]);
+    h.host.stop();
+  });
+
+  it('sends worker commands only for a live client facade', () => {
+    quietLogs();
+    let client!: ClientConnection;
+    const h = startHost([plugin('p', ctx => ctx.on('clientConnected', c => { client = c; }), { capabilities: ['worker'] })]);
+    const id = h.connect();
+    const worker = h.host.context('p')!.worker;
+    worker.send(client, { action: 'status' });
+    h.close(id);
+    worker.send(client, 'closed');
+    expect(h.proxy.commands).toEqual([{ moduleId: 'p', id, message: { action: 'status' } }]);
+    h.host.stop();
+  });
+
+  it('routes worker messages by plugin and live client even while disabled, and removes them on stop', () => {
+    quietLogs();
+    let client!: ClientConnection;
+    const received = vi.fn();
+    const other = vi.fn();
+    const h = startHost([
+      plugin('p', ctx => {
+        ctx.on('clientConnected', c => { client = c; });
+        ctx.worker.onMessage(received);
+      }, { capabilities: ['worker'] }),
+      plugin('other', ctx => ctx.worker.onMessage(other), { capabilities: ['worker'] }),
+    ]);
+    const id = h.connect();
+    h.host.context('p')!.enabled = false;
+    h.workerMessage(id, 'p', { hp: 50 });
+    expect(received).toHaveBeenCalledExactlyOnceWith(client, { hp: 50 });
+    expect(client.clientId).toBe(id);
+    expect(client.sendToServer).toBeTypeOf('function');
+    h.workerMessage('unknown', 'p', 'ignored');
+    h.workerMessage(id, 'unknown', 'ignored');
+    h.proxy.emit('module', { moduleId: 'p', message: 'no session' });
+    h.close(id);
+    h.workerMessage(id, 'p', 'closed');
+    expect(received).toHaveBeenCalledTimes(1);
+    expect(other).not.toHaveBeenCalled();
+    const live = h.connect('live');
+    expect(h.proxy.listenerCount('module')).toBe(1);
+    h.host.stop();
+    expect(h.proxy.listenerCount('module')).toBe(0);
+    h.workerMessage(live, 'p', 'stopped');
+    expect(received).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects worker access without the worker capability', () => {
+    const h = startHost([plugin('p', () => {})]);
+    expect(() => h.host.context('p')!.worker).toThrow('p did not declare the "worker" capability');
+    h.host.stop();
+  });
+
+  it('discards failed plugin worker configuration and handlers, including cleanup and delayed registrations', async () => {
+    quietLogs();
+    const received = vi.fn();
+    const cleanup = vi.fn();
+    let channel!: WorkerChannel;
+    let client!: ClientConnection;
+    const h = startHost([
+      plugin('bad', ctx => {
+        channel = ctx.worker;
+        channel.configure('before failure');
+        channel.onMessage(received);
+        ctx.registerCleanup(() => {
+          cleanup();
+          channel.configure('cleanup');
+          channel.onMessage(received);
+        });
+        queueMicrotask(() => {
+          channel.configure('delayed');
+          channel.onMessage(received);
+          channel.send(client, 'delayed');
+        });
+        throw new Error('register failed');
+      }, { capabilities: ['worker'] }),
+      plugin('good', ctx => {
+        ctx.worker.configure('good');
+        ctx.on('clientConnected', c => { client = c; });
+      }, { capabilities: ['worker'] }),
+    ]);
+    const id = h.connect();
+    await Promise.resolve();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(h.host.loaded()).toEqual(['good']);
+    expect(h.proxy.configured).toEqual([{ good: 'good' }]);
+    expect(h.proxy.commands).toEqual([]);
+    h.workerMessage(id, 'bad', 'ignored');
+    expect(received).not.toHaveBeenCalled();
+    h.host.stop();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs worker handler errors with plugin name and details and continues dispatch', () => {
+    quietLogs();
+    const next = vi.fn();
+    const h = startHost([plugin('p', ctx => {
+      ctx.worker.onMessage(() => { throw new Error('worker detail'); });
+      ctx.worker.onMessage(next);
+    }, { name: 'Worker Plugin', capabilities: ['worker'] })]);
+    h.workerMessage(h.connect(), 'p', 'status');
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(records.filter(r => r.level === 'error')).toEqual([
+      expect.objectContaining({ module: 'Worker Plugin', message: expect.stringContaining('worker detail') }),
+    ]);
+    h.host.stop();
+  });
+
   it.each(['observer', 'hook'] as const)('withholds credentials from HELLO %s errors', kind => {
     quietLogs();
     const h = startHost([plugin('p', ctx => {
