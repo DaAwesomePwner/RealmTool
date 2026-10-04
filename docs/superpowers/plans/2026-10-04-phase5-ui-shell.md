@@ -50,7 +50,7 @@ The Rust shell spawns a pinned `node.exe` with the bundle inside a kill-on-close
 - Ported or adapted files keep their provenance header. New files need none.
 - No auto-updater, no account or credential features, no server-switch dropdown, no overlay (design §1 non-goals).
 
-## Rulings (the controller's; U1–U5 need the user's confirmation)
+## Rulings (the controller's; U1–U5 approved by the user on 2026-10-04)
 
 Each ruling ends with what it costs if it turns out wrong.
 
@@ -127,7 +127,7 @@ Tiers:
 
 ### Task 0: Controller setup (on the phase branch, not delegated)
 
-- [ ] Branch `phase5/ui-shell` from `main` after PR #7 merges.
+- [x] Branch `phase5/ui-shell` from `main` after PR #7 merges.
 - [ ] `npm install ws@^8 && npm install -D @types/ws esbuild@0.28.2 vite@^7 happy-dom@^20 @tauri-apps/api@^2 @tauri-apps/cli@^2`. Commit `package.json` and `package-lock.json`. Then run `npm run check`.
 - [ ] Scaffold `src-tauri/` and run `cargo fetch`, then `cargo build` (warms the cache):
   - `Cargo.toml`: package `realmtool-shell`, edition 2021. Dependencies: `tauri = { version = "2", features = ["tray-icon"] }`, `tauri-plugin-single-instance = "2"`, `serde = { version = "1", features = ["derive"] }`, `serde_json = "1"`, `rand = "0.9"`, `windows-sys = { version = "0.59", features = ["Win32_System_JobObjects", "Win32_Foundation", "Win32_System_Threading", "Win32_Security"] }`. Build dependency: `tauri-build = "2"`.
