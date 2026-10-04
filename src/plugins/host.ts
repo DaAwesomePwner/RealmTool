@@ -220,8 +220,11 @@ export class PluginHost {
     this.proxy.off('module', this.onModule);
     this.pendingConfigs.clear();
     this.started = false;
-    this.profile.flush();
+    this.flush();
   }
+
+  /** Persist pending settings without stopping plugins or their worker modules. */
+  flush(): void { this.profile.flush(); }
 
   loaded(): string[] {
     return [...this.plugins.values()].filter(p => !p.failed).map(p => p.pluginId);
