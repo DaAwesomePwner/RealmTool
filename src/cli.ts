@@ -129,7 +129,7 @@ export async function runProxy(options: CliOptions, gameDir: string, deps: RunDe
   let dispose: (() => void) | undefined;
   let plugins: PluginHost | undefined;
   try {
-    plugins = new PluginHost({ proxy: host, factory, definitions: deps.plugins, profile: new ProfileStore({ dir: deps.profileDir() }) });
+    plugins = new PluginHost({ proxy: host, factory, definitions: deps.plugins, profile: new ProfileStore({ dir: deps.profileDir() }), gameDir });
     plugins.start();
     log.info('Plugins', `Loaded ${plugins.loaded().join(', ') || 'no plugins'}`);
 

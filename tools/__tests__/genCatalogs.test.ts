@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { consumablesFromObjectsXml } from '../catalogs/consumables.ts';
-import { extractXmlTextAssets, readBuildGuid } from '../catalogs/unityText.ts';
+import { extractXmlTextAssets } from '../catalogs/unityText.ts';
+import { readBuildGuid } from '../../src/game/gameBuild.ts';
 import { generateCatalog } from '../gen-catalogs.ts';
 import { loadConsumables } from '../../src/data/consumables.ts';
 

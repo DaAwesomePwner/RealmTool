@@ -3,15 +3,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appDataDir } from '../config/store.ts';
-
-export interface AutoDrinkItem {
-  type: number;
-  name: string;
-  hp: number;
-  mp: number;
-  healingDurationMs: number;
-  quickslot: boolean;
-}
+import type { AutoDrinkItem } from '../auto-drink/AutoDrinkTypes.ts';
+export type { AutoDrinkItem } from '../auto-drink/AutoDrinkTypes.ts';
 export interface ConsumablesCatalog {
   schemaVersion: 1;
   gameBuild: string;

@@ -68,6 +68,8 @@ export interface WorkerChannel {
 
 export interface PluginContext {
   readonly pluginId: string;
+  /** Resolved Exalt installation directory, or null when unavailable. */
+  readonly gameDir: string | null;
   /** Throws unless the plugin declares the worker capability. */
   readonly worker: WorkerChannel;
   name: string;

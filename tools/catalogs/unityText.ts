@@ -1,14 +1,4 @@
 // Adapted from realm-engine-client client/src/util/rotmgLocalExtractor.ts @ 88a66b2 (MIT, see NOTICE).
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
-export function readBuildGuid(gameDataDir: string): string {
-  const path = join(gameDataDir, 'boot.config');
-  const guid = readFileSync(path, 'utf8').match(/^build-guid=(.+)$/m)?.[1].trim();
-  if (!guid) throw new Error(`${path}: missing build-guid`);
-  return guid;
-}
-
 /** Only the Unity v22 TextAsset path; no texture decoding or writes to the install. */
 export function extractXmlTextAssets(buf: Buffer): { objects: string[]; tiles: string[] } {
   function range(offset: number, size: number, limit = buf.length) {

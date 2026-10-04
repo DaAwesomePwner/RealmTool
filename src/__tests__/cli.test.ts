@@ -155,11 +155,12 @@ describe('runProxy', () => {
   });
 
   it('sets TEXT verdict interest before start resolves', async () => {
-    registerTestPlugin();
+    const context = registerTestPlugin();
     const setInterest = vi.spyOn(host, 'setInterest');
     start.mockImplementation(async () => {
       expect(setInterest).toHaveBeenCalledOnce();
       expect(host.interest.verdict?.server).toContain('TEXT');
+      expect(context().gameDir).toBe(gameDir);
       return 2050;
     });
     expect(await runProxy(options, gameDir, deps)).toBe(0);

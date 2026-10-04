@@ -25,6 +25,7 @@ export interface PluginHostOptions {
   factory: PacketFactory;
   definitions: readonly PluginDefinition[];
   profile: ProfileStore;
+  gameDir?: string | null;
   onData?: (pluginId: string, type: string, data: unknown) => void;
 }
 
@@ -74,6 +75,7 @@ class Plugin implements PluginContext {
   }
 
   get enabled(): boolean { return !this.failed && this.enabledValue; }
+  get gameDir(): string | null { return this.host.gameDir; }
   set enabled(value: boolean) {
     if (this.failed) return;
     this.enabledValue = value;
@@ -147,6 +149,7 @@ class Plugin implements PluginContext {
 /** Loads plugins and connects them to the proxy's packet stream. */
 export class PluginHost {
   readonly factory: PacketFactory;
+  readonly gameDir: string | null;
   private readonly proxy: ProxyLike;
   private readonly definitions: readonly PluginDefinition[];
   private readonly profile: ProfileStore;
@@ -165,6 +168,7 @@ export class PluginHost {
   constructor(options: PluginHostOptions) {
     this.proxy = options.proxy;
     this.factory = options.factory;
+    this.gameDir = options.gameDir ?? null;
     this.definitions = options.definitions;
     this.profile = options.profile;
     this.onData = options.onData;
