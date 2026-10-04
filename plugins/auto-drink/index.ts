@@ -23,7 +23,8 @@ export function register(ctx: PluginContext, loader: () => CatalogLoad = loadCon
   logCatalog();
   function config(enabled = ctx.enabled) {
     const values = Object.fromEntries(SETTING_DEFS.map(({ key }) => [key, ctx.getSetting(key)]));
-    return validateConfig({ settings: workerSettings(values, enabled), items: loaded.ok ? loaded.catalog.items : [] });
+    return validateConfig({ settings: workerSettings(values, enabled), items: loaded.ok ? loaded.catalog.items : [],
+      gameBuild: catalog.ok ? catalog.catalog.gameBuild : null, gameDir: ctx.gameDir });
   }
   function sync(): void { if (!disposed) ctx.worker.configure(config()); }
   for (const { key, ...def } of SETTING_DEFS) {

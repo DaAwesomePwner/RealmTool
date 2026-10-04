@@ -68,6 +68,35 @@ async function connected(h: Harness, server: FakeServer): Promise<{ game: Peer; 
 const packets = (h: Harness) => h.events.filter((e): e is Extract<WorkerEvent, { type: 'packet' }> => e.type === 'packet');
 
 describe('Session', () => {
+  it.each([null, undefined, 'hook failed', new Error('hook failed'), {}])('isolates tick, observe and allowWrite hooks throwing %s', thrown => {
+    const events: WorkerEvent[] = [];
+    const later = { tick: vi.fn(), observe: vi.fn(), allowWrite: vi.fn(() => true) };
+    const broken: WorkerModule = { id: 'broken', priority: 0, observe: { server: ['PING'] },
+      createSession: () => ({ tick() { throw thrown; }, observe() { throw thrown; }, allowWrite() { throw thrown; } }) };
+    const healthy: WorkerModule = { id: 'healthy', priority: 1, observe: { server: ['PING'] }, createSession: () => later };
+    const client = new net.Socket();
+    const session = new Session('isolated', client, {
+      factory, router: new Router(), interest: new Interest(), modules: [broken, healthy],
+      post: e => events.push(e), now: () => 1000, fallbackDestination: null, targetTimeoutMs: 1000,
+      helloTimeoutMs: DEFAULTS.helloTimeoutMs, maxPendingBytes: DEFAULTS.maxPendingBytes, onClosed() {},
+    });
+    cleanups.push(() => session.close());
+    expect(() => session.tick(1000)).not.toThrow();
+    // Feed an actual encrypted observation without opening sockets; refuse the client write harmlessly.
+    const ping = factory.serialize(factory.createByName('PING'));
+    new RC4Cipher(RC4_KEYS.serverToClient).cipher(ping);
+    session['receive'](ping, false, session['serverFrames']);
+    expect(session.inject(factory.serialize(factory.createByName('PONG')), false)).toBe(true);
+    expect(later.tick).toHaveBeenCalledOnce();
+    expect(later.observe).toHaveBeenCalledOnce();
+    expect(later.allowWrite).toHaveBeenCalledTimes(2);
+    for (const hook of ['tick', 'observe', 'allowWrite']) {
+      expect(events.some(e => e.type === 'diagnostic' && e.message.includes(`broken.${hook} failed:`))).toBe(true);
+    }
+    expect(events.some(e => e.type === 'fault' || e.type === 'closed')).toBe(false);
+    expect(session['closed']).toBe(false);
+  });
+
   it('confirms only accepted server writes with the rewritten RECONNECT', async () => {
     const written: Packet[] = [];
     const module: WorkerModule = {

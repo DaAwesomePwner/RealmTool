@@ -75,7 +75,7 @@ describe('Auto Drink facade through the RealmTool host', () => {
     for(const value of [null,undefined,true,123,[1,2,3],{},NaN]) {expect(parseSlotPriority(value)).toBeNull();expect(parseExcludedItems(value)).toBeNull();}
   });
   it('loads an existing catalog on registration without enabling the worker',()=>{
-    const f=fixture(); expect(f.loader).toHaveBeenCalledTimes(1); expect(f.config()).toEqual({settings:defaults,items:[item]});
+    const f=fixture(); expect(f.loader).toHaveBeenCalledTimes(1); expect(f.config()).toEqual({settings:defaults,items:[item],gameBuild:'test-build',gameDir:'C:/fixture/game'});
     expect(records.some(r=>r.message==='Loaded 1 verified restorative consumables (game build test-build).')).toBe(true);
     expect(f.buildReader).toHaveBeenCalledExactlyOnceWith('C:/fixture/game');
     expect(f.ctx.gameDir).toBe('C:/fixture/game');

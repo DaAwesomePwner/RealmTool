@@ -1,6 +1,10 @@
 // Adapted from realm-engine-client client/src/proxy/__tests__/autoDrinkWorker.test.ts @ 88a66b2 (MIT, see NOTICE).
 // Harness adapted from RealmTool src/transport/__tests__/session.test.ts.
 import net from 'node:net';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { readGameBuildAsync } from '../../../src/game/gameBuild.ts';
 import { afterEach, expect, it } from 'vitest';
 import { Session, type SessionEnv } from '../../../src/transport/session.ts';
 import { Interest } from '../../../src/transport/interest.ts';
@@ -25,15 +29,16 @@ const swap=(slotId=1_000_000)=>packet('INVENTORYSWAP',{time:2000,position:{x:1.5
 const items=[{type:10,name:'HP',hp:100,mp:0,healingDurationMs:0,quickslot:true},
   {type:11,name:'MP',hp:0,mp:100,healingDurationMs:0,quickslot:true},{type:12,name:'Healing',hp:0,mp:0,healingDurationMs:4000,quickslot:true}];
 
-async function fixture(options:{hp?:number;maxHp?:number;clock?:boolean;settings?:Partial<AutoDrinkSettings>;stats?:ReturnType<typeof stat>[];escapeStub?:boolean}={}){
+async function fixture(options:{hp?:number;maxHp?:number;clock?:boolean;settings?:Partial<AutoDrinkSettings>;stats?:ReturnType<typeof stat>[];escapeStub?:boolean;
+  buildReader?:(dir:string)=>Promise<string>;gameDir?:string;fallback?:boolean}={}){
   let now=1000,tick=0,count=0;
   const events:WorkerEvent[]=[];
   const sessions:Session[]=[];
   const contexts=new Map<string,WorkerSessionContext>();
   const escapeAttempts:boolean[]=[];
-  const module=createAutoDrinkModule();
+  const module=createAutoDrinkModule(options.buildReader ?? (async () => 'test-build'));
   const settings={...DEFAULT_AUTO_DRINK_SETTINGS,enabled:true,...options.settings};
-  module.configure!({settings,items});
+  module.configure!({settings,items,gameBuild:'test-build',gameDir:options.gameDir??'fixture'});
   let observed=0;
   const wrapped:WorkerModule={...module,createSession(ctx){contexts.set(ctx.sessionId,ctx);const hooks=module.createSession(ctx);
     return {...hooks,observe(p,c,n,id){hooks.observe?.(p,c,n,id);++observed;}};}};
@@ -53,11 +58,12 @@ async function fixture(options:{hp?:number;maxHp?:number;clock?:boolean;settings
   env.router=new Router({loopbackPort:port});
   cleanups.push(()=>new Promise<void>(resolve=>{sessions.forEach(s=>s.close());listener.close(()=>resolve());}));
   const server=new FakeServer();await server.listen();cleanups.push(()=>server.close());
+  if(options.fallback){env.fallbackDestination={host:'127.0.0.1',port:server.port};env.targetTimeoutMs=10;}
   async function connect(){
     const peers=server.peers.length,sessionCount=sessions.length;
     const game=await connectGame(port);cleanups.push(()=>game.destroy());game.send(helloBytes(factory,Buffer.alloc(0)));
     await until(()=>sessions.length>sessionCount,'session');const session=sessions.at(-1)!;
-    session.setTarget({host:'127.0.0.1',port:server.port});await until(()=>(server.peers[peers]?.frames.length??0)>0,'HELLO');
+    if(!options.fallback)session.setTarget({host:'127.0.0.1',port:server.port});await until(()=>(server.peers[peers]?.frames.length??0)>0,'HELLO');
     return {game,session,upstream:server.peers[peers],context:contexts.get(session.id)!};
   }
   const first=await connect();
@@ -80,7 +86,7 @@ async function fixture(options:{hp?:number;maxHp?:number;clock?:boolean;settings
     get game(){return game;},get upstream(){return upstream;},get context(){return context;},get session(){return session;},now:()=>now,
     status:()=> (events.filter(e=>e.type==='module'&&e.id===session.id).at(-1) as Extract<WorkerEvent,{type:'module'}>|undefined)?.message as AutoDrinkEvent|undefined,
     stats:(data:ReturnType<typeof stat>[],tickId?:number)=>sendServer(tickPacket(data,tickId)),
-    configure:(change:Partial<AutoDrinkSettings>)=>{Object.assign(settings,change);module.configure!({settings,items});},
+    configure:(change:Partial<AutoDrinkSettings>)=>{Object.assign(settings,change);module.configure!({settings,items,gameBuild:'test-build',gameDir:'fixture'});},
     inject:(bytes:Buffer,toClient=false)=>session.inject(bytes,toClient),
     reconnect:async()=>{
       const peers=server.peers.length;session['connect']({host:'127.0.0.1',port:server.port},helloBytes(factory,Buffer.alloc(0)));
@@ -89,6 +95,45 @@ async function fixture(options:{hp?:number;maxHp?:number;clock?:boolean;settings
     secondClient:async()=>{({game,session,upstream,context}=await connect());await spawn();await clock();},
   };
 }
+
+it.each(['test-build','updated-build'])('checks boot.config independently on fallback routing: %s',async installed=>{
+  const gameDir=mkdtempSync(join(tmpdir(),'realmtool-worker-build-'));
+  cleanups.push(()=>rmSync(gameDir,{recursive:true,force:true}));
+  mkdirSync(join(gameDir,'RotMG Exalt_Data'));
+  writeFileSync(join(gameDir,'RotMG Exalt_Data','boot.config'),`build-guid=${installed}\n`);
+  let readFinished=false;
+  const f=await fixture({gameDir,fallback:true,buildReader:async dir=>{
+    const build=await readGameBuildAsync(dir);readFinished=true;return build;
+  }});
+  await until(()=>readFinished,'worker build read');
+  await f.advance();
+  expect(f.events.some(e=>e.type==='connected')).toBe(true);
+  expect(f.uses()).toHaveLength(installed==='test-build'?1:0);
+  if(installed!=='test-build'){
+    expect(f.status()?.status.reason).toContain('catalog is for game build test-build but the installed game is updated-build');
+    await f.advance(400);expect(f.uses()).toHaveLength(0);
+  }
+});
+
+it('preserves the full manual inventory potion cooldown while a replacement build check is pending',async()=>{
+  let finishRead!: (build: string) => void;
+  const pending = new Promise<string>(resolve => { finishRead = resolve; });
+  let reads = 0;
+  const f = await fixture({hp:900,stats:[stat(12,10)],buildReader:()=>++reads===1?Promise.resolve('test-build'):pending});
+  await f.advance();
+  f.configure({inventoryFallback:true});
+  await f.stats([stat(1,400)]);
+  await f.advance(100);
+  expect(f.uses()).toHaveLength(0);
+  await f.sendClient(packet('USEITEM',{time:2100,slotObject:slot(4),itemUsePos:{x:1.5,y:2.5},useType:1,unknownInt:0}));
+  expect(f.uses()).toHaveLength(1);
+  finishRead('test-build');await Promise.resolve();
+  await f.advance(10);expect(f.uses()).toHaveLength(1);
+  await f.advance(389);expect(f.uses()).toHaveLength(1);
+  await f.advance(1);expect(f.uses()).toHaveLength(2);
+  expect(f.uses()[1].packet.data.slotObject).toEqual(slot());
+  expect(f.uses()[1].packet.data.time-f.uses()[0].packet.data.time).toBe(400);
+});
 
 it('writes one real USEITEM at a time with a 400ms floor; raw maxima ignore boosts and HP is never predicted',async()=>{
   const f=await fixture({hp:354,maxHp:707,settings:{intervalMs:1},stats:[stat(46,500),stat(111,100)]});
@@ -129,7 +174,7 @@ it.each(['forwarded','injected'])('%s manual consumes share the limiter but cont
 });
 it('shares HP/MP cooldown across same-connection MAPINFO, toggles and catalog reloads',async()=>{
   const f=await fixture({settings:{enableMp:true},stats:[stat(117,11,3)]});await f.advance();expect(f.uses()).toHaveLength(1);
-  await f.spawn('Snake Pit');f.configure({enabled:false});f.configure({enabled:true});f.module.configure!({settings:f.settings,items});
+  await f.spawn('Snake Pit');f.configure({enabled:false});f.configure({enabled:true});f.module.configure!({settings:f.settings,items,gameBuild:'test-build',gameDir:'fixture'});
   await f.stats([stat(1,900)]);await f.clock();await f.advance(550);expect(f.uses()).toHaveLength(1);
   await f.clock();await f.stats([]);await f.advance();expect(f.uses()).toHaveLength(2);expect(f.uses()[1].packet.data.slotObject).toEqual(slot(1_000_001,11));
 });
@@ -167,7 +212,7 @@ it('rejects auto-loot swaps on the pending slot before RC4, then releases on sto
   expect(f.wire().filter(p=>p.packet.name==='INVENTORYSWAP').map(p=>p.packet.data.slotObject1.slotId)).toEqual([6,1_000_000,1_000_000]);
   expect(f.wire().every(p=>p.packet.isDefined)).toBe(true);
 });
-it('discards stale injections and unresolved old-generation replies without blocking a new connection',async()=>{
+it('resets the controller and escape latch on a new upstream generation',async()=>{
   // RT preserves game-owned client packets across generations; test controller and latch reset instead.
   const f=await fixture();await f.advance();expect(f.uses()).toHaveLength(1);f.context.automation.latchEscape('old generation');
   await f.advance(200);expect(f.status()?.status.reason).toBe('escape lifecycle');await f.reconnect();await f.advance(200);expect(f.uses()).toHaveLength(2);
