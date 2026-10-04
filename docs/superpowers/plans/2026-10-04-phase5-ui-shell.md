@@ -72,7 +72,7 @@ Each ruling ends with what it costs if it turns out wrong.
 2. **The shell crashes or is killed.** The sidecar and its worker exit (Job Object plus stdin EOF). The game proxy port is freed, and a restart works. Pinned in Tasks 8 and 10.
 3. **The UI is closed or the profile switched while a game is connected.** Plugins flush their profile writes, worker modules get `configure(enabled:false)` on stop, and no half-applied profile is left behind. Pinned in Tasks 2 and 6.
 4. **Packaged resource paths.** In the installed layout, every data file, catalog, the helper DLL and the worker resolve from the resources root, and nothing references `.ts`, `src/` or `node_modules` outside the trimmed Koffi. Pinned in Tasks 1 and 9.
-5. **Plugin settings from the UI.** Invalid values (out of range, wrong type, unknown key, a button on a disabled plugin) are rejected with the plugin's own validation message, and don't change the profile. Accepted changes reach the worker exactly as the CLI path does (for example Collision HP off). Pinned in Tasks 3 and 5.
+5. **Plugin settings from the UI.** Each plugin's own validation decides. Values a plugin clamps (for example Auto Nexus thresholds) are accepted, and the stored value is shown. Values a validator rejects (wrong type, out of range under generic validation), unknown or hidden keys, and a button on a disabled plugin are rejected with the validator's message, and don't change the profile. Accepted changes reach the worker exactly as the CLI path does (for example Collision HP off). Pinned in Tasks 3 and 5.
 
 ---
 
@@ -327,7 +327,7 @@ PluginHost.setEnabled(id: string, enabled: boolean): { ok: true } | { ok: false;
 PluginHost.updateSetting(id: string, key: string, value: unknown): { ok: true } | { ok: false; error: string };
 ```
 - **Behavior:**
-  - `updateSetting` returns the plugin validator's message on rejection, and rejects unknown keys, hidden keys, and buttons while the plugin is disabled.
+  - `updateSetting` follows each plugin's validator: a clamped value is accepted, and the snapshot shows the stored value. It returns the plugin validator's message on rejection, and rejects unknown keys, hidden keys, and buttons while the plugin is disabled.
   - Setting a value goes through the same path as `ctx.updateSetting`, so persistence and worker sync behave as on the CLI.
   - `setEnabled` on a failed plugin → `{ ok: false }`.
 - **Auto Nexus status data:**
