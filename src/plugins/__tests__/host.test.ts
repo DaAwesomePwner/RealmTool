@@ -16,8 +16,101 @@ function quietLogs() { log.setConsole(false); removeSink = log.addSink(r => reco
 const plugin = (id: string, register: (ctx: PluginContext) => void, extra: Partial<PluginDefinition> = {}) =>
   definePlugin({ id, name: id, apiVersion: 1, capabilities: ['packets', 'commands', 'notifications', 'inject'], register, ...extra });
 const decode = (h: Harness, data: Buffer | null, dir: 'client' | 'server') => h.factory.createFromBytes(data!, dir);
+const helloData = () => ({ gameId: -2, buildVersion: 'b', accessToken: 'regression-secret-token', keyTime: -1, key: Buffer.alloc(0), gameNet: 'rotmg', playPlatform: 'rotmg', platformToken: '', userToken: '', clientIdentification: '' });
 
 describe('PluginHost', () => {
+  it.each(['observer', 'hook'] as const)('withholds credentials from HELLO %s errors', kind => {
+    quietLogs();
+    const h = startHost([plugin('p', ctx => {
+      ctx[kind === 'observer' ? 'observePacket' : 'hookPacket']('HELLO', (_c, packet) => {
+        throw new Error(`bad ${packet.data.accessToken}`);
+      });
+    })]);
+    const data = helloData();
+    h.packet(h.connect(), 'HELLO', data, { observeOnly: kind === 'observer' });
+    expect(JSON.stringify(records)).not.toContain(data.accessToken);
+    expect(records.filter(r => r.level === 'error')).toEqual([
+      expect.objectContaining({ module: 'p', message: `HELLO ${kind} failed (details withheld: this packet carries credentials)` }),
+    ]);
+    expect(h.proxy.forwards).toHaveLength(kind === 'observer' ? 0 : 1);
+    h.host.stop();
+  });
+
+  it('withholds credentials in the packet handling catch-all', () => {
+    quietLogs();
+    const h = startHost([plugin('p', ctx => {
+      ctx.observePacket('HELLO', (_c, packet) => {
+        // The next enabled check is outside the callback try/catch.
+        Object.defineProperty(ctx, 'enabled', { get() { throw new Error(`bad ${packet.data.accessToken}`); } });
+      });
+      ctx.hookPacket('HELLO', () => {});
+    })]);
+    const data = helloData();
+    h.packet(h.connect(), 'HELLO', data);
+    expect(JSON.stringify(records)).not.toContain(data.accessToken);
+    expect(records.filter(r => r.level === 'error')).toEqual([
+      expect.objectContaining({ message: 'Packet handling failed (details withheld: this packet carries credentials)' }),
+    ]);
+    expect(h.proxy.forwards).toHaveLength(1);
+    expect(decode(h, h.proxy.forwards[0].data, 'client').data.accessToken).toBe(data.accessToken);
+    h.host.stop();
+  });
+
+  it('withholds credentials on serialization failure and forwards the original', () => {
+    quietLogs();
+    const h = startHost([plugin('p', ctx => ctx.hookPacket('HELLO', (_c, packet) => {
+      packet.modified = true;
+      const token = packet.data.accessToken;
+      Object.defineProperty(packet.data, 'accessToken', { get() { throw new Error(`bad ${token}`); } });
+    }))]);
+    const data = helloData();
+    h.packet(h.connect(), 'HELLO', data);
+    expect(JSON.stringify(records)).not.toContain(data.accessToken);
+    expect(records.filter(r => r.level === 'warn')).toEqual([
+      expect.objectContaining({ message: 'Could not apply a change to HELLO; forwarding the original (details withheld: this packet carries credentials)' }),
+    ]);
+    expect(h.proxy.forwards).toHaveLength(1);
+    expect(decode(h, h.proxy.forwards[0].data, 'client').data.accessToken).toBe(data.accessToken);
+    h.host.stop();
+  });
+
+  it.each([null, undefined, 'invalid'])('loads defaults and later plugins when migration throws %s', error => {
+    quietLogs();
+    vi.spyOn(ProfileStore.prototype, 'load').mockReturnValue({ schemaVersion: 1, plugins: {
+      p: { enabled: true, settings: { n: 3 } },
+    } });
+    const migrate = vi.fn((_saved: unknown, present: boolean) => { if (present) throw error; return { n: 7 }; });
+    const later = vi.fn();
+    const h = startHost([
+      plugin('p', ctx => ctx.registerSetting('n', { label: 'N', type: 'number', value: 1 }), { settings: { migrate } }),
+      plugin('later', ctx => ctx.hookPacket('TEXT', later)),
+    ]);
+    expect(migrate.mock.calls).toEqual([[{ n: 3 }, true], [undefined, false]]);
+    expect(h.host.context('p')!.getSetting('n')).toBe(7);
+    expect(h.host.loaded()).toEqual(['p', 'later']);
+    expect(records.filter(r => r.level === 'warn')).toEqual([
+      expect.objectContaining({ message: `p: saved settings are invalid (${String(error)}); using defaults` }),
+    ]);
+    h.packet(h.connect(), 'TEXT', textData());
+    expect(later).toHaveBeenCalledTimes(1);
+    h.host.stop();
+  });
+
+  it('forwards original bytes when serialization throws null', () => {
+    quietLogs();
+    const h = startHost([plugin('p', ctx => ctx.hookPacket('TEXT', (_c, packet) => {
+      packet.modified = true;
+      vi.spyOn(h.factory, 'serialize').mockImplementation(() => { throw null; });
+    }))]);
+    const verdict = h.packet(h.connect(), 'TEXT', textData())!;
+    expect(h.proxy.forwards).toHaveLength(1);
+    expect(decode(h, verdict.data, 'server').data.text).toBe('hello');
+    expect(records.filter(r => r.level === 'warn')).toEqual([
+      expect.objectContaining({ message: 'Could not apply a change to TEXT; forwarding the original (null)' }),
+    ]);
+    h.host.stop();
+  });
+
   it('sets initial interest before subscribing and refreshes it for late registrations', () => {
     const counts: number[] = [];
     const original = FakeProxy.prototype.setInterest;

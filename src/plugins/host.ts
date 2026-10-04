@@ -12,6 +12,12 @@ import {
 import { IDENTITY_PACKETS, PlayerIdentity } from './identity.ts';
 import { SettingsStore } from './settings.ts';
 
+const CREDENTIAL_PACKETS: ReadonlySet<string> = new Set(['HELLO']);
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export type ProxyLike = Pick<ProxyHost, 'on' | 'off' | 'setInterest' | 'forward' | 'inject'>;
 
 export interface PluginHostOptions {
@@ -258,7 +264,7 @@ export class PluginHost {
       try {
         values = policy.migrate(entry?.settings, entry !== undefined);
       } catch (error) {
-        log.warn('Plugins', `${plugin.name}: saved settings are invalid (${(error as Error).message}); using defaults`);
+        log.warn('Plugins', `${plugin.name}: saved settings are invalid (${describeError(error)}); using defaults`);
         values = policy.migrate(undefined, false);
       }
     }
@@ -351,7 +357,11 @@ export class PluginHost {
       if (event.fromClient && packet.name === 'PLAYERTEXT') this.runCommands(client, packet);
       this.run(this.hooks.get(packet.name), client, packet, 'hook');
     } catch (error) {
-      log.error('Plugins', 'Packet handling failed', error);
+      if (packet && CREDENTIAL_PACKETS.has(packet.name)) {
+        log.error('Plugins', 'Packet handling failed (details withheld: this packet carries credentials)');
+      } else {
+        log.error('Plugins', 'Packet handling failed', error);
+      }
     } finally {
       if (!event.observeOnly) this.proxy.forward(event.id, event.sequence, event.generation, this.verdict(event, packet));
     }
@@ -367,7 +377,13 @@ export class PluginHost {
           ? this.factory.createFromBytes(Buffer.from(packet.rawBytes), this.direction(packet.name))
           : packet;
         fn(client, input);
-      } catch (error) { log.error(plugin.name, `${packet.name} ${kind} failed`, error); }
+      } catch (error) {
+        if (CREDENTIAL_PACKETS.has(packet.name)) {
+          log.error(plugin.name, `${packet.name} ${kind} failed (details withheld: this packet carries credentials)`);
+        } else {
+          log.error(plugin.name, `${packet.name} ${kind} failed`, error);
+        }
+      }
     }
   }
 
@@ -395,7 +411,10 @@ export class PluginHost {
     try {
       return this.factory.serialize(packet);
     } catch (error) {
-      log.warn('Plugins', `Could not apply a change to ${packet.name}; forwarding the original (${(error as Error).message})`);
+      const details = CREDENTIAL_PACKETS.has(packet.name)
+        ? 'details withheld: this packet carries credentials'
+        : describeError(error);
+      log.warn('Plugins', `Could not apply a change to ${packet.name}; forwarding the original (${details})`);
       return event.data;
     }
   }
