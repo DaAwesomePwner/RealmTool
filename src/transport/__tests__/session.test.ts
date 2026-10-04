@@ -198,7 +198,7 @@ describe('Session', () => {
     expect(session['closed']).toBe(false);
   });
 
-  it('prepares a pre-connect queued report once, only on flush, with no preparation observation id', async () => {
+  it('prepares a pre-connect queued report once, only on flush, with its original observation id', async () => {
     let context!: WorkerSessionContext;
     const prepare = vi.fn();
     const outcome = vi.fn();
@@ -211,6 +211,7 @@ describe('Session', () => {
     game.send(helloBytes(factory, Buffer.alloc(0)));
     game.send(factory.serialize(factory.createByName('PLAYERHIT')));
     await until(() => h.all[0]?.['beforeConnect'].length === 1, 'queued before target resolved');
+    const observationId = h.all[0]['beforeConnect'][0].observation!.id;
     expect(prepare).not.toHaveBeenCalled();
     expect(allow).not.toHaveBeenCalled();
     expect(context.writePriority(frame(id('PLAYERHIT')), false)).toBe(false);
@@ -218,7 +219,7 @@ describe('Session', () => {
     const server = await fakeServer();
     h.all[0].setTarget({ host: '127.0.0.1', port: server.port });
     await until(() => server.peers[0]?.frames.length === 2, 'queued report flushed');
-    expect(prepare).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ observationId: null, kind: 'normal' }));
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ observationId, kind: 'normal' }));
     expect(outcome).toHaveBeenCalledExactlyOnceWith(prepare.mock.calls[0][0].token, true, expect.any(Number));
     expect(allow).toHaveBeenCalledOnce();
   });
@@ -321,7 +322,7 @@ describe('Session', () => {
     const queued = session['beforeConnect'][0];
     session['serverReady'] = true;
     // Exercise the queued write's hook isolation without opening an upstream socket.
-    expect(session['write'](queued.data, false, queued.kind, undefined, queued.observation, null, true)).toBe(false);
+    expect(session['write'](queued.data, false, queued.kind, undefined, queued.observation)).toBe(false);
     expect(later.tick).toHaveBeenCalledOnce();
     expect(later.observe).toHaveBeenCalledOnce();
     expect(later.allowWrite).toHaveBeenCalledTimes(2);

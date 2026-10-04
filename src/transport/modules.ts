@@ -41,7 +41,7 @@ export interface PreparedWrite {
   readonly packet: Packet;
   readonly kind: WriteKind;
   readonly now: number;
-  /** The original observation when this is that frame's same-named release; null for injected, priority, renamed or pre-connect-queued frames. */
+  /** The original observation when this is that frame's same-named release; null for injected, priority or renamed frames. */
   readonly observationId: number | null;
   readonly origin: string | null;
 }

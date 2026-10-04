@@ -188,7 +188,7 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
     readonly packet: Packet;
     readonly kind: WriteKind;
     readonly now: number;
-    /** The original observation when this is that frame's same-named release; null for injected, priority, renamed or pre-connect-queued frames. */
+    /** The original observation when this is that frame's same-named release; null for injected, priority or renamed frames. */
     readonly observationId: number | null;
     readonly origin: string | null;
   }
