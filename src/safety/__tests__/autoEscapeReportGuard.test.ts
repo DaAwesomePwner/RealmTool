@@ -34,7 +34,7 @@ function fixture(settings: Partial<SafetySettings> = {}) {
     if (io.observerThrows) throw new Error('external receipt observer');
   });
   engine.connectionChanged(generation);
-  engine.configure({ enabled: true, burstGuard: false, retryCount: 1, ...settings }, now);
+  engine.configure({ enabled: true, preHitPrediction: false, burstGuard: false, retryCount: 1, ...settings }, now);
   const emit = (name: string, data: Record<string, unknown> = {}, fromClient = false) => {
     const packet = factory.createByName(name);
     packet.direction = fromClient ? 'client' : 'server';
@@ -239,4 +239,14 @@ it('an external receipt observer exception cannot prevent synchronous arming', (
   const f = fixture(); f.io.observerThrows = true; f.health(250);
   expect(f.engine.attempts.status).toMatchObject({ phase: 'queued', failure: null });
   expect(f.guard.suppresses(true, 'MOVE')).toBe(true);
+});
+
+it('Collision HP arms the guard synchronously on the threshold-crossing report', () => {
+  const f = fixture({ preHitPrediction: true });
+  f.emit('PLAYERHIT', { objectId: 99, bulletId: 1 }, true);
+  expect(f.guard.suppresses(true, 'PLAYERHIT')).toBe(false);
+  f.emit('PLAYERHIT', { objectId: 99, bulletId: 2 }, true);
+  expect(f.decisions[0]).toMatchObject({ reason: 'predicted HP crosses threshold', confirmedHp: 600, lowerHp: 200 });
+  expect(f.guard.suppresses(true, 'PLAYERHIT')).toBe(true);
+  expect(f.events).toEqual([{ type: 'write', suppressed: false }, { type: 'receipt', suppressed: true }, { type: 'decision', suppressed: true }]);
 });

@@ -161,7 +161,7 @@ describe('Auto Drink facade through the RealmTool host', () => {
     const events: AutoDrinkEvent[] = [];
     const hooks = module.createSession({ sessionId: id, factory: f.factory, automation: new SessionAutomation(),
       generation: () => 7, now: () => 10, writePriority: () => false,
-      transport: () => ({ available: true, backlog: false, upstreamBackpressure: false }), held: () => [],
+      transport: () => ({ available: true, backlog: false, upstreamBackpressure: false }), held: () => [], pendingDelivery: () => [],
       post(message) { events.push(message as AutoDrinkEvent); f.workerMessage(id, 'auto-drink', message); },
     });
     hooks.tick?.(10); expect(f.data().reason).not.toBe('disconnected');

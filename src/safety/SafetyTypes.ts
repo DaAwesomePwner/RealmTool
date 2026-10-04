@@ -1,7 +1,10 @@
 // Adapted from realm-engine-client client/src/safety/SafetyTypes.ts @ 88a66b2 (MIT, see NOTICE).
-/** Server HP threshold only. Collision HP settings are not persisted in this version. */
+import type { HealthPredictor, PredictionState } from './HealthPredictor.ts';
+
+/** Collision HP estimates are optional; explicit server HP remains authoritative. */
 export interface SafetySettings {
   enabled: boolean;
+  preHitPrediction: boolean;
   thresholdPct: number;
   notification: boolean;
   retryCount: number;
@@ -10,7 +13,7 @@ export interface SafetySettings {
 }
 
 /** Accept retired input keys without carrying them into normalized settings. */
-export type SafetySettingsInput = Partial<SafetySettings> & {
+export type SafetySettingsInput = Partial<Omit<SafetySettings, 'preHitPrediction'>> & {
   preHitPrediction?: unknown;
   burstGuard?: unknown;
   instantNexus?: unknown;
@@ -19,16 +22,16 @@ export type SafetySettingsInput = Partial<SafetySettings> & {
 };
 
 export const DEFAULT_SAFETY_SETTINGS: Readonly<SafetySettings> = Object.freeze({
-  enabled: false, thresholdPct: 25, notification: true,
+  enabled: false, preHitPrediction: true, thresholdPct: 25, notification: true,
   retryCount: 4, retryMs: 400, reactionMs: 400,
 });
 
 export function safetySettings(value: SafetySettingsInput): SafetySettings {
-  if (value.preHitPrediction === true) throw new Error('Collision HP is not available in this version');
   const number = (v: unknown, fallback: number, min: number, max: number) =>
     typeof v === 'number' && Number.isFinite(v) ? Math.max(min, Math.min(max, v)) : fallback;
   return {
     enabled: value.enabled === true,
+    preHitPrediction: value.preHitPrediction !== false,
     thresholdPct: number(value.thresholdPct, 25, 0, 100),
     notification: value.notification !== false,
     retryCount: Math.trunc(number(value.retryCount, 4, 0, 10)),
@@ -68,11 +71,11 @@ export interface EscapeAttemptStatus {
 }
 export interface SafetyDecisionEvidence {
   trigger: string;
-  preHitPrediction: false;
+  preHitPrediction: boolean;
   reactionMs: number;
-  pendingCount: 0;
-  pendingDamage: 0;
-  impacts: [];
+  pendingCount: number;
+  pendingDamage: number;
+  impacts: ReturnType<HealthPredictor['evidence']>['impacts'];
 }
 export interface SafetyDecision {
   origin: 'manual' | 'automatic';
@@ -89,6 +92,11 @@ export interface SafetyDecision {
   evidence: SafetyDecisionEvidence;
 }
 export interface SafetyStatus {
+  preHitPrediction: boolean;
+  lowerHp: number | null;
+  prediction: PredictionState | null;
+  projectileDefinitions: number;
+  conditionsKnown: boolean;
   enabled: boolean;
   protectionState: ProtectionState;
   automaticEligible: boolean;

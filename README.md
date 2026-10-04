@@ -1,10 +1,10 @@
 # RealmTool
 
-A lightweight launcher and companion for Realm of the Mad God Exalt. Phase 3a adds worker-owned Auto Nexus and Auto Drink alongside Chat Filter and Server Switch.
+A lightweight launcher and companion for Realm of the Mad God Exalt. Phase 3b adds worker-owned Collision HP to Auto Nexus alongside Auto Drink, Chat Filter and Server Switch.
 
 RealmTool reuses selected, tested pieces of [realm-engine-client](https://github.com/DaAwesomePwner/realm-engine-client) (MIT). It drops the IL2CPP DLL, overlay, account manager, dashboard and 77 MiB of game assets.
 
-**Status:** Phase 3a implementation; not releasable until Collision HP (Phase 3b) and the remaining release gates are complete.
+**Status:** Phase 3b complete: functional release gates done. Phase 5 UI and installer are still required before any release; live smoke testing remains pending.
 
 ## Usage
 
@@ -41,13 +41,17 @@ The profile is created on the first run that changes a setting. If it does not e
 }
 ```
 
-## Auto Nexus and Auto Drink (Phase 3a)
+## Auto Nexus and Auto Drink (Phase 3b)
 
-- **Auto Nexus:** on by default at 25% server HP. `/an [0-100]` shows or changes the threshold, `/nexus` requests a manual Nexus escape, and `/reset` explains that there is no estimated damage to reset in this phase. It uses the server HP threshold only until Collision HP (Phase 3b). **Don't rely on it yet.**
+- **Auto Nexus:** on by default at 25%, with **Collision HP on by default**, including existing profiles without `PreHitPrediction`. It estimates HP from client collision reports in the network worker, with server HP authoritative. `/an [0-100]` shows or changes the threshold, `/nexus` requests a manual Nexus escape, and `/reset` explains that pending loss reconciles from server evidence and cannot be erased by command.
+- **Opt out:** with RealmTool stopped, set `"PreHitPrediction": false` in `plugins.auto-nexus.settings` in the profile. Restart RealmTool; `/an` shows `Collision HP off` and Auto Nexus uses server HP only. Set it to `true` or remove the key to restore the default.
 - **Auto Drink:** off by default; its settings are in the profile. Enable `auto-drink` with `"enabled": true` while RealmTool is stopped. The default HP threshold is 50%, with a minimum 400 ms interval between drinks. Profiles are applied once at startup; restart RealmTool after editing them.
-- **Consumables catalog:** after a game update, run `npm run gen:catalogs` to regenerate `data/catalogs/consumables.json` from the installed game. For an explicit installation, use `npm run gen:catalogs -- --game-dir "C:\path\to\Production"`. Auto Drink only uses a valid catalog whose build stamp matches the installed game, checked at startup and on every new game connection while enabled (and again when enabled).
+- **Catalogs:** with RealmTool stopped after a game update, run `npm run gen:catalogs`. It writes **both** `data/catalogs/consumables.json` and `data/catalogs/safety.json`. For an explicit installation, use `npm run gen:catalogs -- --game-dir "C:\path\to\Production"`. Each plugin checks its catalog against the installed build at startup, on new game connections while enabled, and when enabled.
+- **Safety catalog fallback:** a missing, invalid, unknown-build or out-of-date safety catalog suspends Collision HP and leaves Auto Nexus running on server HP only. It preserves the saved setting, logs a warning, and shows `Collision HP FALLBACK: server HP only (<reason>). Run npm run gen:catalogs and restart RealmTool.` once per game connection. `/an` and decision messages also identify fallback. Regenerate both catalogs and restart to restore Collision HP. Auto Drink independently requires a valid matching consumables catalog.
 
-See the [Phase 3a handoff](docs/handoff/2026-10-04-phase3a-handoff.md) for validation status and the live smoke test.
+Collision HP values are estimates. The server calculates damage independently of client reports; Collision HP and report suppression provide no survival guarantee.
+
+See the [Phase 3b handoff](docs/handoff/2026-10-04-phase3b-handoff.md) for validation status, rulings and the live smoke test.
 
 | Document | What it covers |
 |---|---|

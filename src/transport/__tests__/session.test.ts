@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session, type SessionEnv } from '../session.ts';
 import { Interest } from '../interest.ts';
 import { DEFAULTS, type WorkerEvent } from '../messages.ts';
-import type { WorkerModule, WorkerSessionContext } from '../modules.ts';
+import type { PreparedWrite, WorkerModule, WorkerSessionContext } from '../modules.ts';
 import type { Packet } from '../../protocol/Packet.ts';
 import { Router } from '../../routing/router.ts';
 import { createFactory } from '../../protocol/schema.ts';
@@ -68,6 +68,237 @@ async function connected(h: Harness, server: FakeServer): Promise<{ game: Peer; 
 const packets = (h: Harness) => h.events.filter((e): e is Extract<WorkerEvent, { type: 'packet' }> => e.type === 'packet');
 
 describe('Session', () => {
+  it('drops a newly guarded observation before posting it, then suppresses the next at entry', async () => {
+    let armed = false;
+    const observe = vi.fn(() => { armed = true; });
+    const dropped = vi.fn();
+    const module: WorkerModule = {
+      id: 'guard', priority: 0, observe: { client: ['PLAYERHIT'] },
+      createSession: () => ({ suppressEntry: name => name === 'PLAYERHIT' && armed, observe, dropped }),
+    };
+    const h = await harness({ modules: [module], interest: new Interest({ verdict: { client: ['PLAYERHIT'] } }) });
+    const server = await fakeServer();
+    const { game, upstream } = await connected(h, server);
+    game.send(frame(id('PLAYERHIT')));
+    game.send(frame(id('PLAYERHIT')));
+    game.send(frame(UNKNOWN, Buffer.from('after')));
+    await until(() => upstream.frames.length === 2, 'unguarded following frame');
+    expect(observe).toHaveBeenCalledOnce();
+    expect(dropped).toHaveBeenCalledExactlyOnceWith(expect.any(Number), 'PLAYERHIT', true, expect.any(Number));
+    expect(packets(h)).toEqual([]);
+    expect(upstream.frames[1].subarray(5).toString()).toBe('after');
+  });
+
+  it('exposes awaiting and ready deliveries, excluding drops immediately and old server generations', async () => {
+    let context!: WorkerSessionContext;
+    const module: WorkerModule = { id: 'pending', priority: 0, createSession: ctx => { context = ctx; return {}; } };
+    const h = await harness({ modules: [module], now: () => 123,
+      interest: new Interest({ verdict: { server: ['TEXT'], client: ['PLAYERHIT'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    upstream.send(frame(id('TEXT')));
+    upstream.send(frame(UNKNOWN));
+    upstream.send(frame(id('TEXT')));
+    upstream.send(frame(id('TEXT')));
+    game.send(frame(id('PLAYERHIT')));
+    await until(() => packets(h).length === 4, 'all verdicts held');
+    const texts = packets(h).filter(p => !p.fromClient);
+    session.forward(texts[2].sequence, texts[2].generation, Buffer.from(texts[2].data));
+    expect(context.pendingDelivery().filter(p => !p.fromClient)).toEqual([
+      expect.objectContaining({ name: 'TEXT', receivedAt: 123, generation: 1, state: 'awaiting' }),
+      expect.objectContaining({ name: factory.getPacketName(UNKNOWN, 'server'), state: 'ready' }),
+      expect.objectContaining({ name: 'TEXT', state: 'awaiting' }),
+      expect.objectContaining({ name: 'TEXT', state: 'ready' }),
+    ]);
+    const ids = context.pendingDelivery().map(p => p.observationId);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    session.forward(texts[1].sequence, texts[1].generation, null);
+    expect(context.pendingDelivery()).toHaveLength(4);
+    expect(context.held()).toHaveLength(2); // Only the outstanding TEXT and PLAYERHIT verdicts.
+    const next = await fakeServer();
+    session['connect']({ host: '127.0.0.1', port: next.port }, helloBytes(factory, Buffer.alloc(0)));
+    expect(context.pendingDelivery()).toEqual([expect.objectContaining({ name: 'PLAYERHIT', generation: 1 })]);
+    await until(() => next.peers[0]?.frames.length === 1, 'new generation connected');
+  });
+
+  it('prepares final reports with correlated identities and outcomes before written callbacks', async () => {
+    const prepared: PreparedWrite[] = [];
+    const order: string[] = [];
+    const observed: number[] = [];
+    let context!: WorkerSessionContext;
+    const module: WorkerModule = {
+      id: 'prepare', priority: 0, observe: { client: ['PLAYERHIT'] }, prepare: ['PLAYERHIT', 'AOEACK'], written: ['PLAYERHIT', 'AOEACK'],
+      createSession: ctx => {
+        context = ctx;
+        return {
+          observe: (_p, _c, _n, oid) => { observed.push(oid); },
+          prepareWrite: write => { prepared.push(write); order.push(`prepare:${write.token}`); },
+          writeOutcome: (token, accepted) => { order.push(`outcome:${token}:${accepted}`); },
+          written: (_p, _k, _n, oid) => { order.push(`written:${oid}`); },
+          dropped: oid => { order.push(`dropped:${oid}`); },
+        };
+      },
+    };
+    const h = await harness({ modules: [module], interest: new Interest({ verdict: { client: ['PLAYERHIT'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    const report = factory.serialize(factory.createByName('PLAYERHIT'));
+    for (let i = 0; i < 3; i++) game.send(report);
+    await until(() => packets(h).length === 3, 'reports held');
+    const changed = factory.createByName('PLAYERHIT');
+    changed.data.bulletId = 42;
+    const replacements = [report, factory.serialize(changed), factory.serialize(factory.createByName('AOEACK'))];
+    packets(h).forEach((p, i) => session.forward(p.sequence, p.generation, replacements[i]));
+    expect(session.inject(report, false)).toBe(true);
+    expect(context.writePriority(report, false, undefined, 'prepare')).toBe(true);
+    await until(() => upstream.frames.length === 6, 'five reports accepted');
+    expect(prepared.map(p => [p.packet.name, p.kind, p.observationId, p.origin])).toEqual([
+      ['PLAYERHIT', 'normal', observed[0], null], ['PLAYERHIT', 'normal', observed[1], null],
+      ['AOEACK', 'normal', null, null], ['PLAYERHIT', 'injected', null, null], ['PLAYERHIT', 'priority', null, 'prepare'],
+    ]);
+    expect(prepared[1].packet.data.bulletId).toBe(42);
+    expect(new Set(prepared.map(p => p.token)).size).toBe(5);
+    expect(order).toEqual(prepared.flatMap((p, i) => [
+      ...(i === 2 ? [`dropped:${observed[2]}`] : []),
+      `prepare:${p.token}`, `outcome:${p.token}:true`, `written:${p.observationId}`,
+    ]));
+  });
+
+  it('writes nested priority ESCAPE before vetoing the prepared report without consuming its RC4', async () => {
+    const prepared: PreparedWrite[] = [];
+    const outcomes: unknown[][] = [];
+    let guarded = false;
+    const module: WorkerModule = {
+      id: 'escape', priority: 0, prepare: ['PLAYERHIT', 'ESCAPE'],
+      createSession: context => ({
+        prepareWrite: write => {
+          prepared.push(write);
+          if (write.packet.name === 'PLAYERHIT') {
+            expect(context.writePriority(frame(id('ESCAPE')), false, undefined, 'escape')).toBe(true);
+            guarded = true;
+          }
+        },
+        allowWrite: name => !(guarded && name === 'PLAYERHIT'),
+        writeOutcome: (token, accepted) => { outcomes.push([token, accepted]); },
+      }),
+    };
+    const h = await harness({ modules: [module] });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    game.send(factory.serialize(factory.createByName('PLAYERHIT')));
+    game.send(frame(UNKNOWN, Buffer.from('aligned-upstream')));
+    await until(() => upstream.frames.length === 3, 'ESCAPE and following frame');
+    expect(upstream.frames[1].equals(frame(id('ESCAPE')))).toBe(true);
+    expect(upstream.frames[2].subarray(5).toString()).toBe('aligned-upstream');
+    expect(outcomes).toEqual([[prepared[1].token, true], [prepared[0].token, false]]);
+    expect(prepared[0].token).not.toBe(prepared[1].token);
+    upstream.send(frame(UNKNOWN, Buffer.from('aligned-game')));
+    await until(() => game.frames.length === 1, 'opposite stream still aligned');
+    expect(game.frames[0].subarray(5).toString()).toBe('aligned-game');
+    expect(session['closed']).toBe(false);
+  });
+
+  it('prepares a pre-connect queued report once, only on flush, with its original observation id', async () => {
+    let context!: WorkerSessionContext;
+    const prepare = vi.fn();
+    const outcome = vi.fn();
+    const allow = vi.fn(() => true);
+    const module: WorkerModule = { id: 'queue', priority: 0, prepare: ['PLAYERHIT'],
+      createSession: ctx => { context = ctx; return { prepareWrite: prepare, writeOutcome: outcome, allowWrite: allow }; } };
+    const h = await harness({ modules: [module] });
+    const game = await connectGame(h.port);
+    cleanups.push(() => game.destroy());
+    game.send(helloBytes(factory, Buffer.alloc(0)));
+    game.send(factory.serialize(factory.createByName('PLAYERHIT')));
+    await until(() => h.all[0]?.['beforeConnect'].length === 1, 'queued before target resolved');
+    const observationId = h.all[0]['beforeConnect'][0].observation!.id;
+    expect(prepare).not.toHaveBeenCalled();
+    expect(allow).not.toHaveBeenCalled();
+    expect(context.writePriority(frame(id('PLAYERHIT')), false)).toBe(false);
+    expect(prepare).not.toHaveBeenCalled();
+    const server = await fakeServer();
+    h.all[0].setTarget({ host: '127.0.0.1', port: server.port });
+    await until(() => server.peers[0]?.frames.length === 2, 'queued report flushed');
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ observationId, kind: 'normal' }));
+    expect(outcome).toHaveBeenCalledExactlyOnceWith(prepare.mock.calls[0][0].token, true, expect.any(Number));
+    expect(allow).toHaveBeenCalledOnce();
+  });
+
+  it.each(['socket', 'close', 'veto-close', 'malformed'] as const)('finishes prepared writes on %s and never prepares malformed replacements', async failure => {
+    const prepared = vi.fn();
+    const outcome = vi.fn();
+    const dropped = vi.fn();
+    let session!: Session;
+    const module: WorkerModule = { id: 'failure', priority: 0, observe: { client: ['PLAYERHIT'] }, prepare: ['PLAYERHIT'],
+      createSession: () => ({
+        prepareWrite: write => {
+          prepared(write);
+          if (failure === 'socket') session['server']!.destroy();
+          if (failure === 'close') session.close();
+        },
+        allowWrite: () => { if (failure === 'veto-close') session.close(); return true; },
+        writeOutcome: outcome, dropped,
+      }) };
+    const h = await harness({ modules: [module], interest: new Interest({ verdict: { client: ['PLAYERHIT'] } }) });
+    const server = await fakeServer();
+    const connection = await connected(h, server);
+    session = connection.session;
+    connection.game.send(factory.serialize(factory.createByName('PLAYERHIT')));
+    await until(() => packets(h).length === 1, 'held report');
+    const p = packets(h)[0];
+    session.forward(p.sequence, p.generation, failure === 'malformed' ? Buffer.from([0]) : Buffer.from(p.data));
+    if (failure === 'malformed') {
+      expect(prepared).not.toHaveBeenCalled();
+      expect(outcome).not.toHaveBeenCalled();
+    } else {
+      expect(prepared).toHaveBeenCalledOnce();
+      expect(outcome).toHaveBeenCalledExactlyOnceWith(prepared.mock.calls[0][0].token, false, expect.any(Number));
+    }
+    expect(dropped).toHaveBeenCalledOnce();
+    expect(connection.upstream.frames).toHaveLength(1);
+  });
+
+  it('gives writtenServer the released RECONNECT identity and null for injected or renamed frames', async () => {
+    const observed: number[] = [];
+    const written = vi.fn();
+    const dropped = vi.fn();
+    const module: WorkerModule = { id: 'server-id', priority: 0, observe: { server: ['RECONNECT', 'TEXT'] }, writtenServer: ['RECONNECT'],
+      createSession: () => ({ observe: (_p, _c, _n, oid) => { observed.push(oid); }, writtenServer: written, dropped }) };
+    const h = await harness({ modules: [module], interest: new Interest({ verdict: { server: ['RECONNECT', 'TEXT'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    const reconnect = reconnectBytes(factory, { host: 'localhost', port: server.port, key: Buffer.from('key') });
+    upstream.send(reconnect);
+    upstream.send(frame(id('TEXT')));
+    await until(() => packets(h).length === 2, 'held server frames');
+    packets(h).forEach(p => session.forward(p.sequence, p.generation, reconnect));
+    expect(session.inject(reconnect, true)).toBe(true);
+    await until(() => game.frames.length === 3, 'RECONNECT writes');
+    expect(written.mock.calls.map(c => c[3])).toEqual([observed[0], null, null]);
+    expect(written.mock.calls[0][0].rawBytes.equals(game.frames[0])).toBe(true);
+    expect(dropped).toHaveBeenCalledExactlyOnceWith(observed[1], 'TEXT', false, expect.any(Number));
+  });
+
+  it('isolates throwing preparation and outcome hooks while preserving module priority and outcomes', async () => {
+    const calls: string[] = [];
+    const modules: WorkerModule[] = [2, 1].map(priority => ({
+      id: `prepare-${priority}`, priority, prepare: ['PLAYERHIT'],
+      createSession: () => ({
+        prepareWrite: () => { calls.push(`prepare:${priority}`); if (priority === 1) throw new Error('prepare failure'); },
+        writeOutcome: (_token, accepted) => { calls.push(`outcome:${priority}:${accepted}`); if (priority === 1) throw new Error('outcome failure'); },
+      }),
+    }));
+    const h = await harness({ modules });
+    const server = await fakeServer();
+    const { upstream, session } = await connected(h, server);
+    expect(session.inject(factory.serialize(factory.createByName('PLAYERHIT')), false)).toBe(true);
+    await until(() => upstream.frames.length === 2, 'report despite hook errors');
+    expect(calls).toEqual(['prepare:1', 'prepare:2', 'outcome:1:true', 'outcome:2:true']);
+    for (const hook of ['prepareWrite', 'writeOutcome']) {
+      expect(h.events).toContainEqual(expect.objectContaining({ type: 'diagnostic', message: expect.stringContaining(`prepare-1.${hook} failed:`) }));
+    }
+  });
+
   it.each([null, undefined, 'hook failed', new Error('hook failed'), {}])('isolates tick, observe and allowWrite hooks throwing %s', thrown => {
     const events: WorkerEvent[] = [];
     const later = { tick: vi.fn(), observe: vi.fn(), allowWrite: vi.fn(() => true) };
@@ -87,6 +318,11 @@ describe('Session', () => {
     new RC4Cipher(RC4_KEYS.serverToClient).cipher(ping);
     session['receive'](ping, false, session['serverFrames']);
     expect(session.inject(factory.serialize(factory.createByName('PONG')), false)).toBe(true);
+    expect(later.allowWrite).toHaveBeenCalledOnce(); // Queuing does not reach the final writer.
+    const queued = session['beforeConnect'][0];
+    session['serverReady'] = true;
+    // Exercise the queued write's hook isolation without opening an upstream socket.
+    expect(session['write'](queued.data, false, queued.kind, undefined, queued.observation)).toBe(false);
     expect(later.tick).toHaveBeenCalledOnce();
     expect(later.observe).toHaveBeenCalledOnce();
     expect(later.allowWrite).toHaveBeenCalledTimes(2);
