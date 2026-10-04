@@ -134,9 +134,10 @@ describe('Auto Nexus session adapter', () => {
     h.advance(400); expect(h.order.filter(s => s === 'write:auto-nexus')).toHaveLength(1);
   });
 
-  it('rejects prediction config whole and immediately rechecks retained HP on valid changes', async () => {
-    const h = await harness({ thresholdPct: 20 }); await h.tick(172);
-    expect(() => autoNexusModule.configure!({ settings: { ...config().settings, preHitPrediction: true } })).toThrow(/Collision HP/);
+  it('accepts prediction config, rejects invalid config whole and immediately rechecks retained HP on valid changes', async () => {
+    const h = await harness({ thresholdPct: 20, preHitPrediction: false }); await h.tick(172);
+    expect(() => autoNexusModule.configure!(config({ thresholdPct: 20, preHitPrediction: true }))).not.toThrow();
+    expect(() => autoNexusModule.configure!({ settings: { ...config({ thresholdPct: 25 }).settings, notification: 'invalid' } })).toThrow(/notification must be a boolean/);
     h.advance(200); expect(h.escapes()).toHaveLength(0);
     autoNexusModule.configure!(config({ thresholdPct: 25 }));
     expect(h.order.filter(s => s === 'write:auto-nexus')).toHaveLength(1);
