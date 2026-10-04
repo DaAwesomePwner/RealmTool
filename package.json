@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test",
     "build:helper": "cmd /c native\\helper\\build.cmd",
-    "verify:helper": "node tools/verify-helper.ts"
+    "verify:helper": "node tools/verify-helper.ts",
+    "gen:catalogs": "node tools/gen-catalogs.ts"
   },
   "dependencies": {
     "koffi": "^2.9.0"
