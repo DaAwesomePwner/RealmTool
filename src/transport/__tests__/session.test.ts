@@ -255,6 +255,46 @@ describe('Session', () => {
     expect(h.events.filter(e => e.type === 'diagnostic')).toHaveLength(3);
   });
 
+  it('releases the retry HELLO after the first server frame', async () => {
+    const h = await harness();
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    expect(session['helloForRetry']).not.toBeNull();
+    upstream.send(frame(UNKNOWN));
+    await until(() => game.frames.length === 1, 'first server frame');
+    expect(session['helloForRetry']).toBeNull();
+    expect(session['heldHello']).toBeNull();
+    expect(session['beforeConnect']).toEqual([]);
+    expect(session['helloTimer']).toBeNull();
+    expect(h.sessions.has(session.id)).toBe(true);
+  });
+
+  it.each(['close', 'fault'])('releases the retry HELLO on %s before a server response', async ending => {
+    const h = await harness();
+    const server = await fakeServer();
+    const { game, session } = await connected(h, server);
+    expect(session['helloForRetry']).not.toBeNull();
+    if (ending === 'close') session.close();
+    else game.send(Buffer.alloc(5)); // Invalid frame length faults the session.
+    await until(() => game.closed, 'session closed');
+    expect(session['helloForRetry']).toBeNull();
+    expect(h.events.filter(e => e.type === 'closed')).toEqual([
+      { type: 'closed', id: session.id, by: ending === 'close' ? 'proxy' : 'fault' },
+    ]);
+  });
+
+  it('releases HELLO when closed while waiting for a destination', async () => {
+    const h = await harness({ targetTimeoutMs: 5000 });
+    const game = await connectGame(h.port);
+    cleanups.push(() => game.destroy());
+    game.send(helloBytes(factory, Buffer.alloc(0)));
+    await until(() => !!h.all[0]?.['heldHello'], 'HELLO held for routing');
+    const session = h.all[0];
+    session.close();
+    expect(session['heldHello']).toBeNull();
+    expect(session['helloForRetry']).toBeNull();
+  });
+
   it('runs worker modules before the main thread: entry suppression, observe + priority write, writer veto', async () => {
     const observed: string[] = [];
     const module: WorkerModule = {

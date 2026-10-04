@@ -77,6 +77,7 @@ export class Session {
   private targetTimer: ReturnType<typeof setTimeout> | null = null;
   private sawHello = false;
   private heldHello: Buffer | null = null;
+  private helloForRetry: Buffer | null = null;
   private helloTimer: ReturnType<typeof setTimeout> | null = null;
   private helloAttempt = 0;
   private clientFrames = new FrameDecoder(new RC4Cipher(RC4_KEYS.clientToServer));
@@ -147,6 +148,8 @@ export class Session {
     this.closed = true;
     if (this.targetTimer) clearTimeout(this.targetTimer);
     if (this.helloTimer) clearTimeout(this.helloTimer);
+    this.heldHello = null;
+    this.helloForRetry = null;
     for (const module of this.modules) this.call(module, 'close', () => module.hooks.close?.(), undefined);
     this.client.destroy();
     this.server?.destroy();
@@ -301,6 +304,7 @@ export class Session {
 
   private connect(destination: Destination, hello: Buffer, retry = false): void {
     if (this.closed) return;
+    this.helloForRetry = hello;
     ++this.generation;
     this.serverReady = false;
     this.serverResponded = false;
@@ -332,7 +336,7 @@ export class Session {
         this.fault(new Error(`${label} reset the connection after HELLO (${error.message}); not retrying`));
         return;
       }
-      if (this.serverResponded || this.helloAttempt >= MAX_HELLO_RETRIES) {
+      if (this.serverResponded || !this.helloForRetry || this.helloAttempt >= MAX_HELLO_RETRIES) {
         this.fault(error ?? new Error(`${label} never answered HELLO`));
         return;
       }
@@ -340,20 +344,21 @@ export class Session {
       this.env.post({ type: 'diagnostic', id: this.id, message: `${label} ${error
         ? `connect failed (${error.message})`
         : `did not answer HELLO within ${this.env.helloTimeoutMs} ms`}; retry ${this.helloAttempt}/${MAX_HELLO_RETRIES}` });
-      this.connect(destination, hello, true);
+      this.connect(destination, this.helloForRetry, true);
     };
     server.on('data', data => {
       if (this.closed || this.server !== server) return;
       this.serverResponded = true;
+      this.helloForRetry = null;
       if (this.helloTimer) { clearTimeout(this.helloTimer); this.helloTimer = null; }
       this.receive(data, false, frames);
     });
     server.on('error', error => retryHello(error));
     server.on('close', () => { if (this.server === server) this.close('server'); });
     server.connect(destination.port, destination.host, () => {
-      if (this.closed || this.server !== server) return;
+      if (this.closed || this.server !== server || !this.helloForRetry) return;
       this.serverReady = true;
-      this.writeRaw(hello, false);
+      this.writeRaw(this.helloForRetry, false);
       const queued = this.beforeConnect;
       this.beforeConnect = [];
       this.beforeConnectBytes = 0;
