@@ -94,7 +94,10 @@ export class ProxyHost extends EventEmitter<HostEvents> {
     return started;
   }
 
-  setInterest(interest: InterestSpec): void { this.send({ type: 'interest', interest }); }
+  setInterest(interest: InterestSpec): void {
+    this.options.interest = interest;
+    this.send({ type: 'interest', interest });
+  }
 
   forward(id: string, sequence: number, generation: number, data: Buffer | null): void {
     this.send({ type: 'forward', id, sequence, generation, data });

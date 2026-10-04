@@ -8,6 +8,9 @@ describe('protocol schema', () => {
   const factory = createFactory();
 
   it('knows the packets Phase 1 routes on', () => {
+    expect(factory.getPacketDirection('TEXT')).toBe('server');
+    expect(factory.getPacketDirection('PLAYERTEXT')).toBe('client');
+    expect(factory.getPacketDirection('NOPE')).toBeUndefined();
     expect(factory.getPacketId('HELLO')).toBe(74);
     expect(factory.getPacketId('RECONNECT')).toBe(45);
     expect(factory.getPacketName(45, 'server')).toBe('RECONNECT');

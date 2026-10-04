@@ -234,6 +234,11 @@ export class PacketFactory {
     return this.nameToPacket.get(name)?.id;
   }
 
+  /** Direction of the packet with this name, if defined. */
+  getPacketDirection(name: string): PacketDirection | undefined {
+    return this.nameToPacket.get(name)?.def.direction;
+  }
+
   // ─── Field Reading ──────────────────────────────────────────────
 
   private readFields(reader: PacketReader, fields: FieldDef[]): Record<string, any> {
