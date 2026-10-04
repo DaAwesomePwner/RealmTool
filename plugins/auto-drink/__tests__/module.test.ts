@@ -52,6 +52,16 @@ it('a missing catalog reports no eligible stock and never writes',()=>{
   const f=fixture();f.module.configure!({settings:f.settings,items:[]});f.advance();
   expect(f.events.at(-1)?.status.reason).toBe('no eligible stock');expect(f.write).not.toHaveBeenCalled();
 });
+it('subscribes to accepted RECONNECT writes and disarms without relying on Auto Nexus', () => {
+  const f = fixture();
+  expect(f.module.observe?.server).not.toContain('RECONNECT');
+  expect(f.module.writtenServer).toContain('RECONNECT');
+  f.hooks.writtenServer?.(f.packet('RECONNECT'), 'normal', 0);
+  expect(f.context.automation.escapeLatched()).toBe(false);
+  f.advance();
+  expect(f.write).not.toHaveBeenCalled();
+  expect(f.events.at(-1)?.status.reason).toBe('escape lifecycle');
+});
 it.each(['settings','items','both'])('rejects invalid %s before mutating live or future sessions',part=>{
   const f=fixture();const config={settings:{...f.settings,enabled:false},items:f.items};
   const invalid=part==='settings'?{...config,settings:{...config.settings,enableHp:'false'}}:

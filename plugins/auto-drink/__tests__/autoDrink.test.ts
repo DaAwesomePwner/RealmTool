@@ -86,6 +86,57 @@ describe('Auto Drink facade through the RealmTool host', () => {
     expect(records.map(r => r.message)).toContain('Consumables catalog unavailable: catalog is for game build test-build but the installed game is installed-build; run npm run gen:catalogs');
     expect(records.some(r => r.message.startsWith('Loaded '))).toBe(false);
   });
+  it('rechecks each connection, disables a stale catalog and restores it when the installed build matches again', () => {
+    let build = 'test-build';
+    const f = fixture({ buildReader: () => build });
+    f.ctx.enabled = true;
+    f.status();
+    f.proxy.configured.length = 0;
+    records.length = 0;
+    build = 'updated-build';
+    f.connect('updated');
+    const reason = 'catalog is for game build test-build but the installed game is updated-build; run npm run gen:catalogs';
+    expect(f.config().items).toEqual([]);
+    expect(f.data().reason).toBe(`consumables catalog unavailable: ${reason}`);
+    expect(records.map(r => r.message)).toEqual([`Consumables catalog unavailable: ${reason}`]);
+    f.connect('still-updated');
+    expect(f.proxy.configured).toHaveLength(1);
+    expect(records).toHaveLength(1);
+    build = 'test-build';
+    f.connect('restored');
+    expect(f.config().items).toEqual([item]);
+    expect(f.data().reason).toBe(workerStatus.reason);
+    expect(records.at(-1)?.message).toBe('Loaded 1 verified restorative consumables (game build test-build).');
+    expect(f.loader).toHaveBeenCalledTimes(1);
+  });
+  it('rechecks on enable after a connection arrived while the host gated disabled plugin events', () => {
+    let build = 'test-build';
+    const f = fixture({ buildReader: () => build });
+    build = 'updated-build';
+    f.connect();
+    f.ctx.enabled = true;
+    expect(f.config().items).toEqual([]);
+    expect(f.data().reason).toContain('installed game is updated-build');
+  });
+  it.each([
+    { catalog: { ok: false as const, reason: 'catalog missing' } },
+    { catalog: { ok: false as const, reason: 'invalid catalog' } },
+    { buildReader: () => 'wrong-build' },
+    { gameDir: null },
+    { buildReader: () => { throw new Error('boot.config unreadable'); } },
+  ])('preserves catalog failure in stored and broadcast status through worker replies and toggles: %j', options => {
+    const f = fixture(options);
+    const reason = records.find(r => r.message.startsWith('Consumables catalog unavailable: '))!.message;
+    const expected = reason[0].toLowerCase() + reason.slice(1);
+    expect(f.data().reason).toBe(expected);
+    const broadcast = vi.spyOn(f.ctx, 'broadcastData');
+    for (const enabled of [true, false]) {
+      f.ctx.enabled = enabled;
+      f.status();
+      expect(f.data()).toEqual({ ...workerStatus, reason: expected, clientId: 'connection-a' });
+      expect(broadcast).toHaveBeenLastCalledWith('status', f.data());
+    }
+  });
   it('rejects the catalog when the game directory is unknown without invoking the build reader', () => {
     const f = fixture({ gameDir: null });
     expect(f.config().items).toEqual([]);

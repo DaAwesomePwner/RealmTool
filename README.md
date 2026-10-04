@@ -45,7 +45,7 @@ The profile is created on the first run that changes a setting. If it does not e
 
 - **Auto Nexus:** on by default at 25% server HP. `/an [0-100]` shows or changes the threshold, `/nexus` requests a manual Nexus escape, and `/reset` explains that there is no estimated damage to reset in this phase. It uses the server HP threshold only until Collision HP (Phase 3b). **Don't rely on it yet.**
 - **Auto Drink:** off by default; its settings are in the profile. Enable `auto-drink` with `"enabled": true` while RealmTool is stopped. The default HP threshold is 50%, with a minimum 400 ms interval between drinks. Profiles are applied once at startup; restart RealmTool after editing them.
-- **Consumables catalog:** after a game update, run `npm run gen:catalogs` to regenerate `data/catalogs/consumables.json` from the installed game. For an explicit installation, use `npm run gen:catalogs -- --game-dir "C:\path\to\Production"`. Auto Drink only uses a valid catalog whose build stamp matches the installed game.
+- **Consumables catalog:** after a game update, run `npm run gen:catalogs` to regenerate `data/catalogs/consumables.json` from the installed game. For an explicit installation, use `npm run gen:catalogs -- --game-dir "C:\path\to\Production"`. Auto Drink only uses a valid catalog whose build stamp matches the installed game, checked at startup and on every new game connection while enabled (and again when enabled).
 
 See the [Phase 3a handoff](docs/handoff/2026-10-04-phase3a-handoff.md) for validation status and the live smoke test.
 

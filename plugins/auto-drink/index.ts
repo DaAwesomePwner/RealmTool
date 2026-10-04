@@ -13,14 +13,17 @@ export function register(ctx: PluginContext, loader: () => CatalogLoad = loadCon
   ctx.category = 'automation';
   ctx.enabled = false;
   let disposed = false;
-  const loaded = catalogForInstalledBuild(loader(), ctx.gameDir, buildReader);
-  const items = loaded.ok ? loaded.catalog.items : [];
-  ctx.log(loaded.ok
-    ? `Loaded ${items.length} verified restorative consumables (game build ${loaded.catalog.gameBuild}).`
-    : `Consumables catalog unavailable: ${loaded.reason}`);
+  const catalog = loader();
+  let loaded = catalogForInstalledBuild(catalog, ctx.gameDir, buildReader);
+  function logCatalog(): void {
+    ctx.log(loaded.ok
+      ? `Loaded ${loaded.catalog.items.length} verified restorative consumables (game build ${loaded.catalog.gameBuild}).`
+      : `Consumables catalog unavailable: ${loaded.reason}`);
+  }
+  logCatalog();
   function config(enabled = ctx.enabled) {
     const values = Object.fromEntries(SETTING_DEFS.map(({ key }) => [key, ctx.getSetting(key)]));
-    return validateConfig({ settings: workerSettings(values, enabled), items });
+    return validateConfig({ settings: workerSettings(values, enabled), items: loaded.ok ? loaded.catalog.items : [] });
   }
   function sync(): void { if (!disposed) ctx.worker.configure(config()); }
   for (const { key, ...def } of SETTING_DEFS) {
@@ -30,12 +33,25 @@ export function register(ctx: PluginContext, loader: () => CatalogLoad = loadCon
     enabled: false, state: 'disabled', reason: 'Auto Drink is disabled', hp: null, maxHp: 0,
     slotId: null, itemType: null, lastAttemptAt: null, cooldownRemainingMs: 0, pending: false, epoch: 0, clientId: null,
   };
+  let current = displayed;
   function publish(status: AutoDrinkStatus, clientId: string | null): void {
-    displayed = { ...status, clientId };
+    current = { ...status, clientId };
+    displayed = { ...current, reason: loaded.ok ? status.reason : `consumables catalog unavailable: ${loaded.reason}` };
     ctx.setData('status', displayed);
     ctx.broadcastData('status', displayed);
   }
   publish(displayed, null);
+  function refreshCatalog(): boolean {
+    const next = catalogForInstalledBuild(catalog, ctx.gameDir, buildReader);
+    if (next.ok === loaded.ok && (next.ok || (!loaded.ok && next.reason === loaded.reason))) return false;
+    loaded = next;
+    logCatalog();
+    publish(current, current.clientId);
+    return true;
+  }
+  ctx.on('clientConnected', () => {
+    if (!disposed && refreshCatalog()) sync();
+  });
   const diagnostics = new WeakMap<object, string>();
   const generations = new WeakMap<object, number>();
   ctx.worker.onMessage((client, message) => {
@@ -56,9 +72,11 @@ export function register(ctx: PluginContext, loader: () => CatalogLoad = loadCon
   });
   ctx.onEnabledChange(() => {
     if (disposed) return;
+    // The host gates connection events while disabled; verify before enabling that session too.
+    if (ctx.enabled) refreshCatalog();
     sync();
     if (displayed.enabled === ctx.enabled) return;
-    publish({ ...displayed, enabled: ctx.enabled, state: ctx.enabled ? 'waiting' : 'disabled',
+    publish({ ...current, enabled: ctx.enabled, state: ctx.enabled ? 'waiting' : 'disabled',
       reason: ctx.enabled ? 'Waiting for worker status' : 'Auto Drink is disabled' }, displayed.clientId);
   });
   ctx.registerCleanup(() => { disposed = true; ctx.worker.configure(config(false)); });

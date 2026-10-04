@@ -9,7 +9,7 @@ import type { WorkerModule, WorkerSessionContext } from '../../../src/transport/
 import { Router } from '../../../src/routing/router.ts';
 import { createFactory } from '../../../src/protocol/schema.ts';
 import { connectGame, FakeServer, until, type Peer } from '../../../src/testing/net.ts';
-import { helloBytes } from '../../../src/testing/wire.ts';
+import { helloBytes, reconnectBytes } from '../../../src/testing/wire.ts';
 import { DEFAULT_AUTO_DRINK_SETTINGS, type AutoDrinkSettings } from '../../../src/auto-drink/AutoDrinkTypes.ts';
 import { createAutoDrinkModule } from '../worker.ts';
 import type { AutoDrinkEvent } from '../messages.ts';
@@ -185,6 +185,31 @@ it('uses original server health and quantity only, ignoring injected state and p
   f.session.forward(held.sequence,held.generation,f.tickPacket([stat(1,900)]));await f.advance(200);expect(f.uses()).toHaveLength(1);
   f.inject(f.tickPacket([stat(116,10,2)]),true);await f.advance(450);expect(f.uses()).toHaveLength(1);expect(f.status()?.status).toMatchObject({hp:400,pending:true});
   f.env.interest=new Interest();await f.stats([stat(116,10,2)]);await f.advance();expect(f.uses()).toHaveLength(2);
+});
+it.each(['dropped', 'malformed', 'held', 'accepted'] as const)('only disarms on an accepted written RECONNECT: %s', async outcome => {
+  const f = await fixture();
+  f.env.interest = new Interest({ verdict: { server: ['RECONNECT'] } });
+  f.upstream.send(reconnectBytes(factory, { host: outcome === 'malformed' ? 'invalid/host' : '127.0.0.1', port: 2050, key: Buffer.from([1]) }));
+  await until(() => f.events.some(e => e.type === 'packet' && !e.fromClient), 'held RECONNECT verdict');
+  const held = f.events.find(e => e.type === 'packet' && !e.fromClient) as Extract<WorkerEvent, { type: 'packet' }>;
+  if (outcome === 'held') {
+    f.session.tick(f.now());
+    expect(f.uses()).toHaveLength(0); // Backlog blocks drinking until the verdict resolves.
+    expect(f.status()?.status.reason).not.toBe('escape lifecycle');
+  }
+  f.session.forward(held.sequence, held.generation,
+    outcome === 'dropped' || outcome === 'held' ? null : Buffer.from(held.data));
+  await f.advance();
+  if (outcome === 'accepted') {
+    expect(f.uses()).toHaveLength(0);
+    expect(f.status()?.status.reason).toBe('escape lifecycle');
+    expect(f.game.frames.some(bytes => bytes[4] === factory.getPacketId('RECONNECT'))).toBe(true);
+  } else {
+    expect(f.uses()).toHaveLength(1);
+    expect(f.game.frames.some(bytes => bytes[4] === factory.getPacketId('RECONNECT'))).toBe(false);
+  }
+  expect(f.events.filter(e => e.type === 'diagnostic').map(e => e.message)).toEqual(outcome === 'malformed'
+    ? ['Dropped a malformed RECONNECT; the current route is unchanged'] : []);
 });
 it('bounds ambiguous quantity reservations and recovers after bad stock only when stock actually changes',async()=>{
   const f=await fixture();await f.advance();await f.stats([stat(116,10,-1)]);
