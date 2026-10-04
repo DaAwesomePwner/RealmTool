@@ -113,7 +113,7 @@ describe('ServerDirectory.refresh', () => {
 
   it.each([
     ['non-OK response', () => Promise.resolve(new Response('', { status: 503 })), 'Server list API returned 503'],
-    ['thrown error', () => Promise.reject(new Error('offline')), 'offline'],
+    ['thrown error', () => Promise.reject(new Error('offline')), 'Error'],
     ['empty parse', () => Promise.resolve(new Response('<Servers/>')), 'Server list API returned no servers'],
   ] as const)('retains the last successful list on %s and retries after 60 seconds', async (_label, fail, message) => {
     let now = 0;
@@ -133,15 +133,40 @@ describe('ServerDirectory.refresh', () => {
     expect(directory.list()).toEqual(refreshed);
   });
 
-  it('redacts every occurrence of the token in fetch errors and keeps fallback data', async () => {
-    const token = 'secret-access-token';
-    const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(new Error(`failed ${token} again ${token}`));
+  it('never logs raw or URL-encoded tokens from fetch errors and keeps fallback data', async () => {
+    const token = 'synthetic+token/=';
+    const encodedToken = encodeURIComponent(token);
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async url => {
+      expect(String(url)).toContain(`accessToken=${encodedToken}`);
+      throw new Error(`failed ${url} with token ${token}`);
+    });
     const directory = new ServerDirectory({ fallback, fetch });
     await directory.refresh(token);
     expect(directory.list()).toEqual(fallback);
     expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({ level: 'warn', message: 'Server list refresh failed (failed <token> again <token>); using the last known list' });
-    expect(JSON.stringify(records)).not.toContain(token);
+    expect(records[0]).toMatchObject({ level: 'warn', message: 'Server list refresh failed (Error); using the last known list' });
+    for (const record of records) {
+      const serialized = JSON.stringify(record);
+      expect(serialized).not.toContain(token);
+      expect(serialized).not.toContain(encodedToken);
+      expect(decodeURIComponent(serialized)).not.toContain(token);
+    }
+  });
+
+  it.each([
+    [new TypeError('sensitive request details'), 'TypeError'],
+    [new DOMException('sensitive request details', 'TimeoutError'), 'request timed out'],
+    [new DOMException('sensitive request details', 'AbortError'), 'request timed out'],
+    ['sensitive request details', 'unknown error'],
+    [null, 'unknown error'],
+  ])('logs only a safe reason for failure %#', async (error, reason) => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockRejectedValue(error);
+    const directory = new ServerDirectory({ fallback, fetch });
+    await directory.refresh('token');
+    expect(directory.list()).toEqual(fallback);
+    expect(records).toEqual([expect.objectContaining({
+      level: 'warn', message: `Server list refresh failed (${reason}); using the last known list`,
+    })]);
   });
 
   it('does not fetch without an access token', async () => {

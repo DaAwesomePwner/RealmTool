@@ -8,6 +8,9 @@ const NAME = /^[a-z][a-z\d]{0,63}$/i;
 const SUCCESS_REFRESH_MS = 15 * 60_000;
 const FAILURE_RETRY_MS = 60_000;
 
+// Only locally constructed API failures have messages safe to log.
+class ServerListApiError extends Error {}
+
 export interface ServerEntry { name: string; address: string }
 export type Resolution = { ok: true; name: string; address: string } | { ok: false; message: string };
 
@@ -95,15 +98,19 @@ export class ServerDirectory {
         },
         signal: AbortSignal.timeout(this.timeoutMs),
       });
-      if (!response.ok) throw new Error(`Server list API returned ${response.status}`);
+      if (!response.ok) throw new ServerListApiError(`Server list API returned ${response.status}`);
       const servers = parseServerList(await response.text());
-      if (servers.length === 0) throw new Error('Server list API returned no servers');
+      if (servers.length === 0) throw new ServerListApiError('Server list API returned no servers');
       this.servers = servers;
       this.nextRefreshAt = this.now() + SUCCESS_REFRESH_MS;
       log.info('Server Switch', `Loaded ${servers.length} servers`);
     } catch (error) {
       this.nextRefreshAt = this.now() + FAILURE_RETRY_MS;
-      const message = (error instanceof Error ? error.message : String(error)).split(accessToken).join('<token>');
+      // Fetch errors can include the request URL and encoded access token.
+      const message = error instanceof ServerListApiError ? error.message
+        : error instanceof Error
+          ? error.name === 'TimeoutError' || error.name === 'AbortError' ? 'request timed out' : error.constructor.name
+          : 'unknown error';
       log.warn('Server Switch', `Server list refresh failed (${message}); using the last known list`);
     }
   }
