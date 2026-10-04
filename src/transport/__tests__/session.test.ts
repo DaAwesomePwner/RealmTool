@@ -410,4 +410,21 @@ describe('Session', () => {
     await until(() => game.frames.length === 1, 'passed');
     expect(h.events).toContainEqual(expect.objectContaining({ type: 'diagnostic', message: expect.stringContaining('broken.allowWrite failed: oops') }));
   });
+
+  it('lets the main thread observe the HELLO it routed, read-only', async () => {
+    const h = await harness({ interest: new Interest({ verdict: { client: ['HELLO'] } }) });
+    const server = await fakeServer();
+    const { upstream } = await connected(h, server);
+    const hellos = packets(h).filter(e => e.fromClient && factory.getPacketName(e.data[4], 'client') === 'HELLO');
+    expect(hellos).toHaveLength(1);
+    expect(hellos[0]).toMatchObject({ sequence: 0, observeOnly: true });
+    expect(Buffer.from(hellos[0].data).equals(upstream.frames[0])).toBe(true);
+  });
+
+  it('does not post HELLO when nobody is interested', async () => {
+    const h = await harness();
+    const server = await fakeServer();
+    await connected(h, server);
+    expect(packets(h)).toHaveLength(0);
+  });
 });

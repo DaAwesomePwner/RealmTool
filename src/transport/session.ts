@@ -272,6 +272,10 @@ export class Session {
       return;
     }
     this.env.post({ type: 'routed', id: this.id, host: route.destination.host, port: route.destination.port, restored: route.restored });
+    if (this.env.interest.classify('HELLO', true) !== 'none') {
+      // HELLO is routed by the worker; the main thread may read it (e.g. the access token) but never decide on it.
+      this.env.post({ type: 'packet', id: this.id, sequence: 0, generation: this.generation, fromClient: true, observeOnly: true, data: frame });
+    }
     this.connect(route.destination, route.hello);
   }
 
