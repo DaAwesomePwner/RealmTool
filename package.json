@@ -10,13 +10,15 @@
   "scripts": {
     "start": "node src/cli.ts start",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ui",
     "check": "npm run typecheck && npm test",
     "build:helper": "cmd /c native\\helper\\build.cmd",
     "verify:helper": "node tools/verify-helper.ts",
     "gen:catalogs": "node tools/gen-catalogs.ts",
     "build:backend": "node tools/build-backend.ts",
-    "fetch:node": "node tools/fetch-node.ts"
+    "fetch:node": "node tools/fetch-node.ts",
+    "ui:dev": "vite --config ui/vite.config.ts --configLoader native",
+    "ui:build": "vite build --config ui/vite.config.ts --configLoader native"
   },
   "dependencies": {
     "koffi": "^2.9.0",
