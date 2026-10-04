@@ -251,10 +251,10 @@ Workers in a wave edit disjoint files. T5 starts after T3 merges and may run bes
     deliveryBacklog(value: boolean): void;
     get graceMs(): number;
     snapshot(hp: number, now: number): void;
-    /** Returns false when the id is already active or settled (no double charge). */
-    add(id: string, assessment: LossAssessment, source: ImpactSource, now: number, observationId: number | null): boolean;
-    /** Replace an estimate with server DAMAGE (sets serverSeenAt once; never reopens a settled id). */
-    measure(id: string, amount: number, now: number): void;
+    /** Deduplicates active/settled ids. Returns false only for invalid amounts or capacity faults.
+     * measured replaces an active estimate and sets serverSeenAt once; never reopens a settled id. */
+    impact(id: string, assessment: LossAssessment, now: number, source: ImpactSource,
+      expiresAt?: number, observationId?: number | null, measured?: boolean): boolean;
     delivered(observationId: number | null, now: number, result: 'written' | 'blocked'): void;
     has(id: string): boolean; assessment(id: string): LossAssessment | undefined;
     expire(now: number): void; noteCoverage(reason: string): void;
