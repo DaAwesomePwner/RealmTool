@@ -19,8 +19,10 @@ import { log } from './util/log.ts';
 import { AppController } from './app/controller.ts';
 import { AppConfigStore } from './config/appConfig.ts';
 import { LogRing } from './util/logStore.ts';
+import { runSidecar } from './app/sidecar.ts';
+import { startApiServer } from './api/server.ts';
 
-const COMMANDS = ['start', 'find-game', 'install-helper', 'uninstall-helper', 'config-path', 'help', 'selftest'] as const;
+const COMMANDS = ['start', 'serve', 'find-game', 'install-helper', 'uninstall-helper', 'config-path', 'help', 'selftest'] as const;
 type Command = typeof COMMANDS[number];
 
 export interface CliOptions {
@@ -36,6 +38,7 @@ export const HELP = `Usage: realmtool <command> [options]
 
 Commands:
   start              Start the proxy, install the helper and open the RotMG Exalt Launcher (Ctrl+C to stop)
+  serve              Run the authenticated desktop API and start the proxy without opening the launcher
   find-game          List detected Exalt install folders
   install-helper     Copy the helper DLL into the game folder
   uninstall-helper   Remove the helper DLL and restore any backed-up winhttp.dll
@@ -185,6 +188,20 @@ export async function main(argv: string[]): Promise<number> {
       log.error('Selftest', (error as Error).message);
       return 1;
     } finally { await host.stop(); }
+  }
+  if (options.command === 'serve') {
+    const logs = new LogRing();
+    const detach = log.addSink(record => logs.push(record));
+    try {
+      return await runSidecar({ env: process.env, stdin: process.stdin, stdout: process.stdout,
+        startApi: async (controller, token, origins) => {
+          const api = await startApiServer(controller, logs, { token, origins });
+          // runSidecar writes READY in the promise continuation, before this next turn.
+          const start = setImmediate(() => { void controller.startProxy().catch(() => { /* Controller retains and logs the failure. */ }); });
+          return { port: api.port, close: () => { clearImmediate(start); return api.close(); } };
+        },
+      });
+    } finally { detach(); }
   }
   if (options.command === 'help') {
     console.log(HELP);
