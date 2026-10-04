@@ -55,6 +55,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 export function normalizeProfile(value: unknown): Profile {
   if (!isRecord(value)) throw new Error('profile is not an object');
+  if ('schemaVersion' in value && value.schemaVersion !== PROFILE_SCHEMA_VERSION) {
+    throw new Error('profile.schemaVersion is unsupported');
+  }
   const profile = emptyProfile();
   if (value.plugins === undefined) return profile;
   if (!isRecord(value.plugins)) throw new Error('profile.plugins is not an object');
@@ -122,7 +125,14 @@ export class ProfileStore {
       return emptyProfile();
     }
     try {
-      return normalizeProfile(JSON.parse(text.replace(/^\uFEFF/, '')));
+      const value: unknown = JSON.parse(text.replace(/^\uFEFF/, ''));
+      if (isRecord(value) && typeof value.schemaVersion === 'number'
+        && Number.isInteger(value.schemaVersion) && value.schemaVersion > PROFILE_SCHEMA_VERSION) {
+        this.savingDisabledForSession = true;
+        log.warn('Config', `Profile ${this.path} was written by a newer RealmTool (schema ${value.schemaVersion}); using defaults and not saving settings this session so the file is left untouched`);
+        return emptyProfile();
+      }
+      return normalizeProfile(value);
     } catch (error) {
       const backup = `${this.path}.corrupt-${Date.now()}`;
       try {

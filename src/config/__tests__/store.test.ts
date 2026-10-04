@@ -28,6 +28,65 @@ describe('config store', () => {
     expect(store.savingDisabled).toBe(false);
   });
 
+  it('leaves a newer-schema profile untouched and disables saving', () => {
+    vi.useFakeTimers();
+    const dir = tempDir();
+    const store = new ProfileStore({ dir });
+    mkdirSync(join(dir, 'profiles'), { recursive: true });
+    const bytes = Buffer.from('\uFEFF' + JSON.stringify({ schemaVersion: 2, plugins: { a: { enabled: true } }, future: { x: 1 } }) + '\n');
+    writeFileSync(store.path, bytes);
+    const records: LogRecord[] = [];
+    log.setConsole(false);
+    const remove = log.addSink(r => records.push(r));
+    try {
+      store.scheduleSave(emptyProfile());
+      expect(store.load()).toEqual(emptyProfile());
+      expect(store.savingDisabled).toBe(true);
+      expect(readFileSync(store.path)).toEqual(bytes);
+      expect(readdirSync(join(dir, 'profiles'))).toEqual(['default.json']);
+      store.scheduleSave(emptyProfile());
+      store.flush();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.runAllTimers();
+      expect(readFileSync(store.path)).toEqual(bytes);
+      expect(readdirSync(join(dir, 'profiles'))).toEqual(['default.json']);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        level: 'warn',
+        message: `Profile ${store.path} was written by a newer RealmTool (schema 2); using defaults and not saving settings this session so the file is left untouched`,
+      });
+    } finally { remove(); log.setConsole(true); }
+  });
+
+  it('loads plugin entries when schemaVersion is omitted', () => {
+    const store = new ProfileStore({ dir: tempDir() });
+    const plugins = { a: { enabled: true, settings: { x: 1 } } };
+    writeJsonAtomic(store.path, { plugins });
+    expect(store.load()).toEqual({ schemaVersion: 1, plugins });
+    expect(store.savingDisabled).toBe(false);
+  });
+
+  it.each(['1', 0, -1, 1.5, 2.5, null, true, {}, []])('backs up a profile with invalid schemaVersion %j', schemaVersion => {
+    vi.useFakeTimers();
+    const dir = tempDir();
+    const store = new ProfileStore({ dir });
+    const text = JSON.stringify({ schemaVersion, plugins: { a: { enabled: true } } });
+    mkdirSync(join(dir, 'profiles'), { recursive: true });
+    writeFileSync(store.path, text);
+    const records: LogRecord[] = [];
+    log.setConsole(false);
+    const remove = log.addSink(r => records.push(r));
+    try {
+      expect(store.load()).toEqual(emptyProfile());
+      expect(store.savingDisabled).toBe(false);
+      expect(existsSync(store.path)).toBe(false);
+      const backup = `${store.path}.corrupt-${Date.now()}`;
+      expect(readFileSync(backup, 'utf8')).toBe(text);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ level: 'warn', message: expect.stringContaining('is unreadable') });
+    } finally { remove(); log.setConsole(true); }
+  });
+
   it('disables saving for a locked profile without modifying the file', () => {
     vi.useFakeTimers();
     const fs: ProfileFs = {
