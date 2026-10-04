@@ -3,15 +3,16 @@ import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { syncBuiltinESMExports } from 'node:module';
 import { consumablesFromObjectsXml } from '../catalogs/consumables.ts';
 import { extractXmlTextAssets } from '../catalogs/unityText.ts';
 import { readBuildGuid } from '../../src/game/gameBuild.ts';
-import { generateCatalog } from '../gen-catalogs.ts';
+import { generateCatalog, generateCatalogs } from '../gen-catalogs.ts';
 import { loadConsumables } from '../../src/data/consumables.ts';
 
 const dirs: string[] = [];
 function temp() { const dir = fs.mkdtempSync(join(tmpdir(), 'gen-catalog-')); dirs.push(dir); return dir; }
-afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); syncBuiltinESMExports(); for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 const object = (type: string) => `<Object type='${type}'><Consumable/><Activate amount='20'>Heal</Activate></Object>`;
 
 // Synthetic SerializedFile v22: little-endian metadata, no type tree, two class IDs.
@@ -51,6 +52,47 @@ function serializedFile(entries: { classId: number; text: string }[], typeTree =
 }
 
 describe('catalog generation', () => {
+  it('writes both XML catalogs deterministically, compact safety, and stages both before renaming', () => {
+    const dir = temp(); const objects = join(dir, 'objects.xml'); const tiles = join(dir, 'tiles.xml'); const out = join(dir, 'out');
+    fs.writeFileSync(objects, `<Objects>${object('42')}<Object type='1'><Projectile/></Object></Objects>`);
+    fs.writeFileSync(tiles, '<GroundTypes><Ground type="2"><MaxDamage>10</MaxDamage></Ground></GroundTypes>');
+    const originalRename = fs.renameSync.bind(fs);
+    const rename = vi.spyOn(fs, 'renameSync').mockImplementation((source, destination) => {
+      if (String(destination).endsWith('consumables.json')) {
+        expect(fs.readdirSync(out).filter(name => name.endsWith('.tmp'))).toHaveLength(2);
+      }
+      originalRename(source, destination);
+    });
+    const args = ['--objects', objects, '--tiles', tiles, '--build', 'fixture', '--out-dir', out];
+    const result = generateCatalogs(args);
+    expect(result).toMatchObject({ gameBuild: 'fixture', consumables: { items: 1 }, safety: { projectiles: 1, tiles: 1 } });
+    expect(rename).toHaveBeenCalledTimes(2);
+    const safety = fs.readFileSync(result.safety.path, 'utf8'); const consumables = fs.readFileSync(result.consumables.path, 'utf8');
+    expect(safety).toBe(JSON.stringify(JSON.parse(safety)) + '\n');
+    expect(JSON.parse(safety).source).toEqual({ objectsSha256: createHash('sha256').update(fs.readFileSync(objects)).digest('hex'), tilesSha256: createHash('sha256').update(fs.readFileSync(tiles)).digest('hex') });
+    generateCatalogs(args); expect(fs.readFileSync(result.safety.path, 'utf8')).toBe(safety);
+    for (const invalid of [
+      `<Objects>${object('42')}<Object type='1'><Projectile id='256'/></Object></Objects>`,
+      `<Objects>${object('42')}${object('42').replace("'20'", "'30'")}</Objects>`,
+    ]) {
+      fs.writeFileSync(objects, invalid); expect(() => generateCatalogs(args)).toThrow();
+      expect(fs.readFileSync(result.safety.path, 'utf8')).toBe(safety);
+      expect(fs.readFileSync(result.consumables.path, 'utf8')).toBe(consumables);
+      expect(fs.readdirSync(out).sort()).toEqual(['consumables.json', 'safety.json']);
+    }
+  });
+  it('reads the install once per asset and build file when generating both catalogs', () => {
+    const dir = temp(); const data = join(dir, 'RotMG Exalt_Data'); fs.mkdirSync(data);
+    fs.writeFileSync(join(data, 'boot.config'), 'build-guid=fixture-guid');
+    fs.writeFileSync(join(data, 'resources.assets'), serializedFile([
+      { classId: 49, text: `<?xml version="1.0"?><Objects>${object('42')}<Object type='1'><Projectile/></Object></Objects>` },
+      { classId: 49, text: '<?xml version="1.0"?><GroundTypes><Ground type="2"><MinDamage>1</MinDamage></Ground></GroundTypes>' },
+    ]));
+    const read = vi.spyOn(fs, 'readFileSync');
+    syncBuiltinESMExports();
+    expect(generateCatalogs(['--game-dir', dir, '--out-dir', join(dir, 'out')])).toMatchObject({ gameBuild: 'fixture-guid', safety: { projectiles: 1, tiles: 1 } });
+    for (const name of ['resources.assets', 'boot.config']) expect(read.mock.calls.filter(([path]) => path === join(data, name))).toHaveLength(1);
+  });
   it('treats decimal and hex types and single-quoted attributes equivalently', () => {
     expect(consumablesFromObjectsXml(`<Objects>${object('42')}</Objects>`))
       .toEqual(consumablesFromObjectsXml(`<Objects>${object('0x2a')}</Objects>`));
