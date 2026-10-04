@@ -1,3 +1,4 @@
+// Ported from realm-engine-client client/src/plugins/PluginContext.ts @ 88a66b2 (MIT, see NOTICE).
 import type { Packet } from '../protocol/Packet.ts';
 
 export interface SettingOption {
@@ -5,7 +6,7 @@ export interface SettingOption {
   value: string;
 }
 
-/** Copied from realm-engine-client client/src/plugins/PluginContext.ts @ 88a66b2 (MIT, see NOTICE). */
+/** Declares one plugin setting and how a UI renders it. */
 export interface SettingDef {
   key: string;
   label: string;

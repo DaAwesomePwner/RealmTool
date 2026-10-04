@@ -73,7 +73,11 @@ export class SettingsStore {
     }
     this.values.set(key, next);
     this.fire(key, next);
-    this.onChange?.();
+    try {
+      this.onChange?.();
+    } catch (error) {
+      log.error('Settings', 'Settings change listener failed', error);
+    }
     return true;
   }
 

@@ -74,6 +74,24 @@ describe('SettingsStore', () => {
     }
   });
 
+  it('keeps accepted updates and logs errors when the store change listener throws', () => {
+    log.setConsole(false);
+    const records: LogRecord[] = [];
+    const remove = log.addSink(record => records.push(record));
+    try {
+      const store = new SettingsStore(undefined, () => { throw new Error('listener boom'); });
+      store.register('a', { label: 'A', type: 'boolean', value: false });
+      expect(store.update('a', true)).toBe(true);
+      expect(store.get('a')).toBe(true);
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ level: 'error', module: 'Settings' });
+      expect(records[0].message).toMatch(/^Settings change listener failed: .*listener boom/s);
+    } finally {
+      remove();
+      log.setConsole(true);
+    }
+  });
+
   it('rejects duplicate registration', () => {
     const store = new SettingsStore();
     store.register('a', { label: 'A', type: 'boolean', value: false });
