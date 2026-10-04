@@ -8,7 +8,7 @@
     "devUrl": "http://localhost:5173"
   },
   "app": {
-    "windows": [{ "title": "RealmTool", "width": 1100, "height": 760, "minWidth": 820, "minHeight": 560 }],
+    "windows": [{ "label": "main", "create": false, "title": "RealmTool", "width": 1100, "height": 760, "minWidth": 820, "minHeight": 560 }],
     "security": { "csp": "default-src 'self'; connect-src http://127.0.0.1:* ws://127.0.0.1:*; img-src 'self' data:; style-src 'self'; script-src 'self'" }
   },
   "bundle": {
