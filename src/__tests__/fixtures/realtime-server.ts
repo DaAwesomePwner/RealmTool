@@ -7,6 +7,7 @@ import { createFactory } from '../../protocol/schema.ts';
 // The server must keep receiving while a PluginHost hook blocks the test thread.
 const port = parentPort!;
 const escapes = new BigInt64Array(workerData.escapeTimes);
+const hitCounts = new Int32Array(workerData.hitCounts);
 const factory = createFactory();
 let peer: Peer | undefined;
 let escapeCount = 0;
@@ -16,6 +17,10 @@ const server = net.createServer(socket => {
   socket.on('data', () => {
     for (const bytes of peer!.frames.slice(received)) {
       const at = process.hrtime.bigint();
+      if (bytes[4] === factory.getPacketId('PLAYERHIT')) {
+        const hit = factory.createFromBytes(bytes, 'client');
+        Atomics.add(hitCounts, Number(hit.data.bulletId), 1);
+      }
       if (bytes[4] === factory.getPacketId('ESCAPE')) {
         if (escapeCount < escapes.length) Atomics.store(escapes, escapeCount, at);
         escapeCount++;
