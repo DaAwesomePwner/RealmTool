@@ -94,13 +94,16 @@ plugins/auto-nexus/
 - **Standard plugins** (`main` only) run on the main thread through `register(ctx)`. They can hook packets with verdicts (pass/drop/modify), observe packets, register chat commands, inject packets, send in-game notifications, declare a typed settings schema, publish status for the UI, and use monotonic timers. Chat Filter, O3 Helper and (later) Anti-AFK are standard plugins.
 - **Realtime plugins** also ship a `worker` module that is **bundled into the network worker at build time** (built-in only; user plugins can't add worker code). The `main` half and the `worker` half talk over a typed per-plugin message channel. Auto Nexus and Auto Drink are realtime plugins. Worker modules run in a fixed priority order (Auto Nexus = 0, Auto Drink = 10), so ESCAPE is always written before anything else sees the packet.
 - **Capabilities** in the manifest gate what the context exposes (e.g. only plugins declaring `input` get `ctx.input.pulse()`), which keeps future plugins honest and makes reviews easy.
-- **User plugins** (Phase 6) are `.mjs` folders with the same manifest in `%APPDATA%\RealmTool\plugins\`, loaded at startup; hot reload is dev-only. They are trusted code with no sandbox, and the docs say so.
+- **User plugins** (**deferred until RealmTool is shared**) are planned as `.mjs` folders with the same manifest in `%APPDATA%\RealmTool\plugins\`, loaded at startup; hot reload is dev-only. They are trusted code with no sandbox, and the docs say so.
 - Settings migration/validation lives **in each plugin's definition** (`settings.migrate`, `settings.validate`), not in host `if (pluginId === …)` branches.
 
 ### 2.3 Data
 
-- `data/packet-definitions.json` + `data/stat-types.json` — canonical, copied from Realm Engine, with a drift check script.
-- `data/catalogs/consumables.json` (Auto Drink) and `data/catalogs/safety.json` (Auto Nexus Collision HP: projectiles + damaging tiles) are **generated** by `tools/gen-catalogs.ts` from the game's `objects.xml`/`tiles.xml`. Each records the game build it came from. The runtime never parses XML. `npm run gen:catalogs` regenerates both catalogs from the local install (`refresh-data` remains Phase 6). Missing, invalid, unknown-build or mismatched safety metadata suspends Collision HP: Auto Nexus falls back to server HP only without changing the saved setting, logs a warning, and sends the in-game `Collision HP FALLBACK` notice once per new game connection. `/an` and decision messages show fallback and its reason. Regenerate the catalogs and restart RealmTool; stale metadata never reaches the engine.
+- `data/packet-definitions.json` + `data/stat-types.json` — canonical, copied from Realm Engine. The upstream research records packet generation/drift checks; no standalone drift-check script is shipped here. Local schema/round-trip tests run under `npm run check`; see the [patch-day checklist](patch-day.md).
+- `data/catalogs/consumables.json` (Auto Drink) and `data/catalogs/safety.json` (Auto Nexus Collision HP: projectiles + damaging tiles) are **generated** by `src/catalogs/generate.ts` from XML TextAssets in the local game's `resources.assets`. Extraction and rules live in `src/catalogs/unityText.ts`, `consumables.ts` and `safety.ts`; validators remain in `src/data/consumables.ts` and `safety.ts`. Each catalog records its `gameBuild`. `npm run gen:catalogs` regenerates both bundled catalogs for a release through the thin `tools/gen-catalogs.ts` CLI and `tools/catalogs/*.ts` re-export wrappers.
+- **`refresh-data`** checks at proxy start, every 60 seconds while the proxy runs, and on each new game session. Data is stale if either catalog selected by the loaders is missing, invalid or for another build, or if the app-data catalogs' `source.json` fingerprint is missing or mismatched. `src/data/catalogSource.ts` handles the fingerprint: game build plus size/mtime of `RotMG Exalt_Data/resources.assets` and `boot.config`. A matching bundled catalog needs no fingerprint.
+- Automatic refresh waits until both game files have been unchanged for 60 seconds; `[Data] Game files are still changing; waiting to refresh` is logged once per build, without a failure. Proxy start does not wait for a not-yet-quiet update; the 60-second poll picks it up. Known-stale data is withdrawn before refresh: Auto Nexus uses server HP only without changing the saved setting and reports `Collision HP FALLBACK`; Auto Drink is unavailable. A child process regenerates both catalogs into `%APPDATA%\RealmTool\data\catalogs\`, keeping XML parsing outside the network worker. After extraction it re-checks the build and both files' size/mtime; a change fails with `game files changed during refresh; retrying later` and publishes nothing. `source.json` is published last; success reloads both plugins live without dropping the connection. Measured on the owner's machine: about 16 seconds, with output byte-identical to bundled catalogs for the same build.
+- Refresh logs are `[Data] Game build changed (<old> → <new>); refreshing catalogs…`, or `[Data] Refreshing catalogs for build <b>…` for an unchanged build (fingerprint mismatch or manual refresh); success logs `[Data] Catalogs refreshed for build <b> (<n> items, <p> projectiles, <t> tiles, <ms> ms)`. `[Data] Refresh failed: <reason>` appears at most once per five-minute failure window; automatic retries wait five minutes. Manual refresh bypasses both that wait and the quiet period: **Refresh game data** in the readiness area, `POST /api/refresh-data`, or `realmtool refresh-data [--game-dir <dir>] [--out-dir <dir>]` (dev: `node src/cli.ts refresh-data`). The CLI defaults to `%APPDATA%\RealmTool\data\catalogs\` and prints one JSON result line. See the [patch-day checklist](patch-day.md) for failures that need a code change and release.
 - O3 constants (Oryx 45363, guardians 8701–8703, Dammah 9635, shield stat 125) move into `plugins/o3-helper/constants.ts`, with a patch-day checklist entry.
 
 ### 2.4 Persistence
@@ -110,12 +113,12 @@ One directory: `%APPDATA%\RealmTool\`
 ```
 config.json            app config (game dir, launch options, active profile, schemaVersion)
 profiles/<name>.json   { schemaVersion, plugins: { <id>: { enabled, settings } } }
-plugins/               user plugins (Phase 6)
+plugins/               user plugins (deferred until RealmTool is shared)
 data/                  refreshed catalogs (override bundled)
 logs/realmtool.log     rotating, bounded
 ```
 
-All writes are atomic (temp file → fsync → rename) and keep a `.corrupt-<ts>` copy if parsing fails. A one-time importer (Phase 6) reads `Documents/Realmengine/configs/*.json` for the five plugins only. It never imports accounts or credentials.
+All writes are atomic (temp file → fsync → rename) and keep a `.corrupt-<ts>` copy if parsing fails. The one-time Realm Engine profile importer is **dropped**, not planned.
 
 ## 3. Behavior that must be preserved (from FORK.md)
 
@@ -165,7 +168,7 @@ Each phase ends with working, tested software. **Release gate:** Phases 1, 2, 3a
 | 3c | **O3 Helper (post-release addition)** | Not part of the first release. Ported after release, once everything else is wired up, with its two known bugs fixed (coin-branch early return skipping Dammah; no active-coin exception) and dedicated tests. Then a live test in Oryx's Sanctuary confirms that withholding `ENEMYHIT` actually prevents damage during shield, coin and Dammah phases, since the server may calculate enemy hits itself | Server-side hit calculation may make withholding ineffective |
 | 4 | **Anti-AFK (deferred, optional)** | First attempt: out-of-process `PostMessageW` click to the game window found by PID (no injection). Fallback only if needed: helper v2 with a WndProc subclass + pipe. Then the Anti-AFK plugin | Does the game accept out-of-process input? Needs live validation |
 | 5 | **UI shell + packaging — done** | Tauri 2 app: plugin cards with schema-rendered settings, launch, readiness, log, profiles; per-user installer; installed size verified at 95.65 MiB | Live smoke test pending; WebView2 availability |
-| 6 | **User plugins + polish** | `.mjs` user plugins, plugin dev guide + example, Realm Engine profile importer, `refresh-data`, patch-day checklist | — |
+| 6 | **Patch-day resilience + diagnostics** | `refresh-data` + patch-day checklist + **Server Messages** observe-only built-in (implemented: server system messages and disconnect idle times); user plugins **deferred until RealmTool is shared**; Realm Engine importer **dropped** | In progress |
 
 ## 6. Decisions made (with defaults) — confirm or override
 
