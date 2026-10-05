@@ -93,7 +93,7 @@ async function smoke(): Promise<void> {
     const plugins = await request<PluginSnapshot[]>('/api/plugins');
     if (portFree) {
       assert.equal(state.game.helper.state, 'installed');
-      assert.equal(plugins.length, 5);
+      assert.equal(plugins.length, 6);
       assert.ok(plugins.every(plugin => plugin.failed === null), 'A built-in failed to load');
     } else {
       assert.equal(state.proxy.state, 'failed');
@@ -104,7 +104,7 @@ async function smoke(): Promise<void> {
     await waitFor(() => exited, 'sidecar exit');
     assert.equal(await exit, 0);
     assert.equal(output.trim().split(/\r?\n/).length, 1, 'Unexpected stdout beyond READY');
-    console.log(portFree ? 'package smoke ok: fake game, running proxy, five built-ins, clean shutdown'
+    console.log(portFree ? 'package smoke ok: fake game, running proxy, six built-ins, clean shutdown'
       : 'package API smoke ok: fake game, expected port conflict, no plugins, clean shutdown');
   } finally {
     if (!exited) {
