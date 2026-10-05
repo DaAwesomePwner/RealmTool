@@ -3,6 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProfileStore } from '../config/store.ts';
+import type { GameInputSource } from '../input/gameInput.ts';
 import type { PluginDefinition } from '../plugins/api.ts';
 import { PluginHost, type ProxyLike } from '../plugins/host.ts';
 import type { PacketFactory } from '../protocol/PacketFactory.ts';
@@ -29,19 +30,19 @@ export class FakeProxy extends EventEmitter<HostEvents> {
 
 export interface PacketOptions { observeOnly?: boolean }
 
-export function startHost(definitions: readonly PluginDefinition[], options: { profileDir?: string; factory?: PacketFactory; gameDir?: string | null } = {}) {
+export function startHost(definitions: readonly PluginDefinition[], options: { profileDir?: string; factory?: PacketFactory; gameDir?: string | null; input?: GameInputSource | null } = {}) {
   const proxy = new FakeProxy();
   const factory = options.factory ?? createFactory();
   const profileDir = options.profileDir ?? mkdtempSync(join(tmpdir(), 'realmtool-plugins-'));
   const profile = new ProfileStore({ dir: profileDir, debounceMs: 0 });
   // EventEmitter's fluent on/off return this; Pick<ProxyHost> retains ProxyHost's
   // return type. The host uses only the seven methods implemented by this fake.
-  const host = new PluginHost({ proxy: proxy as unknown as ProxyLike, factory, definitions, profile, gameDir: options.gameDir });
+  const host = new PluginHost({ proxy: proxy as unknown as ProxyLike, factory, definitions, profile, gameDir: options.gameDir, input: options.input });
   host.start();
   let sequence = 0;
   return {
     host, proxy, factory, profile, profileDir,
-    connect(id = 'c1'): string { proxy.emit('session', { id, remotePort: 50000 }); return id; },
+    connect(id = 'c1', remotePort = 50000): string { proxy.emit('session', { id, remotePort }); return id; },
     route(id: string, server: string, port = 2050): void { proxy.emit('routed', { id, host: server, port, restored: false }); },
     close(id: string): void { proxy.emit('closed', { id, by: 'game' }); },
     workerMessage(id: string, moduleId: string, message: unknown): void { proxy.emit('module', { id, moduleId, message }); },
