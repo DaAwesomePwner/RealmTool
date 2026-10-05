@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import chatFilter from '../index.ts';
 import { evaluate } from '../engine.ts';
+import { advertisingText, readableText } from '../normalize.ts';
 import { compileSettings, DEFAULTS, normalizeChatProfile } from '../settings.ts';
 import { SenderState } from '../sender-state.ts';
 import { definePlugin } from '../../../src/plugins/api.ts';
@@ -307,6 +308,74 @@ describe('Modular chat filter through the real settings and packet adapter', () 
     // Profile entries are keyed by plugin id; reloading cannot create duplicate instances.
     expect(f.h.host.loaded()).toEqual(['chat-filter']);
     expect(records.filter(record => record.level === 'warn')).toHaveLength(1);
+  });
+});
+
+describe('Chat advertising evasion regressions', () => {
+  const ad = 'NNSN Enchanted Deca hp/loot for 0.20 ==realmshop (d0t)info== SSN Decas 0.99';
+  const settings = compileSettings(DEFAULTS);
+  const decide = (text: string, state = new SenderState(() => 0), name = 'PROCRAZY') =>
+    evaluate({ name, text, recipient: '', numStars: 20 }, 'me', settings, state);
+
+  it.each(['(d0t)', '[d0t]', '{d0t}', '( dot )', '(DOT)'])('folds %s only for advertising', dot => {
+    expect(advertisingText(`example ${dot} info`)).toBe('example (dot) info');
+    expect(readableText(`example ${dot} info`)).toBe(`example ${dot.toLowerCase()} info`);
+    expect(advertisingText('what does d0t or dot mean')).toBe('what does d0t or dot mean');
+    expect(decide(ad.replace('(d0t)', dot) + ' 666')).toMatchObject({ action: 'block', reason: 'advertising', ruleId: 'realmshop' });
+  });
+
+  it.each(['==realmshop (dot)info==', '===realmshop info===', '== realmshop(d0t)info =='])('blocks banner %s', text => {
+    expect(decide(text)).toMatchObject({ action: 'block', reason: 'advertising', ruleId: 'realmshop' });
+  });
+
+  it.each(['com', 'net', 'info', 'gg', 'org', 'shop', 'store'])('recognizes known-shop domain suffix %s', tld => {
+    for (const separator of ['.', '(d0t)', '[d0t]', '{d0t}', ' ', '']) {
+      expect(decide(`realmshop${separator}${tld}`)).toMatchObject({ action: 'block', reason: 'advertising', ruleId: 'realmshop' });
+      expect(decide(`realm stock${separator}${tld}`).action).toBe('block');
+    }
+    expect(decide(`realmshop ${tld}munity`).action).toBe('allow');
+  });
+
+  it.each(['r2realm.shop', 'r2realm shop', 'r2realmshop'])('checks evidence for overlapping campaign names: %s', text => {
+    expect(decide(text)).toMatchObject({ action: 'block', reason: 'advertising', ruleId: 'r2realm' });
+  });
+
+  it.each(['0.20', '0.99', '12.49'])('requires a known shop for bare price %s', price => {
+    expect(decide(`realmshop ${price}`)).toMatchObject({ action: 'block', reason: 'advertising', ruleId: 'realmshop' });
+    expect(decide(`deca ${price}`).action).toBe('allow');
+  });
+
+  it('keeps scam warnings with sales words blocked', () => {
+    expect(decide('realmshop is a scam dont buy')).toMatchObject({ action: 'block', reason: 'advertising', ruleId: 'realmshop' });
+  });
+
+  it('blocks all three changing-counter advertisements', () => {
+    const state = new SenderState(() => 0);
+    for (const counter of [666, 667, 668]) {
+      expect(decide(`${ad} ${counter}`, state)).toMatchObject({ action: 'block', reason: 'advertising', ruleId: 'realmshop' });
+    }
+  });
+
+  it.each([['666', '667', '668'], ['<666>', '<667>', '<668>']])('counts ordinary repeats with counters %s / %s / %s', (a, b, c) => {
+    let now = 0;
+    const state = new SenderState(() => now);
+    expect(decide(`oryx up ${a}`, state).action).toBe('allow');
+    expect(decide(`oryx up ${b}`, state).action).toBe('allow');
+    expect(decide(`oryx up ${c}`, state).reason).toBe('repetition');
+    expect(decide(`oryx up ${c}`, state, 'OtherPlayer').action).toBe('allow');
+    now = (DEFAULTS.repeatWindowSeconds + 1) * 1000;
+    expect(decide(`oryx up ${c}`, state).action).toBe('allow');
+  });
+
+  it.each([
+    'anyone doing shatts?', 'oryx 3 in 2 min, 0.99 chance we fail lol',
+    'patch 4.2.0 is out, anyone know if the loot boost is still on?',
+    'my hp is at 0.20 of max lmao', 'trading my deca for 2 life', 'pots for sale? jk',
+    'event at USWest 3 realm Lich', 'gg', 'thanks for the run', 'need healing please',
+    'where is the portal?', 'anyone have a spare pot?', 'meet at nexus', 'nice white bag',
+    'the bandit camp (dot) is on the map', 'brb 2.50 min', 'what does d0t mean', 'info pls',
+  ])('allows ordinary chat: %s', text => {
+    expect(decide(text)).toMatchObject({ action: 'allow', reason: 'no-match' });
   });
 });
 

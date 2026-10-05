@@ -26,7 +26,7 @@ export function evaluate(data: Record<string, unknown>, self: string, settings: 
   // high-confidence advertising evidence when advertiser tracking is enabled.
   const advertising = decision.reason === 'advertising' || (settings.autoMute && settings.advertising
     && decision.reason === 'custom-word' && views.some(view => advertisingRule(view) !== null));
-  const fingerprints = advertising ? views.map(v => v.replace(/\s+(?:\d{3,}|<\d+>)$/, '')) : views;
+  const fingerprints = views.map(v => v.replace(/\s+(?:\d{3,}|<\d+>)$/, ''));
   if (settings.repetition || (settings.autoMute && advertising)) {
     const repeated = state.record(sender, fingerprints, advertising, settings);
     if (decision.action === 'allow' && settings.repetition && repeated) return block('repetition');

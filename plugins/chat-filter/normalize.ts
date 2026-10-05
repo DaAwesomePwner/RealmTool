@@ -13,7 +13,8 @@ export function readableText(text: string): string {
 export function advertisingText(text: string): string {
   const pairs: Record<string, string> = { а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'i' };
   return readableText(text).replace(/[аеорсухі]/g, c => pairs[c]!)
-    .replace(/rea[!1|]m\s*shop/g, 'realmshop');
+    .replace(/rea[!1|]m\s*shop/g, 'realmshop')
+    .replace(/\(\s*d[o0]t\s*\)|\[\s*d[o0]t\s*\]|\{\s*d[o0]t\s*\}/g, '(dot)');
 }
 
 export function textViews(data: Record<string, unknown>): string[] {
