@@ -129,4 +129,3 @@ export function generateCatalogs(args: string[], settings: { writeSource?: boole
   return { consumables: { path: outputs[0].path, bytes: consumablesBytes, items: consumables.items.length },
     safety: { path: outputs[1].path, bytes: safetyBytes, projectiles: safety.projectiles.length, tiles: safety.tiles.length }, gameBuild };
 }
-

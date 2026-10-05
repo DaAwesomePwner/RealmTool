@@ -33,4 +33,3 @@ export function serializedFile(entries: { classId: number; text: string }[], typ
   header.writeBigUInt64BE(BigInt(48 + meta.length), 32);
   return Buffer.concat([header, meta, ...data]);
 }
-
