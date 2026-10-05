@@ -60,7 +60,7 @@ export function createAutoDrinkModule(buildReader: (gameDir: string) => Promise<
             const installed = await buildReader(next.gameDir!);
             if (closed || token !== verification) return;
             if (installed !== next.gameBuild) {
-              catalogReason = `catalog is for game build ${next.gameBuild} but the installed game is ${installed}; run npm run gen:catalogs`;
+              catalogReason = `catalog is for game build ${next.gameBuild} but the installed game is ${installed}; RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log`;
               return;
             }
             catalogReason = '';

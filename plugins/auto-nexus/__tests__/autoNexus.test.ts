@@ -36,6 +36,27 @@ function fixture(settings?: Record<string, unknown>, enabled?: boolean, loaded =
 const status = () => new SafetyEngine(() => {}).status();
 
 describe('Auto Nexus UI status', () => {
+  it('disarms stale data immediately and only restores Collision HP after a verified reload', () => {
+    const f = fixture(); f.h.host.notifyDataInvalidated('game files changed');
+    expect(f.h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalog: null, catalogState: { state: 'fallback' } });
+    f.ctx.enabled = false; f.ctx.enabled = true; f.h.connect('another');
+    expect(f.h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalog: null });
+    f.h.host.notifyDataRefreshed();
+    expect(f.h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalogState: ready });
+  });
+  it('reloads fallback into ready without reconnecting and preserves it on failure', () => {
+    let loaded: SafetyCatalogLoad = { ok: false, reason: 'missing' };
+    const dir = mkdtempSync(join(tmpdir(), 'realmtool-reload-'));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const h = startHost([{ ...plugin, register: ctx => register(ctx, () => loaded, () => 'A') }], { profileDir: dir, gameDir: 'fixture' });
+    cleanups.push(() => h.host.stop()); h.connect();
+    expect(h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalogState: { state: 'fallback' } });
+    loaded = catalog; h.host.notifyDataRefreshed();
+    expect(h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalog: catalog.ok ? catalog.catalog : null, catalogState: ready });
+    const count = h.proxy.configured.length;
+    loaded = { ok: false, reason: 'invalid replacement' }; h.host.notifyDataRefreshed();
+    expect(h.proxy.configured).toHaveLength(count);
+  });
   it('publishes only the sanitized fresh status shape', () => {
     vi.spyOn(performance, 'now').mockReturnValue(1000);
     const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');
@@ -222,7 +243,7 @@ describe('Collision HP facade', () => {
     expect(f.h.proxy.injected).toHaveLength(0);
     sendStatus(f, 'fallback', f.client, 'missing', 42);
     expect(f.h.proxy.injected).toHaveLength(1);
-    expect(f.reply().text).toBe('Collision HP FALLBACK: server HP only (missing). Run npm run gen:catalogs and restart RealmTool.');
+    expect(f.reply().text).toBe('Collision HP FALLBACK: server HP only (missing). RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log.');
     sendStatus(f, 'fallback', f.client, 'missing', 42);
     sendStatus(f, 'fallback', f.client, 'missing', 42);
     expect(f.h.proxy.injected).toHaveLength(1);
@@ -255,12 +276,12 @@ describe('Collision HP facade', () => {
   it('rechecks changes on connection and enable, restores catalog, and suppresses obsolete notices', () => {
     let build = 'A'; const f = fixture(undefined, true, catalog, () => build);
     build = 'B'; const other = f.h.connect('other');
-    const reason = 'catalog is for game build A but the installed game is B; run npm run gen:catalogs';
+    const reason = 'catalog is for game build A but the installed game is B; RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log';
     expect(f.h.proxy.configured.at(-1)).toMatchObject({ 'auto-nexus': { catalog: null, catalogState: { state: 'fallback', reason } } });
     expect(f.h.proxy.injected).toHaveLength(0);
     sendStatus(f, 'fallback', other, reason); sendStatus(f, 'fallback', other, reason);
     expect(f.h.proxy.injected).toHaveLength(1);
-    expect(f.reply().text).toBe(`Collision HP FALLBACK: server HP only (${reason}). Run npm run gen:catalogs and restart RealmTool.`);
+    expect(f.reply().text).toBe(`Collision HP FALLBACK: server HP only (${reason}). RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log.`);
     build = 'A'; const restored = f.h.connect('restored');
     expect(f.h.proxy.configured.at(-1)).toMatchObject({ 'auto-nexus': { catalogState: ready } });
     sendStatus(f, 'fallback', restored, reason); sendStatus(f, 'on', restored);

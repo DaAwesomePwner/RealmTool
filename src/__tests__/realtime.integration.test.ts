@@ -361,7 +361,7 @@ describe('Collision HP through the encrypted worker', () => {
 
   it('notifies missing-catalog fallback, forwards reports, retains server HP and Auto Drink', async () => {
     const f = await fixture({ drink: true, missingSafety: true });
-    await until(() => f.notifications().some(t => t.includes('Collision HP FALLBACK: server HP only (safety catalog not found). Run npm run gen:catalogs and restart RealmTool.')), 'fallback notice');
+    await until(() => f.notifications().some(t => t.includes('Collision HP FALLBACK: server HP only (safety catalog not found). RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log.')), 'fallback notice');
     await f.setHp(400);
     await until(() => f.wire('USEITEM').length === 1, 'drink unaffected by safety catalog');
     f.game.send(hit());

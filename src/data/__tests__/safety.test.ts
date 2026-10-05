@@ -17,6 +17,34 @@ function setup() {
 }
 afterEach(() => { vi.restoreAllMocks(); for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 describe('safety catalog JSON boundary', () => {
+  it('rejects stale appdata before plugin configuration, while accepting a verified replacement', () => {
+    const options = setup(), out = join(options.appDataDir, 'data/catalogs'), gameDir = join(options.appDataDir, 'game');
+    const data = join(gameDir, 'RotMG Exalt_Data'); fs.mkdirSync(data, { recursive: true }); fs.mkdirSync(out, { recursive: true });
+    fs.writeFileSync(join(data, 'resources.assets'), 'assets'); fs.writeFileSync(join(data, 'boot.config'), 'build');
+    fs.writeFileSync(join(out, 'safety.json'), JSON.stringify(fixture()));
+    const selected = { ...options, gameDir, gameBuild: fixture().gameBuild };
+    expect(loadSafetyCatalog(selected)).toMatchObject({ ok: false });
+    const stamp = (name: string) => { const { size, mtimeMs } = fs.statSync(join(data, name)); return { size, mtimeMs }; };
+    const source = { schemaVersion: 1, gameBuild: fixture().gameBuild, resourcesAssets: stamp('resources.assets'), bootConfig: stamp('boot.config') };
+    fs.writeFileSync(join(out, 'source.json'), JSON.stringify(source));
+    expect(loadSafetyCatalog(selected)).toMatchObject({ ok: true });
+    fs.utimesSync(join(data, 'resources.assets'), new Date(), new Date(source.resourcesAssets.mtimeMs + 2000));
+    expect(loadSafetyCatalog(selected)).toMatchObject({ ok: false });
+    fs.writeFileSync(options.bundledPath, JSON.stringify(fixture()));
+    expect(loadSafetyCatalog(selected)).toMatchObject({ ok: true, path: options.bundledPath });
+  });
+  it('prefers a matching bundle over stale or invalid overrides, then matching overrides', () => {
+    const options = setup();
+    const dir = join(options.appDataDir, 'data/catalogs'); fs.mkdirSync(dir, { recursive: true });
+    const path = join(dir, 'safety.json');
+    fs.writeFileSync(options.bundledPath, JSON.stringify(fixture()));
+    fs.writeFileSync(path, JSON.stringify({ ...fixture(), gameBuild: 'old' }));
+    expect(loadSafetyCatalog({ ...options, gameBuild: 'fixture' })).toMatchObject({ ok: true, path: options.bundledPath });
+    fs.writeFileSync(path, '{bad');
+    expect(loadSafetyCatalog({ ...options, gameBuild: 'fixture' })).toMatchObject({ ok: true, path: options.bundledPath });
+    fs.writeFileSync(path, JSON.stringify(fixture()));
+    expect(loadSafetyCatalog({ ...options, gameBuild: 'fixture' })).toMatchObject({ ok: true, path });
+  });
   it('validates the bundle and enforces the individual and total byte budgets', () => {
     const safety = fs.readFileSync(new URL('../../../data/catalogs/safety.json', import.meta.url));
     const consumables = fs.readFileSync(new URL('../../../data/catalogs/consumables.json', import.meta.url));

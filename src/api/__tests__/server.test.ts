@@ -20,12 +20,14 @@ import { startApiServer } from '../server.ts';
 const token = 'a'.repeat(43), origin = 'http://tauri.localhost';
 function fakeController() {
   const state: AppState = {
+    data: { state: 'idle', gameBuild: null, catalogBuild: null, lastResult: null, error: null },
     proxy: { state: 'stopped', port: null, error: null },
     game: { dir: null, candidates: [], launcher: null, helper: { state: 'unknown', backup: false } },
     sessions: { open: 0, connected: 0 }, profile: { active: 'default', available: ['default'] }, operation: null, revision: 0,
   };
   return Object.assign(new EventEmitter(), {
     state: vi.fn(() => state), plugins: vi.fn(() => []),
+    refreshData: vi.fn(async () => ({ gameBuild: 'fixture', items: 1, projectiles: 2, tiles: 3, ms: 4 })),
     startProxy: vi.fn(async () => {}), stopProxy: vi.fn(async () => {}), launchGame: vi.fn(async () => {}),
     installHelper: vi.fn(async () => ({ status: 'installed', target: 'private path', backedUp: false })),
     uninstallHelper: vi.fn(async () => 'removed'), setGameDir: vi.fn(async (_dir: string) => {}),
@@ -93,6 +95,17 @@ describe('loopback API', () => {
     });
   }
 
+  it('authenticates refresh-data and returns results and failures', async () => {
+    expect((await http('/api/refresh-data', 'POST', {}, { Authorization: undefined })).status).toBe(401);
+    expect(controller.refreshData).not.toHaveBeenCalled();
+    expect((await http('/api/refresh-data', 'GET')).status).toBe(405);
+    expect((await http('/api/refresh-data', 'POST', { unexpected: true })).status).toBe(400);
+    const response = await http('/api/refresh-data', 'POST', {});
+    expect(response.status).toBe(200); expect(response.body).toEqual({ gameBuild: 'fixture', items: 1, projectiles: 2, tiles: 3, ms: 4 });
+    controller.refreshData.mockRejectedValueOnce(new Error('fixture extraction failed'));
+    const failure = await http('/api/refresh-data', 'POST', {});
+    expect(failure.status).toBe(400); expect(failure.body).toEqual({ error: 'fixture extraction failed' });
+  });
   it.each([
     ['missing token', {}, { Authorization: undefined }, 401],
     ['wrong token', {}, { Authorization: `Bearer ${'b'.repeat(43)}` }, 401],
