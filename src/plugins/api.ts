@@ -1,5 +1,7 @@
 // Ported from realm-engine-client client/src/plugins/PluginContext.ts @ 88a66b2 (MIT, see NOTICE).
 import type { Packet } from '../protocol/Packet.ts';
+import type { PulseResult } from '../input/gameInput.ts';
+export type { PulseResult } from '../input/gameInput.ts';
 
 export interface SettingOption {
   label: string;
@@ -29,7 +31,7 @@ export interface SettingDef {
 }
 
 /** What a plugin may do. Context methods throw when a plugin uses a capability it didn't declare. */
-export type Capability = 'packets' | 'commands' | 'notifications' | 'inject' | 'worker';
+export type Capability = 'packets' | 'commands' | 'notifications' | 'inject' | 'worker' | 'input';
 
 export const PLUGIN_API_VERSION = 1;
 
@@ -66,12 +68,19 @@ export interface WorkerChannel {
   onMessage(handler: (client: ClientConnection, message: unknown) => void): void;
 }
 
+export interface InputApi {
+  /** One down/up pulse to this session's own game window. Never throws. */
+  pulse(client: ClientConnection): Promise<PulseResult>;
+}
+
 export interface PluginContext {
   readonly pluginId: string;
   /** Resolved Exalt installation directory, or null when unavailable. */
   readonly gameDir: string | null;
   /** Throws unless the plugin declares the worker capability. */
   readonly worker: WorkerChannel;
+  /** Throws unless the plugin declares the input capability. */
+  readonly input: InputApi;
   name: string;
   category: string;
   /** Setting this always notifies onEnabledChange listeners, even if the value is unchanged. */
