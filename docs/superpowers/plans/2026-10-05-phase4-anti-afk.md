@@ -2,14 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** An opt-in Anti-AFK built-in keeps Exalt from closing its own connection after ~20 minutes without input. After the player has been inactive for a configurable time (default 5 minutes), it posts one harmless input pulse to that session's game window from RealmTool's process. There's no injection and the helper DLL is unchanged.
+**Goal:** An opt-in Anti-AFK built-in keeps Exalt from closing its own connection after ~20 minutes without input. After the player has been inactive for a configurable time (default 5 minutes), it posts one left click to that session's game window from RealmTool's process. There's no injection and the helper DLL is unchanged.
 
 **Architecture:** Three layers, one per task.
 1. **Native input module** (`src/input/`): find the session's game window and post a pulse through koffi `user32`, behind an injectable source.
 2. **Plugin-host `input` capability:** `ctx.input.pulse(client)` resolves the session's game process through the existing TCP-owner lookup, verifies it, and calls the input module.
 3. **`anti-afk` plugin:** a main-thread inactivity detector over client packets that requests a pulse.
 
-**Tech Stack:** Node ≥ 22.18 native TypeScript, Vitest 3, koffi (already a runtime dependency), Win32 `user32` (`FindWindowExW`, `GetWindowThreadProcessId`, `IsWindowVisible`, `IsIconic`, `GetClientRect`, `ClientToScreen`, `GetCursorPos`, `PostMessageW`, `MapVirtualKeyW`). No new dependencies.
+**Tech Stack:** Node ≥ 22.18 native TypeScript, Vitest 3, koffi (already a runtime dependency), Win32 `user32` (`FindWindowExW`, `GetWindowThreadProcessId`, `IsWindowVisible`, `IsIconic`, `GetClientRect`, `ClientToScreen`, `GetCursorPos`, `PostMessageW`). No new dependencies.
 
 **Spec:** [`docs/design.md`](../../design.md) §2.1 (Anti-AFK input), §2.2 (capabilities), §5 row 4.
 
@@ -37,11 +37,7 @@ Source for porting: realm-engine-client `88a66b2` (`REC`), `client/plugins/anti-
 
 ## Rulings
 
-- **P4-1 Pulse method.** Task 0 decides between two methods. Both are implemented; the plugin uses `DEFAULT_METHOD`.
-  - `key`: `WM_KEYDOWN`/`WM_KEYUP` of `VK_F15` (0x7E). Exalt doesn't bind it by default, and it has no aiming or UI side effects. **Preferred** if Task 0 shows it resets the idle timer.
-  - `click`: the verified left click, used **with the cursor guard (P4-2)**.
-
-  Task 0's outcome sets `DEFAULT_METHOD` in Task 3, and the method is also an advanced setting. *If wrong:* `key` silently fails to keep the player online. Task 0 exists to rule that out before shipping.
+- **P4-1 Pulse method: left click.** Task 0 (2026-10-05) tested an `F15` key press (`WM_KEYDOWN`/`WM_KEYUP`, `VK_F15`) posted every 5 minutes. It did **not** reset the idle timer: the session closed 20 m 1 s after its last real input, with four F15 presses in that window. The verified left click (`WM_LBUTTONDOWN` `MK_LBUTTON`, 32 ms, `WM_LBUTTONUP`) is the only method, always with the cursor guard (P4-2). There's no method setting. *If wrong:* clicks stop resetting the timer after a game update; the live acceptance check and the session-end idle line would show it.
 - **P4-2 Cursor guard (click only).** A click is posted only when the cursor is outside the game window's client rectangle, or inside its central safe box: the middle 50% of width and height, where the character and play area are. Otherwise the pulse is skipped with reason `cursor-over-game-ui`. *If wrong:* a click still lands on UI near the center (for example an open trade window). Skipping costs nothing beyond a missed pulse; the next one comes `idleMinutes` later.
 - **P4-3 Inactivity, not just stationarity.** The idle window resets on these:
   - a changed final MOVE position;
@@ -55,7 +51,7 @@ Source for porting: realm-engine-client `88a66b2` (`REC`), `client/plugins/anti-
 
 ## Review Focus
 
-1. **Cursor over the game's UI in click mode:** never click. Skip with `cursor-over-game-ui` (Task 1 test).
+1. **Cursor over the game's UI:** never click. Skip with `cursor-over-game-ui` (Task 1 test).
 2. **PID reuse or a restarted game:** a session whose process creation time changed must never be pulsed (`process-changed`; Task 2 test).
 3. **Two Exalt clients running:** only the window owned by the session's PID is pulsed, never another client's window (Task 1 test).
 4. **Stationary but active player** (shooting, chatting, inventory): no pulse (Task 3 test).
@@ -63,13 +59,11 @@ Source for porting: realm-engine-client `88a66b2` (`REC`), `client/plugins/anti-
 
 ---
 
-### Task 0: Live gate — pulse method (coordinator with the user; no code merged)
+### Task 0: Live gate — pulse method (done, 2026-10-05)
 
-**Files:** none in the repo. The coordinator extends the throwaway `%TEMP%\realmtool-afk-click.ps1` with a `-Key` mode that posts `WM_KEYDOWN`/`WM_KEYUP` for `VK_F15`. `lParam` is `1 | scan << 16` for down and `1 | scan << 16 | 1 << 30 | 1 << 31` for up, with `scan = MapVirtualKey(0x7E, 0)`.
-
-- [ ] **Step 1:** With the user standing in the Nexus, game in the background and no input, post `F15` every 5 minutes for 30 minutes. Success: still connected after 25+ minutes without input (check the Server Messages session-end line when they leave).
-- [ ] **Step 2:** If Step 1 fails, `DEFAULT_METHOD = 'click'`. If it succeeds, `DEFAULT_METHOD = 'key'`. Record it in this plan under P4-1 and in the Task 3 brief.
-- [ ] **Step 3 (optional, 1 min):** with the game minimized, post one click and ask the user whether the character shot after restoring. Record the result under P4-4.
+- [x] **F15 key press:** posted every 5 minutes with the game in the background. Failed: the session closed 20 m 1 s after the last real input.
+- [x] **Left click:** posted every 5 minutes with the game in the background. Passed: connected ~35 minutes with no real input (earlier the same day).
+- [ ] **Optional, 1 min, before Task 3 ships:** with the game minimized, post one click and ask the user whether the character shot after restoring. Record the result under P4-4.
 
 ---
 
@@ -85,7 +79,6 @@ Source for porting: realm-engine-client `88a66b2` (`REC`), `client/plugins/anti-
 - Produces (later tasks rely on these exact names):
 
 ```ts
-export type PulseMethod = 'key' | 'click';
 export interface ScreenRect { left: number; top: number; right: number; bottom: number }
 export interface GameWindow { handle: unknown; minimized: boolean; client: ScreenRect }
 export interface GameInputSource {
@@ -95,15 +88,13 @@ export interface GameInputSource {
   findGameWindow(pid: number): GameWindow | null;
   cursor(): { x: number; y: number } | null;
   post(handle: unknown, message: number, wParam: number, lParam: number): boolean;
-  scanCode(virtualKey: number): number;
 }
 export type PulseResult =
-  | { ok: true; method: PulseMethod; minimized: boolean }
+  | { ok: true; minimized: boolean }
   | { ok: false; reason: 'unavailable' | 'no-process' | 'process-changed' | 'no-window' | 'cursor-over-game-ui' | 'post-failed' };
 export const PULSE_GAP_MS = 32;
-export const VK_F15 = 0x7e;
-/** Posts one matched down/up pair; never moves the cursor. */
-export function pulseGameWindow(window: GameWindow, method: PulseMethod, source: GameInputSource,
+/** Posts one matched left-button down/up pair; never moves the cursor. */
+export function pulseGameWindow(window: GameWindow, source: GameInputSource,
   wait?: (ms: number) => Promise<void>): Promise<PulseResult>;
 export function insideSafeBox(client: ScreenRect, cursor: { x: number; y: number }): boolean;
 /** Lazily loaded Win32 source; null with `win32GameInputError()` set when koffi/user32 can't load. */
@@ -115,7 +106,7 @@ export function win32GameInputError(): string | null;             // in win32Gam
 
 ```ts
 import { expect, it } from 'vitest';
-import { insideSafeBox, pulseGameWindow, VK_F15, type GameInputSource, type GameWindow } from '../gameInput.ts';
+import { insideSafeBox, pulseGameWindow, type GameInputSource, type GameWindow } from '../gameInput.ts';
 
 function fake(overrides: Partial<GameInputSource> = {}) {
   const posts: Array<[number, number, number]> = [];
@@ -124,7 +115,6 @@ function fake(overrides: Partial<GameInputSource> = {}) {
     findGameWindow: () => window,
     cursor: () => ({ x: 5000, y: 5000 }),
     post: (_h, m, w, l) => { posts.push([m, w, l]); return true; },
-    scanCode: () => 0x66,
     ...overrides,
   };
   return { source, posts };
@@ -132,52 +122,46 @@ function fake(overrides: Partial<GameInputSource> = {}) {
 const window: GameWindow = { handle: {}, minimized: false, client: { left: 0, top: 0, right: 3440, bottom: 1440 } };
 const noWait = async () => {};
 
-it('key pulse posts F15 down then up with scan-code lParams', async () => {
-  const { source, posts } = fake();
-  expect(await pulseGameWindow(window, 'key', source, noWait)).toEqual({ ok: true, method: 'key', minimized: false });
-  expect(posts).toEqual([[0x100, VK_F15, 1 | (0x66 << 16)], [0x101, VK_F15, (1 | (0x66 << 16) | (1 << 30) | (1 << 31)) >>> 0]]);
-});
-
 it('click pulse posts left down/up when the cursor is outside the game window', async () => {
   const { source, posts } = fake();
-  expect(await pulseGameWindow(window, 'click', source, noWait)).toMatchObject({ ok: true, method: 'click' });
+  expect(await pulseGameWindow(window, source, noWait)).toEqual({ ok: true, minimized: false });
   expect(posts).toEqual([[0x201, 1, 1], [0x202, 0, 1]]);
 });
 
 it('click pulse is skipped when the cursor is over game UI, and allowed in the central safe box', async () => {
   const edge = fake({ cursor: () => ({ x: 3400, y: 700 }) });
-  expect(await pulseGameWindow(window, 'click', edge.source, noWait)).toEqual({ ok: false, reason: 'cursor-over-game-ui' });
+  expect(await pulseGameWindow(window, edge.source, noWait)).toEqual({ ok: false, reason: 'cursor-over-game-ui' });
   expect(edge.posts).toEqual([]);
   const center = fake({ cursor: () => ({ x: 1720, y: 720 }) });
-  expect((await pulseGameWindow(window, 'click', center.source, noWait)).ok).toBe(true);
+  expect((await pulseGameWindow(window, center.source, noWait)).ok).toBe(true);
   expect(insideSafeBox(window.client, { x: 860, y: 360 })).toBe(true);    // exactly at 25%/25%
   expect(insideSafeBox(window.client, { x: 859, y: 360 })).toBe(false);
 });
 
 it('click pulse with an unknown cursor position is skipped', async () => {
   const { source, posts } = fake({ cursor: () => null });
-  expect(await pulseGameWindow(window, 'click', source, noWait)).toEqual({ ok: false, reason: 'cursor-over-game-ui' });
+  expect(await pulseGameWindow(window, source, noWait)).toEqual({ ok: false, reason: 'cursor-over-game-ui' });
   expect(posts).toEqual([]);
 });
 
 it('a failed down post sends nothing else; a failed up post still reports post-failed', async () => {
   const downFails = fake({ post: () => false });
-  expect(await pulseGameWindow(window, 'key', downFails.source, noWait)).toEqual({ ok: false, reason: 'post-failed' });
+  expect(await pulseGameWindow(window, downFails.source, noWait)).toEqual({ ok: false, reason: 'post-failed' });
   let n = 0;
   const upFails = fake({ post: () => ++n === 1 });
-  expect(await pulseGameWindow(window, 'key', upFails.source, noWait)).toEqual({ ok: false, reason: 'post-failed' });
+  expect(await pulseGameWindow(window, upFails.source, noWait)).toEqual({ ok: false, reason: 'post-failed' });
   expect(n).toBe(2);   // the up was attempted after a successful down
 });
 
 it('reports minimized windows but still pulses (P4-4)', async () => {
   const { source } = fake();
-  expect(await pulseGameWindow({ ...window, minimized: true }, 'key', source, noWait)).toMatchObject({ ok: true, minimized: true });
+  expect(await pulseGameWindow({ ...window, minimized: true }, source, noWait)).toMatchObject({ ok: true, minimized: true });
 });
 
 it('waits PULSE_GAP_MS between down and up', async () => {
   const { source } = fake();
   const waits: number[] = [];
-  await pulseGameWindow(window, 'key', source, async ms => { waits.push(ms); });
+  await pulseGameWindow(window, source, async ms => { waits.push(ms); });
   expect(waits).toEqual([32]);
 });
 ```
@@ -191,7 +175,6 @@ Also add `src/input/__tests__/win32GameInput.test.ts`, skipped on non-win32 plat
 ```ts
 import type { ProcessIdentity } from '../routing/tcpProcessIdentity.ts';
 
-export type PulseMethod = 'key' | 'click';
 export interface ScreenRect { left: number; top: number; right: number; bottom: number }
 export interface GameWindow { handle: unknown; minimized: boolean; client: ScreenRect }
 export interface GameInputSource {
@@ -199,15 +182,13 @@ export interface GameInputSource {
   findGameWindow(pid: number): GameWindow | null;
   cursor(): { x: number; y: number } | null;
   post(handle: unknown, message: number, wParam: number, lParam: number): boolean;
-  scanCode(virtualKey: number): number;
 }
 export type PulseResult =
-  | { ok: true; method: PulseMethod; minimized: boolean }
+  | { ok: true; minimized: boolean }
   | { ok: false; reason: 'unavailable' | 'no-process' | 'process-changed' | 'no-window' | 'cursor-over-game-ui' | 'post-failed' };
 
 export const PULSE_GAP_MS = 32;
-export const VK_F15 = 0x7e;
-const WM_KEYDOWN = 0x100, WM_KEYUP = 0x101, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, MK_LBUTTON = 1;
+const WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, MK_LBUTTON = 1;
 
 /** Central half of the client area in both directions: the character and play field (P4-2). */
 export function insideSafeBox(client: ScreenRect, cursor: { x: number; y: number }): boolean {
@@ -222,26 +203,18 @@ function insideClient(client: ScreenRect, cursor: { x: number; y: number }): boo
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
-export async function pulseGameWindow(window: GameWindow, method: PulseMethod, source: GameInputSource,
+export async function pulseGameWindow(window: GameWindow, source: GameInputSource,
   wait: (ms: number) => Promise<void> = sleep): Promise<PulseResult> {
-  let down: [number, number, number], up: [number, number, number];
-  if (method === 'click') {
-    // The game aims at the real cursor (lParam is ignored), so only click where no UI can be hit.
-    const cursor = source.cursor();
-    if (!cursor || (insideClient(window.client, cursor) && !insideSafeBox(window.client, cursor))) {
-      return { ok: false, reason: 'cursor-over-game-ui' };
-    }
-    down = [WM_LBUTTONDOWN, MK_LBUTTON, 1]; up = [WM_LBUTTONUP, 0, 1];
-  } else {
-    const scan = source.scanCode(VK_F15) & 0xff;
-    down = [WM_KEYDOWN, VK_F15, 1 | (scan << 16)];
-    up = [WM_KEYUP, VK_F15, (1 | (scan << 16) | (1 << 30) | (1 << 31)) >>> 0];
+  // The game aims at the real cursor (lParam is ignored), so only click where no UI can be hit.
+  const cursor = source.cursor();
+  if (!cursor || (insideClient(window.client, cursor) && !insideSafeBox(window.client, cursor))) {
+    return { ok: false, reason: 'cursor-over-game-ui' };
   }
-  if (!source.post(window.handle, ...down)) return { ok: false, reason: 'post-failed' };
+  if (!source.post(window.handle, WM_LBUTTONDOWN, MK_LBUTTON, 1)) return { ok: false, reason: 'post-failed' };
   await wait(PULSE_GAP_MS);
   // Always release what was pressed, whatever happened during the gap.
-  if (!source.post(window.handle, ...up)) return { ok: false, reason: 'post-failed' };
-  return { ok: true, method, minimized: window.minimized };
+  if (!source.post(window.handle, WM_LBUTTONUP, 0, 1)) return { ok: false, reason: 'post-failed' };
+  return { ok: true, minimized: window.minimized };
 }
 ```
 
@@ -250,7 +223,7 @@ export async function pulseGameWindow(window: GameWindow, method: PulseMethod, s
   - `uint32_t GetWindowThreadProcessId(void *hwnd, _Out_ uint32_t *pid)`
   - `int IsWindowVisible(void *hwnd)`, `int IsIconic(void *hwnd)`
   - `int GetClientRect(void *hwnd, _Out_ RECT *r)`, `int ClientToScreen(void *hwnd, _Inout_ POINT *p)`, `int GetCursorPos(_Out_ POINT *p)`
-  - `int PostMessageW(void *hwnd, uint32_t msg, uintptr_t w, intptr_t l)`, `uint32_t MapVirtualKeyW(uint32_t code, uint32_t type)`
+  - `int PostMessageW(void *hwnd, uint32_t msg, uintptr_t w, intptr_t l)`
 
   Define `RECT`/`POINT` with `koffi.struct`. `findGameWindow(pid)` loops `FindWindowExW(null, previous, 'UnityWndClass', null)` until null and keeps visible windows whose owner PID equals `pid`. It returns the single match, or null for 0 or more than 1. The client rect is converted to screen coordinates with `ClientToScreen` of `{0,0}`. `identify(remotePort)` = `readTcpProcessIdentity(remotePort, GAME_PORT)`. Any thrown error inside a call returns null/false; it never throws to callers. Export `win32GameInputSource()` and `win32GameInputError()`, plus `createWin32Source(bindings)` for the test.
 
@@ -268,7 +241,7 @@ export async function pulseGameWindow(window: GameWindow, method: PulseMethod, s
 - Test: `src/plugins/__tests__/input.test.ts`
 
 **Interfaces:**
-- Consumes (Task 1): `GameInputSource`, `PulseResult`, `PulseMethod`, `pulseGameWindow`, `win32GameInputSource`, `win32GameInputError`.
+- Consumes (Task 1): `GameInputSource`, `PulseResult`, `pulseGameWindow`, `win32GameInputSource`, `win32GameInputError`.
 - Produces:
 
 ```ts
@@ -276,7 +249,7 @@ export async function pulseGameWindow(window: GameWindow, method: PulseMethod, s
 export type Capability = 'packets' | 'commands' | 'notifications' | 'inject' | 'worker' | 'input';
 export interface InputApi {
   /** One down/up pulse to this session's own game window. Never throws. */
-  pulse(client: ClientConnection, method: PulseMethod): Promise<PulseResult>;
+  pulse(client: ClientConnection): Promise<PulseResult>;
 }
 // PluginContext:
   /** Throws unless the plugin declares the input capability. */
@@ -286,11 +259,11 @@ export interface InputApi {
   input?: GameInputSource | null;
 ```
 
-Re-export `PulseMethod` and `PulseResult` from `api.ts` (`export type { PulseMethod, PulseResult } from '../input/gameInput.ts';`) so plugins import only from the API.
+Re-export `PulseResult` from `api.ts` (`export type { PulseResult } from '../input/gameInput.ts';`) so plugins import only from the API.
 
 - [ ] **Step 1: Write the failing tests** in `src/plugins/__tests__/input.test.ts`, using `startHost` from `src/testing/pluginHarness.ts` (extend the harness to pass `input` and a session `remotePort` if it doesn't already; keep its existing callers unchanged). Cases:
   - A plugin without `'input'` gets an error naming the capability from `ctx.input`.
-  - **First pulse binds the identity:** with `identify` → `{pid: 7, processStartTime: '100'}` and a window, `pulse(client, 'key')` resolves `{ok: true, …}`. `findGameWindow` was called with `7`, and `identify` was called with the session's `remotePort`.
+  - **First pulse binds the identity:** with `identify` → `{pid: 7, processStartTime: '100'}` and a window, `pulse(client)` resolves `{ok: true, …}`. `findGameWindow` was called with `7`, and `identify` was called with the session's `remotePort`.
   - **Review Focus 2:** a second pulse where `identify` now returns `{pid: 7, processStartTime: '200'}` resolves `{ok: false, reason: 'process-changed'}`, and nothing is posted. A pulse where `identify` returns `null` resolves `no-process`.
   - `findGameWindow` → null resolves `no-window`; `input: null` resolves `unavailable`.
   - A disconnected client (after the proxy `closed` event) resolves `no-process` without calling `identify`.
@@ -306,14 +279,14 @@ Re-export `PulseMethod` and `PulseResult` from `api.ts` (`export type { PulseMet
 ```ts
 get input(): InputApi {
   this.require('input');
-  return { pulse: (client, method) => this.host.pulse(client, method) };
+  return { pulse: client => this.host.pulse(client) };
 }
 ```
 
-  Add `PluginHost.pulse(client, method)`:
+  Add `PluginHost.pulse(client)`:
 
 ```ts
-async pulse(client: ClientConnection, method: PulseMethod): Promise<PulseResult> {
+async pulse(client: ClientConnection): Promise<PulseResult> {
   const source = this.inputSource();
   if (!source) return { ok: false, reason: 'unavailable' };
   const known = this.clients.get(client.clientId);
@@ -326,7 +299,7 @@ async pulse(client: ClientConnection, method: PulseMethod): Promise<PulseResult>
   else if (first.pid !== identity.pid || first.processStartTime !== identity.processStartTime) return { ok: false, reason: 'process-changed' };
   const window = source.findGameWindow(identity.pid);
   if (!window) return { ok: false, reason: 'no-window' };
-  return pulseGameWindow(window, method, source);
+  return pulseGameWindow(window, source);
 }
 ```
 
@@ -346,11 +319,11 @@ async pulse(client: ClientConnection, method: PulseMethod): Promise<PulseResult>
 - Create: `plugins/anti-afk/index.ts`
 - Test: `plugins/anti-afk/__tests__/antiAfk.test.ts`
 - Modify: `plugins/index.ts` (append `antiAfk` last), `src/__tests__/api.integration.test.ts` (built-in count 5 → 6), `tools/smoke-package.ts` (count 5 → 6, message "six built-ins")
-- Modify docs: `docs/design.md` (§2.1 Anti-AFK bullet, §2.2 capabilities line, §5 row 4), `README.md` (plugin list: Anti-AFK, off by default, what it does, the cursor note in click mode)
+- Modify docs: `docs/design.md` (§2.1 Anti-AFK bullet, §2.2 capabilities line, §5 row 4), `README.md` (plugin list: Anti-AFK, off by default, what it does, the cursor note)
 
 **Interfaces:**
-- Consumes (Task 2): `ctx.input.pulse(client, method): Promise<PulseResult>`, `Capability 'input'`.
-- Produces: plugin id `anti-afk`, settings `idleMinutes` (range 1–15, step 1, default 5) and `method` (select, advanced: `key` / `click`, default `DEFAULT_METHOD` from Task 0); status data `status = { idleSeconds, pulses, lastPulse: { at: string; result: string } | null }`.
+- Consumes (Task 2): `ctx.input.pulse(client): Promise<PulseResult>`, `Capability 'input'`.
+- Produces: plugin id `anti-afk`, setting `idleMinutes` (range 1–15, step 1, default 5); status data `status = { idleSeconds, pulses, lastPulse: { at: string; result: string } | null }`.
 
 **Detector** (`detector.ts`, keyed by `ClientConnection` in a `WeakMap`, monotonic `performance.now()`):
 
@@ -404,9 +377,9 @@ export class InactivityDetector {
 **Plugin** (`index.ts`):
 
 ```ts
-import { definePlugin, type ClientConnection, type PluginContext, type PulseMethod } from '../../src/plugins/api.ts';
+import { definePlugin, type ClientConnection, type PluginContext } from '../../src/plugins/api.ts';
 import { InactivityDetector } from './detector.ts';
-import { DEFAULT_METHOD, SETTING_DEFS, validate } from './settings.ts';
+import { SETTING_DEFS, validate } from './settings.ts';
 
 export function register(ctx: PluginContext): void {
   ctx.name = 'Anti-AFK'; ctx.category = 'utility';
@@ -427,10 +400,9 @@ export function register(ctx: PluginContext): void {
     if (!ctx.enabled) return;
     const minutes = ctx.getSetting<number>('idleMinutes');
     if (!idle.observeMove(client, packet.isDefined ? packet.data.records : undefined, minutes * 60_000)) return;
-    const method = ctx.getSetting<PulseMethod>('method');
-    void ctx.input.pulse(client, method).then(result => {
-      lastPulse = { at: new Date().toISOString(), result: result.ok ? `sent (${result.method}${result.minimized ? ', minimized' : ''})` : `skipped: ${result.reason}` };
-      if (result.ok) { pulses++; ctx.log(`Inactive for ${minutes} min; pulse sent (${result.method}).`); skipLogged.delete(client); }
+    void ctx.input.pulse(client).then(result => {
+      lastPulse = { at: new Date().toISOString(), result: result.ok ? `sent${result.minimized ? ' (minimized)' : ''}` : `skipped: ${result.reason}` };
+      if (result.ok) { pulses++; ctx.log(`Inactive for ${minutes} min; click sent.`); skipLogged.delete(client); }
       else if (skipLogged.get(client) !== result.reason) { skipLogged.set(client, result.reason); ctx.log(`Pulse skipped: ${result.reason}.`); }
       publish(client);
     });
@@ -442,21 +414,18 @@ export default definePlugin({ id: 'anti-afk', name: 'Anti-AFK', apiVersion: 1, c
 ```
 
 `settings.ts`:
-- `DEFAULT_METHOD: PulseMethod`, as decided in Task 0.
-- `SETTING_DEFS`:
-  - `idleMinutes`: label "Send a keep-alive input after this many minutes without activity", range 1–15, step 1, value 5, help "Exalt disconnects after about 20 minutes without input."
-  - `method`: label "Input", select with options "Key (F15, no side effects)" / "Click (shoots toward your cursor)", value `DEFAULT_METHOD`, `advanced: true`, help "Click mode skips the pulse while the cursor is over the game's buttons or panels."
-- `validate`: `idleMinutes` must be a finite number, truncated and clamped to 1–15; `method` must be `key` or `click`; anything else throws `TypeError('Invalid Anti-AFK <key>')`.
+- `SETTING_DEFS`: one entry, `idleMinutes`: label "Click the game after this many minutes without activity", range 1–15, step 1, value 5, help "Exalt disconnects after about 20 minutes without input. The click shoots toward your cursor and is skipped while the cursor is over the game's buttons or panels."
+- `validate`: `idleMinutes` must be a finite number, truncated and clamped to 1–15; anything else throws `TypeError('Invalid Anti-AFK <key>')`.
 
 - [ ] **Step 1: Write the failing tests** (fake clock and a fake `ctx.input`, in the style of `plugins/server-messages/__tests__/serverMessages.test.ts`, plus one `startHost` test for default-off registration):
   - Registers **disabled** by default. With the plugin disabled, 6 minutes of stationary MOVEs send no pulse.
-  - Enabled, `idleMinutes` 5: stationary MOVEs every 200 ms for 5 min 1 s give exactly one `pulse(client, DEFAULT_METHOD)`. Another 5 min gives a second.
+  - Enabled, `idleMinutes` 5: stationary MOVEs every 200 ms for 5 min 1 s give exactly one `pulse(client)`. Another 5 min gives a second.
   - A changed position at 4 min restarts the window (no pulse at 5 min, one at 9 min 1 s).
   - **Review Focus 4:** `PLAYERSHOOT`, `USEITEM`, `PLAYERTEXT` or `INVSWAP` at 4 min each restart the window.
   - A MOVE gap over 10 s, a `MAPINFO`, a `RECONNECT` or a reconnect event restarts the window.
   - **Review Focus 5:** disabling at 4 min 59 s means no pulse at 5 min. A pulse in flight when the client disconnects only updates status, and later MOVEs from that client do nothing.
   - A skipped result (`cursor-over-game-ui`) logs once per reason per session, not on every window. A sent result logs every time and increments `pulses`.
-  - `validate` clamps `idleMinutes` (0 → 1, 99 → 15, 4.7 → 4), rejects other methods, and rejects unknown keys.
+  - `validate` clamps `idleMinutes` (0 → 1, 99 → 15, 4.7 → 4) and rejects non-numbers and unknown keys.
   - The built-in list has six entries, with `anti-afk` last.
 
 - [ ] **Step 2: Run them and see them fail.** Run `npx vitest run --configLoader native plugins/anti-afk`. Expected: FAIL.
@@ -464,7 +433,7 @@ export default definePlugin({ id: 'anti-afk', name: 'Anti-AFK', apiVersion: 1, c
 - [ ] **Step 3: Implement** `detector.ts`, `settings.ts` and `index.ts` as above, then register in `plugins/index.ts` and update the two built-in counts.
 
 - [ ] **Step 4: Docs.**
-  - In `docs/design.md` §2.1, replace the Anti-AFK bullet with the verified design (out-of-process pulse, no helper change, cursor guard in click mode).
+  - In `docs/design.md` §2.1, replace the Anti-AFK bullet with the verified design (out-of-process left click, no helper change, cursor guard; a posted F15 key press does not reset the idle timer).
   - In §2.2, add `input` to the capability example.
   - Set §5 row 4 to "**Anti-AFK — opt-in (off until enabled)**: inactivity detector + session-bound game-window pulse; no injection".
   - Add Anti-AFK to the README plugin list.
@@ -481,6 +450,6 @@ export default definePlugin({ id: 'anti-afk', name: 'Anti-AFK', apiVersion: 1, c
 - **Live acceptance with the user:**
   1. Enable Anti-AFK in the UI.
   2. Stand idle in the Nexus with the game in the background for 30 minutes.
-  3. Expect `[Anti-AFK] Inactive for 5 min; pulse sent (…)` about every 5 minutes, and no disconnect.
-  4. In click mode, move the cursor over the inventory panel and confirm that the next pulse logs `Pulse skipped: cursor-over-game-ui`.
+  3. Expect `[Anti-AFK] Inactive for 5 min; click sent.` about every 5 minutes, and no disconnect.
+  4. Move the cursor over the inventory panel and confirm that the next pulse logs `Pulse skipped: cursor-over-game-ui`.
 - Write `docs/handoff/<date>-phase4-handoff.md` and open the PR.
