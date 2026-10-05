@@ -53,6 +53,51 @@ it('logs each server message with a short session prefix and publishes status', 
   expect(f.data.get('status')).toMatchObject({ messagesLogged: 3, lastMessage: f.lines[2] });
 });
 
+function notificationBytes(text: string) {
+  const bytes = Buffer.alloc(Buffer.byteLength(text) + 10);
+  bytes.writeUInt16BE(Buffer.byteLength(text), 4);
+  bytes.write(text, 6);
+  return bytes;
+}
+
+it('suppresses varying plus-symbol amounts without changing the last logged message', () => {
+  const f = fixture();
+  expect(f.data.get('status')).toMatchObject({ suppressed: 0 });
+  f.packet('FAILURE', { errorId: 0, errorMessage: '' });
+  for (const amount of [45, 123]) {
+    f.packet('NOTIFICATION', { typeValue: 6, textByte: 26 }, notificationBytes(`{"k":"s.plus_symbol","t":{"amount":"${amount}",}}`));
+  }
+  expect(f.lines).toEqual(['[abcdefgh] FAILURE 0: ']);
+  expect(f.data.get('status')).toEqual({ sessionId: 'abcdefgh', messagesLogged: 1, lastMessage: f.lines[0], suppressed: 2 });
+  f.packet('PLAYERTEXT', {}, undefined, 'client');
+  f.at(1000);
+  f.close();
+  expect(f.lines[1]).toBe('[abcdefgh] Session ended after 0m 1s; idle: moved never, shot never, used item never, chatted 0m 1s ago; suppressed 2 "+N" notifications');
+  f.packet('NOTIFICATION', { typeValue: 6, textByte: 26 }, notificationBytes('{"k":"s.plus_symbol","t":{"amount":"1",}}'));
+  expect(f.data.get('status')).toMatchObject({ messagesLogged: 0, lastMessage: '', suppressed: 1 });
+});
+
+it('preserves useful notifications and empty failures exactly', () => {
+  const f = fixture();
+  const notifications = [
+    [6, 26, '{"k":"s.opened_by","t":{"player":"Sharkpuffs",}}'],
+    [8, 10, '{"k":"s.dungeon_opened_by","t":{"player":"Sharkpuffs",}}'],
+    [4, 34, 'This server will restart in 20 minutes, please exit the game accordingly'],
+    [4, 34, 'giftChestOccupied'],
+    [6, 26, '{"k":"s.plus_symbol_extra"}'],
+    [6, 26, '{"message":"s.plus_symbol"}'],
+  ] as const;
+  for (const [typeValue, textByte, text] of notifications) {
+    f.packet('NOTIFICATION', { typeValue, textByte }, notificationBytes(text));
+  }
+  f.packet('FAILURE', { errorId: 0, errorMessage: '' });
+  expect(f.lines).toEqual([
+    ...notifications.map(([typeValue, textByte, text]) => `[abcdefgh] NOTIFICATION type ${typeValue}/${textByte}: ${text} (${notificationBytes(text).length} bytes)`),
+    '[abcdefgh] FAILURE 0: ',
+  ]);
+  expect(f.data.get('status')).toMatchObject({ messagesLogged: 7, suppressed: 0 });
+});
+
 it('logs system senders with any recipient but excludes recipient-bearing player traffic', () => {
   const f = fixture();
   for (const name of ['', '*Error*', 'Server']) f.packet('TEXT', { name, objectId: name === 'Server' ? -1 : 1, recipient: '', text: 'notice' });
