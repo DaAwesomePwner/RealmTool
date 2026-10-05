@@ -62,12 +62,20 @@ The profile is created on the first run that changes a setting. If it does not e
 - **Auto Nexus:** on by default at 25%, with **Collision HP on by default**, including existing profiles without `PreHitPrediction`. It estimates HP from client collision reports in the network worker, with server HP authoritative. `/an [0-100]` shows or changes the threshold, `/nexus` requests a manual Nexus escape, and `/reset` explains that pending loss reconciles from server evidence and cannot be erased by command.
 - **Opt out:** with RealmTool stopped, set `"PreHitPrediction": false` in `plugins.auto-nexus.settings` in the profile. Restart RealmTool; `/an` shows `Collision HP off` and Auto Nexus uses server HP only. Set it to `true` or remove the key to restore the default.
 - **Auto Drink:** off by default; its settings are in the profile. Enable `auto-drink` with `"enabled": true` while RealmTool is stopped. The default HP threshold is 50%, with a minimum 400 ms interval between drinks. Profiles are applied once at startup; restart RealmTool after editing them.
-- **Catalogs:** with RealmTool stopped after a game update, run `npm run gen:catalogs`. It writes **both** `data/catalogs/consumables.json` and `data/catalogs/safety.json`. For an explicit installation, use `npm run gen:catalogs -- --game-dir "C:\path\to\Production"`. Each plugin checks its catalog against the installed build at startup, on new game connections while enabled, and when enabled.
-- **Safety catalog fallback:** a missing, invalid, unknown-build or out-of-date safety catalog suspends Collision HP and leaves Auto Nexus running on server HP only. It preserves the saved setting, logs a warning, and shows `Collision HP FALLBACK: server HP only (<reason>). Run npm run gen:catalogs and restart RealmTool.` once per game connection. `/an` and decision messages also identify fallback. Regenerate both catalogs and restart to restore Collision HP. Auto Drink independently requires a valid matching consumables catalog.
+- **Catalogs:** missing, invalid or stale catalogs trigger automatic refresh of Auto Drink and Collision HP data; app-data catalogs also require a matching file fingerprint. Automatic refresh waits for 60 seconds of unchanged game files. The app's **Refresh game data** button can request a manual refresh; developers use `npm run gen:catalogs` to update the bundled catalogs.
+- **Safety catalog fallback:** known-stale data is withdrawn before refresh: Auto Nexus uses server HP only and reports `Collision HP FALLBACK`; Auto Drink is unavailable. Successful refresh reloads the catalogs live without dropping the connection.
 
 Collision HP values are estimates. The server calculates damage independently of client reports; Collision HP and report suppression provide no survival guarantee.
 
 See the [Phase 3b handoff](docs/handoff/2026-10-04-phase3b-handoff.md) for validation status, rulings and the live smoke test.
+
+## When the game updates
+
+RealmTool checks catalogs at proxy start, every 60 seconds while the proxy runs, and on each new game session. Either selected catalog being missing, invalid or for another build makes data stale. App-data catalogs also need a matching `source.json` fingerprint (build plus size/mtime of `resources.assets` and `boot.config`); matching bundled catalogs need no fingerprint. Automatic refresh waits until both files are unchanged for 60 seconds, logging `[Data] Game files are still changing; waiting to refresh` once per build without failing or delaying proxy start. The child re-checks those files and the build after extraction; changes fail with `game files changed during refresh; retrying later` and publish nothing. `source.json` is published last.
+
+Use **Refresh game data** in the readiness area, `POST /api/refresh-data`, or `realmtool refresh-data [--game-dir <dir>] [--out-dir <dir>]` (dev: `node src/cli.ts refresh-data`) for a manual refresh. The CLI defaults to `%APPDATA%\RealmTool\data\catalogs\` and prints one JSON result line. Manual refresh skips the quiet period and the five-minute automatic retry wait; failures log at most one warning per five-minute window. Refresh took about 16 seconds on the owner's machine, producing catalogs byte-identical to bundled catalogs for the same build.
+
+Check `[Data]` refresh results and `[Server Messages]` lines around a failed connection. Follow the [patch-day checklist](docs/patch-day.md) for exact log messages and to distinguish data changes from fixes that need a new release.
 
 | Document | What it covers |
 |---|---|

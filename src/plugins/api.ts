@@ -87,6 +87,10 @@ export interface PluginContext {
   hookCommand(name: string, fn: CommandHook): void;
   on(event: ConnectionEvent, fn: (client: ClientConnection) => void): void;
   onEnabledChange(fn: (enabled: boolean) => void): void;
+  /** Called after catalog publication, also while disabled; removed on cleanup. */
+  onDataRefreshed(fn: () => void): void;
+  /** Known stale data must be disarmed before a refresh or quiet-period wait. */
+  onDataInvalidated(fn: (reason: string) => void): void;
   registerCleanup(fn: () => void): void;
   setData(key: string, value: unknown): void;
   broadcastData(type: string, data: unknown): void;

@@ -11,6 +11,8 @@ export class Readiness {
   private readonly candidates = el('datalist');
   private readonly launch: HTMLButtonElement;
   private readonly proxy: HTMLButtonElement;
+  private readonly refresh: HTMLButtonElement;
+  private readonly dataStatus = el('p', '', 'help');
   private readonly uninstall: HTMLButtonElement;
   private readonly saveFolder: HTMLButtonElement;
   private readonly saveLauncher: HTMLButtonElement;
@@ -25,8 +27,10 @@ export class Readiness {
     this.launch = button('Launch', () => void this.run('/api/game/launch'));
     this.launch.className = 'primary';
     this.proxy = button('Start proxy', () => void this.run(`/api/proxy/${this.state?.proxy.state === 'running' ? 'stop' : 'start'}`));
+    this.refresh = button('Refresh game data', () => void this.run('/api/refresh-data'));
+    this.dataStatus.setAttribute('aria-live', 'polite');
     this.uninstall = button('Uninstall helper', () => void this.run('/api/helper/uninstall'));
-    const controls = el('div', undefined, 'controls'); controls.append(this.launch, this.proxy, this.uninstall);
+    const controls = el('div', undefined, 'controls'); controls.append(this.launch, this.proxy, this.refresh, this.uninstall);
     const label = el('label', 'Game folder'); this.folder.type = 'text'; this.folder.placeholder = 'Path to the RotMG Exalt game folder';
     this.candidates.id = 'game-folders'; this.folder.setAttribute('list', this.candidates.id);
     this.saveFolder = button('Save game folder', () => void this.run('/api/game/dir', { dir: this.folder.value }));
@@ -36,7 +40,7 @@ export class Readiness {
     const launcherRow = el('div', undefined, 'path-row'); launcherRow.append(launcherLabel, this.saveLauncher);
     const options = el('details'); options.append(el('summary', 'Launcher settings'), launcherRow);
     this.error.setAttribute('role', 'alert'); this.requestError.setAttribute('role', 'alert');
-    this.element.append(this.bar, this.error, controls, folderRow, options, this.requestError,
+    this.element.append(this.bar, this.error, controls, this.dataStatus, folderRow, options, this.requestError,
       el('p', 'Closing the window while the proxy runs hides RealmTool to the tray. Use tray Quit to exit. The helper stays installed until you uninstall it.', 'help'));
     this.controls();
   }
@@ -50,6 +54,12 @@ export class Readiness {
       ['Profile', state.profile.active], ['Operation', state.operation ?? 'Idle'],
     ]) { const item = el('div'); item.append(el('span', label, 'muted'), el('strong', value)); this.bar.append(item); }
     this.error.textContent = state.proxy.error ?? '';
+    const data = state.data, result = data?.lastResult;
+    this.dataStatus.textContent = data?.state === 'refreshing' ? 'Refreshing game data… This may take up to two minutes.'
+      : data?.state === 'failed' ? `Game data refresh failed: ${data.error}. Check the log and try Refresh game data.`
+      : result ? `Game data refreshed for build ${result.gameBuild}: ${result.items} items, ${result.projectiles} projectiles, ${result.tiles} tiles (${result.ms} ms).`
+      : data?.catalogBuild ? `Game data: build ${data.catalogBuild}` : 'Game data is checked automatically when the proxy starts.';
+    if (result && data.state !== 'idle') this.dataStatus.textContent += ` Last refresh: build ${result.gameBuild}, ${result.items} items, ${result.projectiles} projectiles, ${result.tiles} tiles (${result.ms} ms).`;
     this.folder.classList.toggle('invalid', !state.game.dir);
     this.folder.setAttribute('aria-invalid', String(!state.game.dir));
     if (document.activeElement !== this.folder) this.folder.value = state.game.dir ?? '';
@@ -63,6 +73,8 @@ export class Readiness {
     const busy = this.busy || !!state?.operation || !state;
     const running = state?.proxy.state === 'running';
     const stopped = state?.proxy.state === 'stopped' || state?.proxy.state === 'failed';
+    this.refresh.disabled = busy || !state?.game.dir || state?.data?.state === 'refreshing';
+    this.refresh.textContent = state?.data?.state === 'refreshing' ? 'Refreshing game data…' : 'Refresh game data';
     this.proxy.textContent = running ? 'Stop proxy' : 'Start proxy';
     this.proxy.disabled = busy || (!running && !stopped);
     this.launch.disabled = busy || !state?.game.dir;

@@ -1,5 +1,6 @@
+import { serializedFile } from '../../src/testing/unityAssets.ts';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +44,17 @@ describe('backend bundle', () => {
     expect(stdout).toContain('Usage: realmtool <command> [options]');
     expect(stdout).toMatch(/start/);
     expect(stdout).not.toContain('selftest');
+  });
+  it.each([false, true])('refreshes packaged game data without source dependencies (parent pipe=%s)', async parentPipe => {
+    await build(); const game = join(out, 'fixture-game'), data = join(game, 'RotMG Exalt_Data'), catalogs = join(out, 'refreshed');
+    mkdirSync(data, { recursive: true }); writeFileSync(join(data, 'boot.config'), 'build-guid=packaged-fixture');
+    writeFileSync(join(data, 'resources.assets'), serializedFile([
+      { classId: 49, text: '<?xml version="1.0"?><Objects><Object type="42"><Consumable/><Activate amount="20">Heal</Activate></Object></Objects>' },
+      { classId: 49, text: '<?xml version="1.0"?><GroundTypes></GroundTypes>' },
+    ]));
+    const { stdout, stderr } = await exec(process.execPath, [join(out, 'backend/main.mjs'), 'refresh-data', ...(parentPipe ? ['--parent-pipe'] : []), '--game-dir', game, '--out-dir', catalogs], { cwd: out, env });
+    expect(stderr).toBe(''); expect(JSON.parse(stdout)).toMatchObject({ gameBuild: 'packaged-fixture', items: 1, projectiles: 0, tiles: 0 });
+    expect(JSON.parse(readFileSync(join(catalogs, 'consumables.json'), 'utf8')).gameBuild).toBe('packaged-fixture');
   });
   it('loads packaged schema and both catalogs and starts and stops the packaged worker', async () => {
     await build();

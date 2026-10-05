@@ -11,18 +11,26 @@ import type { AutoNexusConfig, AutoNexusEvent } from './messages.ts';
 const ZERO_SUFFIX = ' (proactive escapes suppressed; confirmed server zero only; manual Nexus available)';
 const ROUTING = 'routing: normal ESCAPE; server-authorized transfer; automatic escape report suppression policy: after accepted local AUTO escape until new connection; manual ESCAPE alone unaffected';
 
-export function register(ctx: PluginContext, loader: () => SafetyCatalogLoad = loadSafetyCatalog,
+export function register(ctx: PluginContext, loader: (options?: { gameBuild?: string; gameDir?: string }) => SafetyCatalogLoad = loadSafetyCatalog,
   buildReader: (gameDir: string) => string = readGameBuild): void {
   ctx.name = 'Auto Nexus'; ctx.category = 'combat';
   let disposed = false;
-  const catalog = loader();
-  let loaded = catalogForInstalledBuild(catalog, ctx.gameDir, buildReader);
+  function readCatalog() {
+    let gameBuild: string | undefined, buildError: unknown;
+    try { if (ctx.gameDir) gameBuild = buildReader(ctx.gameDir); } catch (error) { buildError = error; }
+    const catalog = loader({ gameBuild, gameDir: ctx.gameDir ?? undefined });
+    return { catalog, loaded: catalogForInstalledBuild(catalog, ctx.gameDir, () => {
+      if (buildError) throw buildError;
+      return gameBuild!;
+    }) };
+  }
+  let { catalog, loaded } = readCatalog();
   const catalogState = (): SafetyCatalogState => loaded.ok
     ? { state: 'ready', gameBuild: loaded.catalog.gameBuild, projectiles: loaded.catalog.projectiles.length, tiles: loaded.catalog.tiles.length }
     : { state: 'fallback', reason: loaded.reason };
   function logCatalog(): void {
     if (loaded.ok) ctx.log(`Safety catalog ready (game build ${loaded.catalog.gameBuild}).`);
-    else log.warn('auto-nexus', `Collision HP FALLBACK: server HP only (${loaded.reason}). Run npm run gen:catalogs and restart RealmTool.`);
+    else log.warn('auto-nexus', `Collision HP FALLBACK: server HP only (${loaded.reason}). RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log.`);
   }
   logCatalog();
   function refreshCatalog(): boolean {
@@ -47,6 +55,20 @@ export function register(ctx: PluginContext, loader: () => SafetyCatalogLoad = l
     }
   });
   sync();
+  ctx.onDataInvalidated(reason => {
+    if (disposed || (!catalog.ok && catalog.reason === reason)) return;
+    catalog = loaded = { ok: false, reason };
+    sync();
+  });
+  ctx.onDataRefreshed(() => {
+    if (disposed) return;
+    const { catalog: candidate, loaded: next } = readCatalog();
+    if (!next.ok) throw new Error(next.reason);
+    const previous = catalog, previousLoaded = loaded;
+    catalog = candidate; loaded = next;
+    try { sync(); } catch (error) { catalog = previous; loaded = previousLoaded; throw error; }
+    logCatalog();
+  });
   ctx.on('clientConnected', () => { if (!disposed && refreshCatalog()) sync(); });
   ctx.onEnabledChange(() => {
     if (disposed) return;
@@ -62,7 +84,7 @@ export function register(ctx: PluginContext, loader: () => SafetyCatalogLoad = l
     // Check the current catalog too: a queued fallback event must not notify after recovery.
     if (!(event.status.objectId > 0) || !ctx.enabled || !ctx.getSetting('PreHitPrediction') || loaded.ok || event.collisionHp !== 'fallback' || notified.has(client)) return;
     notified.add(client);
-    ctx.sendNotification(client, 'AutoNexus', `Collision HP FALLBACK: server HP only (${loaded.reason}). Run npm run gen:catalogs and restart RealmTool.`);
+    ctx.sendNotification(client, 'AutoNexus', `Collision HP FALLBACK: server HP only (${loaded.reason}). RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log.`);
   }
 
   // Worker timestamps use the process-wide monotonic clock, not wall time.
@@ -184,6 +206,6 @@ function catalogForInstalledBuild(loaded: SafetyCatalogLoad, gameDir: string | n
     return { ok: false, reason: `installed game build unknown (${error instanceof Error ? error.message : String(error)})` };
   }
   if (loaded.catalog.gameBuild !== installed) return { ok: false,
-    reason: `catalog is for game build ${loaded.catalog.gameBuild} but the installed game is ${installed}; run npm run gen:catalogs` };
+    reason: `catalog is for game build ${loaded.catalog.gameBuild} but the installed game is ${installed}; RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log` };
   return loaded;
 }

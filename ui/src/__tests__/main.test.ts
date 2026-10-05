@@ -9,6 +9,7 @@ afterEach(() => { window.dispatchEvent(new Event('beforeunload')); document.body
 
 it('loads through the Tauri bridge, handles all event kinds, and restarts after backend-exited', async () => {
   const state: AppState = {
+    data: { state: 'idle', gameBuild: null, catalogBuild: null, lastResult: null, error: null },
     proxy: { state: 'stopped', port: null, error: null }, game: { dir: null, candidates: [], launcher: null, helper: { state: 'unknown', backup: false } },
     sessions: { open: 0, connected: 0 }, profile: { active: 'default', available: ['default'] }, operation: null, revision: 0,
   };
@@ -52,6 +53,7 @@ it('loads through the Tauri bridge, handles all event kinds, and restarts after 
 it.each(['old-first', 'new-first'])('retains overlapping history with intervening live records (%s)', async order => {
   vi.resetModules();
   const state: AppState = {
+    data: { state: 'idle', gameBuild: null, catalogBuild: null, lastResult: null, error: null },
     proxy: { state: 'stopped', port: null, error: null }, game: { dir: null, candidates: [], launcher: null, helper: { state: 'unknown', backup: false } },
     sessions: { open: 0, connected: 0 }, profile: { active: 'default', available: ['default'] }, operation: null, revision: 0,
   };

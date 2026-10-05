@@ -1,3 +1,5 @@
+import { serializedFile } from '../../src/testing/unityAssets.ts';
+import { generateCatalogs as runtimeGenerateCatalogs } from '../../src/catalogs/generate.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,43 +17,8 @@ function temp() { const dir = fs.mkdtempSync(join(tmpdir(), 'gen-catalog-')); di
 afterEach(() => { vi.restoreAllMocks(); syncBuiltinESMExports(); for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 const object = (type: string) => `<Object type='${type}'><Consumable/><Activate amount='20'>Heal</Activate></Object>`;
 
-// Synthetic SerializedFile v22: little-endian metadata, no type tree, two class IDs.
-function serializedFile(entries: { classId: number; text: string }[], typeTree = false): Buffer {
-  const header = Buffer.alloc(48);
-  header.writeUInt32BE(22, 8);
-  const chunks: Buffer[] = [];
-  const int = (n: number) => { const b = Buffer.alloc(4); b.writeInt32LE(n); return b; };
-  chunks.push(Buffer.from('fixture\0'), int(19), Buffer.from([typeTree ? 1 : 0]), int(2));
-  for (const id of [49, 28]) {
-    chunks.push(int(id), Buffer.alloc(19));
-    if (typeTree) chunks.push(int(1), int(4), Buffer.alloc(32), Buffer.from('str\0'), int(1), int(0));
-  }
-  chunks.push(int(entries.length));
-  const data: Buffer[] = [];
-  let offset = 0;
-  for (const entry of entries) {
-    const position = 48 + chunks.reduce((n, b) => n + b.length, 0);
-    chunks.push(Buffer.alloc((4 - position % 4) % 4));
-    const text = Buffer.from(entry.text);
-    const payload = Buffer.concat([int(4), Buffer.from('name'), int(text.length), text]);
-    const row = Buffer.alloc(24);
-    row.writeBigInt64LE(BigInt(data.length + 1));
-    row.writeBigInt64LE(BigInt(offset), 8);
-    row.writeUInt32LE(payload.length, 16);
-    row.writeInt32LE(entry.classId === 49 ? 0 : 1, 20);
-    chunks.push(row);
-    const padded = Buffer.concat([payload, Buffer.alloc((4 - payload.length % 4) % 4)]);
-    data.push(padded);
-    offset += padded.length;
-  }
-  const meta = Buffer.concat(chunks);
-  header.writeUInt32BE(meta.length, 20);
-  header.writeBigUInt64BE(BigInt(48 + meta.length + offset), 24);
-  header.writeBigUInt64BE(BigInt(48 + meta.length), 32);
-  return Buffer.concat([header, meta, ...data]);
-}
-
 describe('catalog generation', () => {
+  it('keeps the tools wrapper on the runtime implementation', () => { expect(generateCatalogs).toBe(runtimeGenerateCatalogs); });
   it('writes both XML catalogs deterministically, compact safety, and stages both before renaming', () => {
     const dir = temp(); const objects = join(dir, 'objects.xml'); const tiles = join(dir, 'tiles.xml'); const out = join(dir, 'out');
     fs.writeFileSync(objects, `<Objects>${object('42')}<Object type='1'><Projectile/></Object></Objects>`);
@@ -64,7 +31,7 @@ describe('catalog generation', () => {
       originalRename(source, destination);
     });
     const args = ['--objects', objects, '--tiles', tiles, '--build', 'fixture', '--out-dir', out];
-    const result = generateCatalogs(args);
+    const result = generateCatalogs(args, { writeSource: true });
     expect(result).toMatchObject({ gameBuild: 'fixture', consumables: { items: 1 }, safety: { projectiles: 1, tiles: 1 } });
     expect(rename).toHaveBeenCalledTimes(2);
     const safety = fs.readFileSync(result.safety.path, 'utf8'); const consumables = fs.readFileSync(result.consumables.path, 'utf8');
@@ -81,7 +48,7 @@ describe('catalog generation', () => {
       expect(fs.readdirSync(out).sort()).toEqual(['consumables.json', 'safety.json']);
     }
   });
-  it('reads the install once per asset and build file when generating both catalogs', () => {
+  it('reads the asset once and verifies the build before and after when generating both catalogs', () => {
     const dir = temp(); const data = join(dir, 'RotMG Exalt_Data'); fs.mkdirSync(data);
     fs.writeFileSync(join(data, 'boot.config'), 'build-guid=fixture-guid');
     fs.writeFileSync(join(data, 'resources.assets'), serializedFile([
@@ -91,7 +58,76 @@ describe('catalog generation', () => {
     const read = vi.spyOn(fs, 'readFileSync');
     syncBuiltinESMExports();
     expect(generateCatalogs(['--game-dir', dir, '--out-dir', join(dir, 'out')])).toMatchObject({ gameBuild: 'fixture-guid', safety: { projectiles: 1, tiles: 1 } });
-    for (const name of ['resources.assets', 'boot.config']) expect(read.mock.calls.filter(([path]) => path === join(data, name))).toHaveLength(1);
+    for (const name of ['resources.assets', 'boot.config']) expect(read.mock.calls.filter(([path]) => path === join(data, name))).toHaveLength(name === 'boot.config' ? 2 : 1);
+  });
+  it('publishes nothing if the build changes during extraction', () => {
+    const dir = temp(), data = join(dir, 'RotMG Exalt_Data'), out = join(dir, 'out'); fs.mkdirSync(data);
+    fs.writeFileSync(join(data, 'boot.config'), 'build-guid=before');
+    fs.writeFileSync(join(data, 'resources.assets'), serializedFile([
+      { classId: 49, text: `<?xml version="1.0"?><Objects>${object('42')}</Objects>` },
+      { classId: 49, text: '<?xml version="1.0"?><GroundTypes></GroundTypes>' },
+    ]));
+    const original = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((path: any, ...args: any[]) => {
+      const value = (original as any)(path, ...args);
+      if (String(path).endsWith('resources.assets')) fs.writeFileSync(join(data, 'boot.config'), 'build-guid=after');
+      return value;
+    }) as any);
+    syncBuiltinESMExports();
+    expect(() => generateCatalogs(['--game-dir', dir, '--out-dir', out])).toThrow('game files changed during refresh; retrying later');
+    expect(fs.existsSync(out)).toBe(false);
+  });
+  function installFixture() {
+    const dir = temp(), data = join(dir, 'RotMG Exalt_Data'), out = join(dir, 'out'); fs.mkdirSync(data);
+    fs.writeFileSync(join(data, 'boot.config'), 'build-guid=fixture');
+    fs.writeFileSync(join(data, 'resources.assets'), serializedFile([
+      { classId: 49, text: `<?xml version="1.0"?><Objects>${object('42')}</Objects>` },
+      { classId: 49, text: '<?xml version="1.0"?><GroundTypes></GroundTypes>' },
+    ]));
+    return { dir, data, out, args: ['--game-dir', dir, '--out-dir', out] };
+  }
+  it.each([['resources.assets', 'mtime'], ['boot.config', 'mtime'], ['resources.assets', 'size'], ['boot.config', 'size']])('publishes nothing if %s %s changes with the same build', (name, field) => {
+    const f = installFixture(), original = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((path: any, ...args: any[]) => {
+      const value = (original as any)(path, ...args);
+      if (String(path).endsWith('resources.assets')) {
+        const target = join(f.data, name), stat = fs.statSync(target);
+        if (field === 'mtime') fs.utimesSync(target, stat.atime, new Date(stat.mtimeMs + 2000));
+        else { fs.appendFileSync(target, ' '); fs.utimesSync(target, stat.atime, stat.mtime); }
+      }
+      return value;
+    }) as any);
+    syncBuiltinESMExports();
+    expect(() => generateCatalogs(f.args, { writeSource: true })).toThrow('game files changed during refresh; retrying later');
+    expect(fs.existsSync(f.out)).toBe(false);
+  });
+  it('stages the fingerprint with both catalogs and publishes it last, only after success', () => {
+    const f = installFixture(), original = fs.renameSync.bind(fs), published: string[] = [];
+    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (!published.length) expect(fs.readdirSync(f.out).filter(p => p.endsWith('.tmp'))).toHaveLength(3);
+      published.push(String(to)); original(from, to);
+    });
+    generateCatalogs(f.args, { writeSource: true });
+    expect(published).toEqual(['consumables.json', 'safety.json', 'source.json'].map(p => join(f.out, p)));
+    const stamp = (name: string) => { const { size, mtimeMs } = fs.statSync(join(f.data, name)); return { size, mtimeMs }; };
+    const source = fs.readFileSync(join(f.out, 'source.json'), 'utf8');
+    expect(JSON.parse(source)).toEqual({ schemaVersion: 1, gameBuild: 'fixture', resourcesAssets: stamp('resources.assets'), bootConfig: stamp('boot.config') });
+    fs.writeFileSync(join(f.data, 'resources.assets'), 'broken');
+    expect(() => generateCatalogs(f.args, { writeSource: true })).toThrow();
+    expect(fs.readFileSync(join(f.out, 'source.json'), 'utf8')).toBe(source);
+  });
+  it('checks parent liveness immediately before publishing staged catalogs', () => {
+    const f = installFixture();
+    const beforePublish = vi.fn(() => {
+      expect(fs.readdirSync(f.out).filter(p => p.endsWith('.tmp'))).toHaveLength(3);
+      throw new Error('refresh parent disconnected');
+    });
+    expect(() => generateCatalogs(f.args, { writeSource: true, beforePublish })).toThrow('parent disconnected');
+    expect(beforePublish).toHaveBeenCalledOnce(); expect(fs.readdirSync(f.out)).toEqual([]);
+  });
+  it('keeps ordinary generator output free of local source fingerprints', () => {
+    const f = installFixture(); generateCatalogs(f.args);
+    expect(fs.readdirSync(f.out).sort()).toEqual(['consumables.json', 'safety.json']);
   });
   it('treats decimal and hex types and single-quoted attributes equivalently', () => {
     expect(consumablesFromObjectsXml(`<Objects>${object('42')}</Objects>`))

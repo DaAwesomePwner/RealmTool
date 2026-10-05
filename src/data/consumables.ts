@@ -1,5 +1,6 @@
 // Adapted from realm-engine-client client/src/auto-drink/AutoDrinkTypes.ts @ 88a66b2 (MIT, see NOTICE).
 import { readFileSync } from 'node:fs';
+import { readCatalogSourceSync, readGameFileStampsSync, sameGameFiles } from './catalogSource.ts';
 import { join } from 'node:path';
 import { resourcePaths } from '../app/resources.ts';
 import { appDataDir } from '../config/store.ts';
@@ -42,19 +43,27 @@ export function validateConsumablesCatalog(value: unknown): ConsumablesCatalog {
     source: { objectsSha256: catalog.source.objectsSha256 }, items: validateConsumableItems(catalog.items) };
 }
 
-export function loadConsumables(options: { appDataDir?: string; bundledPath?: string } = {}): CatalogLoad {
-  const appData = options.appDataDir ?? appDataDir();
+export function loadConsumables(options: { appDataDir?: string; bundledPath?: string; gameBuild?: string; gameDir?: string } = {}): CatalogLoad {
   const bundled = options.bundledPath ?? join(resourcePaths().dataDir, 'catalogs/consumables.json');
-  const paths = [join(appData, 'data', 'catalogs', 'consumables.json'), bundled];
-  for (const path of paths) {
-    let json: string;
-    try { json = readFileSync(path, 'utf8'); }
-    catch (error) {
+  let first: CatalogLoad | undefined;
+  for (const path of [join(options.appDataDir ?? appDataDir(), 'data', 'catalogs', 'consumables.json'), bundled]) {
+    let result: CatalogLoad;
+    try {
+      const bytes = readFileSync(path);
+      result = { ok: true, catalog: validateConsumablesCatalog(JSON.parse(bytes.toString('utf8'))), path };
+      if (options.gameDir && path === join(options.appDataDir ?? appDataDir(), 'data', 'catalogs', 'consumables.json')) {
+        const source = readCatalogSourceSync(join(options.appDataDir ?? appDataDir(), 'data', 'catalogs'));
+        if (!source || source.gameBuild !== result.catalog.gameBuild
+          || !sameGameFiles(source, readGameFileStampsSync(join(options.gameDir, 'RotMG Exalt_Data')))) {
+          throw new Error('catalog source fingerprint is missing or stale; waiting for verified game data');
+        }
+      }
+    } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      return { ok: false, reason: `${path}: ${String(error)}` };
+      result = { ok: false, reason: `${path}: ${error instanceof SyntaxError ? 'Invalid JSON: ' : ''}${String(error)}` };
     }
-    try { return { ok: true, catalog: validateConsumablesCatalog(JSON.parse(json)), path }; }
-    catch (error) { return { ok: false, reason: `${path}: ${error instanceof SyntaxError ? 'Invalid JSON: ' : ''}${String(error)}` }; }
+    first ??= result;
+    if (!options.gameBuild || (result.ok && result.catalog.gameBuild === options.gameBuild)) return result;
   }
-  return { ok: false, reason: 'consumables catalog not found' };
+  return first ?? { ok: false, reason: 'consumables catalog not found' };
 }

@@ -7,14 +7,22 @@ import { SETTING_DEFS, migrate, validate, workerSettings } from './settings.ts';
 import { validateConfig, type AutoDrinkEvent } from './messages.ts';
 
 /** Configuration, verified JSON catalog and display only; decisions belong to the worker. */
-export function register(ctx: PluginContext, loader: () => CatalogLoad = loadConsumables,
+export function register(ctx: PluginContext, loader: (options?: { gameBuild?: string; gameDir?: string }) => CatalogLoad = loadConsumables,
   buildReader: (gameDir: string) => string = readGameBuild): void {
   ctx.name = 'Auto Drink';
   ctx.category = 'automation';
   ctx.enabled = false;
   let disposed = false;
-  const catalog = loader();
-  let loaded = catalogForInstalledBuild(catalog, ctx.gameDir, buildReader);
+  function readCatalog() {
+    let gameBuild: string | undefined, buildError: unknown;
+    try { if (ctx.gameDir) gameBuild = buildReader(ctx.gameDir); } catch (error) { buildError = error; }
+    const catalog = loader({ gameBuild, gameDir: ctx.gameDir ?? undefined });
+    return { catalog, loaded: catalogForInstalledBuild(catalog, ctx.gameDir, () => {
+      if (buildError) throw buildError;
+      return gameBuild!;
+    }) };
+  }
+  let { catalog, loaded } = readCatalog();
   function logCatalog(): void {
     ctx.log(loaded.ok
       ? `Loaded ${loaded.catalog.items.length} verified restorative consumables (game build ${loaded.catalog.gameBuild}).`
@@ -50,6 +58,22 @@ export function register(ctx: PluginContext, loader: () => CatalogLoad = loadCon
     publish(current, current.clientId);
     return true;
   }
+  ctx.onDataInvalidated(reason => {
+    if (disposed || (!catalog.ok && catalog.reason === reason)) return;
+    catalog = loaded = { ok: false, reason };
+    sync();
+    publish(current, current.clientId);
+  });
+  ctx.onDataRefreshed(() => {
+    if (disposed) return;
+    const { catalog: candidate, loaded: next } = readCatalog();
+    if (!next.ok) throw new Error(next.reason);
+    const previous = catalog, previousLoaded = loaded;
+    catalog = candidate; loaded = next;
+    try { sync(); } catch (error) { catalog = previous; loaded = previousLoaded; throw error; }
+    logCatalog();
+    publish(current, current.clientId);
+  });
   ctx.on('clientConnected', () => {
     if (!disposed && refreshCatalog()) sync();
   });
@@ -93,11 +117,11 @@ function catalogForInstalledBuild(loaded: CatalogLoad, gameDir: string | null, b
     return { ok: false, reason: `installed game build unknown (${error instanceof Error ? error.message : String(error)})` };
   }
   if (loaded.catalog.gameBuild !== installed) return { ok: false,
-    reason: `catalog is for game build ${loaded.catalog.gameBuild} but the installed game is ${installed}; run npm run gen:catalogs` };
+    reason: `catalog is for game build ${loaded.catalog.gameBuild} but the installed game is ${installed}; RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log` };
   return loaded;
 }
 
-export function createAutoDrinkPlugin(loader: () => CatalogLoad = loadConsumables, buildReader: (gameDir: string) => string = readGameBuild) {
+export function createAutoDrinkPlugin(loader: (options?: { gameBuild?: string; gameDir?: string }) => CatalogLoad = loadConsumables, buildReader: (gameDir: string) => string = readGameBuild) {
   return definePlugin({ id: 'auto-drink', name: 'Auto Drink', apiVersion: 1, capabilities: ['packets', 'worker'],
     register: ctx => register(ctx, loader, buildReader), settings: { validate, migrate } });
 }

@@ -67,7 +67,7 @@ export async function route(req: IncomingMessage, res: ServerResponse, url: URL,
   const setting = parts.length === 5 && parts[0] === 'api' && parts[1] === 'plugins' && parts[3] === 'settings';
   const profilePath = parts.length === 3 && parts[0] === 'api' && parts[1] === 'profiles';
   const reads = ['/api/state', '/api/plugins', '/api/logs'];
-  const actions = ['/api/proxy/start', '/api/proxy/stop', '/api/game/launch', '/api/helper/install', '/api/helper/uninstall',
+  const actions = ['/api/refresh-data', '/api/proxy/start', '/api/proxy/stop', '/api/game/launch', '/api/helper/install', '/api/helper/uninstall',
     '/api/game/dir', '/api/game/launcher', '/api/profiles/select', '/api/ws-ticket', '/api/shutdown'];
   const methods = reads.includes(path) ? ['GET'] : path === '/api/profiles' ? ['GET', 'POST']
     : path === '/api/profiles/select' ? ['POST', 'DELETE']
@@ -109,6 +109,7 @@ export async function route(req: IncomingMessage, res: ServerResponse, url: URL,
   } else {
     fields(body, []);
     switch (path) {
+      case '/api/refresh-data': result = await controller.refreshData(); break;
       case '/api/proxy/start': await controller.startProxy(); result = controller.state(); break;
       case '/api/proxy/stop': await controller.stopProxy(); result = controller.state(); break;
       case '/api/game/launch': await controller.launchGame(); result = controller.state(); break;

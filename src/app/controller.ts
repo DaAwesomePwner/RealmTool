@@ -1,5 +1,10 @@
+import { readGameFileStamps, readCatalogSourceSync, sameGameFiles, type CatalogSource } from '../data/catalogSource.ts';
+import { readGameBuildAsync } from '../game/gameBuild.ts';
+import { loadConsumables } from '../data/consumables.ts';
+import { loadSafetyCatalog } from '../data/safety.ts';
+import { abortable, refreshCatalogs, type RefreshResult, type DataState } from './refreshData.ts';
 import { EventEmitter } from 'node:events';
-import { basename, resolve, sep } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { BUILTIN_PLUGINS } from '../../plugins/index.ts';
 import { AppConfigStore } from '../config/appConfig.ts';
@@ -22,6 +27,7 @@ import type { ResourcePaths } from './resources.ts';
 
 export type ProxyState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
 export interface AppState {
+  data: DataState;
   proxy: { state: ProxyState; port: number | null; error: string | null };
   game: { dir: string | null; candidates: string[]; launcher: string | null;
     helper: { state: HelperState | 'unknown'; backup: boolean } };
@@ -32,7 +38,17 @@ export interface AppState {
   revision: number;
 }
 export interface ControllerEvents { state: [AppState]; plugins: [PluginSnapshot[]]; data: [{ pluginId: string; type: string; data: unknown }] }
+interface CatalogSelection {
+  consumables: string | null;
+  safety: string | null;
+  usesAppData?: boolean;
+  source?: CatalogSource | null;
+}
 export interface ControllerDeps {
+  readGameBuild: typeof readGameBuildAsync;
+  catalogBuilds(gameBuild: string): CatalogSelection;
+  readGameFileStamps: typeof readGameFileStamps;
+  refreshCatalogs: typeof refreshCatalogs;
   createHost(options: ProxyHostOptions): ProxyLike & Pick<ProxyHost, 'start' | 'stop'>;
   plugins: readonly PluginDefinition[];
   nativeModuleError(): string | null;
@@ -66,11 +82,29 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private pending: Promise<void> | null = null;
   private shutdownPromise: Promise<void> | null = null;
   private shuttingDown = false;
+  private dataAbort: AbortController | null = null;
+  private dataFlight: Promise<RefreshResult | null> | null = null;
+  private dataTimer: ReturnType<typeof setInterval> | null = null;
+  private catalogBuilds: CatalogSelection | null = null;
+  private catalogsInvalidated = false;
+  private waitingBuilds = new Set<string>();
+  private failures = new Map<string, { retryAt: number; warnAt: number }>();
 
   constructor(options: { config: AppConfigStore; resources: ResourcePaths; logs: LogRing; fallback?: string }, deps?: Partial<ControllerDeps>) {
     super();
     this.config = options.config; this.resources = options.resources; this.fallback = options.fallback;
     this.deps = {
+      readGameBuild: readGameBuildAsync, readGameFileStamps, refreshCatalogs,
+      catalogBuilds: gameBuild => {
+        const options = { appDataDir: this.config.dir, gameBuild };
+        const consumables = loadConsumables({ ...options, bundledPath: join(this.resources.dataDir, 'catalogs/consumables.json') });
+        const safety = loadSafetyCatalog({ ...options, bundledPath: join(this.resources.dataDir, 'catalogs/safety.json') });
+        const out = join(this.config.dir, 'data', 'catalogs');
+        const usesAppData = (consumables.ok && consumables.path === join(out, 'consumables.json'))
+          || (safety.ok && safety.path === join(out, 'safety.json'));
+        return { consumables: consumables.ok ? consumables.catalog.gameBuild : null, safety: safety.ok ? safety.catalog.gameBuild : null,
+          usesAppData, source: usesAppData ? readCatalogSourceSync(out) : null };
+      },
       createHost: options => new ProxyHost(options), plugins: BUILTIN_PLUGINS,
       nativeModuleError: tcpOwnerSourceError, findGameDirs: findExaltDirs, isGameDir: isExaltDir,
       installHelper, uninstallHelper, inspectHelper,
@@ -87,6 +121,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     const config = this.config.get();
     const candidates = this.deps.findGameDirs();
     this.current = {
+      data: { state: 'idle', gameBuild: null, catalogBuild: null, lastResult: null, error: null },
       proxy: { state: 'stopped', port: null, error: null },
       game: { dir: config.gameDir ?? candidates[0] ?? null, candidates, launcher: config.launcher, helper: { state: 'unknown', backup: false } },
       sessions: { open: 0, connected: 0 }, profile: { active: config.activeProfile, available: listProfiles(this.config.dir) },
@@ -123,6 +158,118 @@ export class AppController extends EventEmitter<ControllerEvents> {
     finally { this.current.operation = null; this.pending = null; done(); this.changed(); }
   }
 
+  /** Manual requests join any active refresh, bypassing automatic failure backoff. */
+  async refreshData(): Promise<RefreshResult> {
+    for (;;) {
+      if (this.shuttingDown) throw new OperationBusyError();
+      const result = await this.checkData(true);
+      if (result) return result;
+      // An automatic check may have found matching data without extracting.
+      // Recheck shutdown before starting the manual extraction in that case.
+    }
+  }
+
+  private invalidateData(reason: string): void {
+    this.catalogsInvalidated = true;
+    this.pluginHost?.notifyDataInvalidated(reason);
+  }
+
+  private checkData(manual = false): Promise<RefreshResult | null> {
+    if (this.dataFlight) return this.dataFlight;
+    const abort = this.dataAbort = new AbortController(), signal = abort.signal;
+    this.dataFlight = Promise.resolve().then(async () => {
+      let dir = this.current.game.dir ?? 'unknown';
+      let build: string | null = null;
+      let checkingBuild = true, checkingSource = true, checkingPublication = false;
+      const failureKey = () => `${dir}:${build ?? 'unknown'}`;
+      try {
+        signal.throwIfAborted();
+        dir = this.gameDir();
+        build = await abortable(this.deps.readGameBuild(dir), signal);
+        signal.throwIfAborted();
+        checkingBuild = false;
+        this.current.data.gameBuild = build;
+        this.catalogBuilds ??= this.deps.catalogBuilds(build);
+        const { consumables, safety } = this.catalogBuilds;
+        this.current.data.catalogBuild = consumables === safety ? consumables : null;
+        if (consumables !== build || safety !== build) {
+          this.invalidateData('Game data is stale; waiting for verified catalogs');
+        }
+        const files = await abortable(this.deps.readGameFileStamps(dir), signal);
+        signal.throwIfAborted();
+        checkingSource = false;
+        const { source, usesAppData } = this.catalogBuilds;
+        const staleSource = usesAppData && (!source || source.gameBuild !== build || !sameGameFiles(source, files));
+        if (!manual && consumables === build && safety === build && !staleSource) {
+          this.current.data.state = 'idle'; this.current.data.error = null;
+          this.failures.delete(failureKey());
+          // Build-read failures cannot be keyed by the build that is now verified.
+          this.failures.delete(`${dir}:unknown`);
+          if (this.catalogsInvalidated) {
+            this.catalogsInvalidated = false;
+            if (!this.shuttingDown) this.pluginHost?.notifyDataRefreshed();
+            log.info('Data', `Game data verified for build ${build}; catalogs re-enabled`);
+          }
+          this.changed(); return null;
+        }
+        if (staleSource || consumables !== build || safety !== build) {
+          this.invalidateData('Game data is stale; waiting for verified catalogs');
+        }
+        if (!manual && (Date.now() - files.resourcesAssets.mtimeMs < 60_000 || Date.now() - files.bootConfig.mtimeMs < 60_000)) {
+          if (!this.waitingBuilds.has(build)) {
+            this.waitingBuilds.add(build);
+            log.info('Data', 'Game files are still changing; waiting to refresh');
+          }
+          this.changed(); return null;
+        }
+        if (!manual && Date.now() < (this.failures.get(failureKey())?.retryAt ?? 0)) { this.changed(); return null; }
+        this.current.data.state = 'refreshing'; this.current.data.error = null; this.changed();
+        log.info('Data', this.current.data.catalogBuild === build ? `Refreshing catalogs for build ${build}…`
+          : `Game build changed (${this.current.data.catalogBuild ?? 'unknown'} → ${build}); refreshing catalogs…`);
+        signal.throwIfAborted();
+        const result = await abortable(this.deps.refreshCatalogs(dir, join(this.config.dir, 'data', 'catalogs'), signal), signal);
+        signal.throwIfAborted();
+        checkingPublication = true;
+        const published = this.catalogBuilds = this.deps.catalogBuilds(result.gameBuild);
+        this.current.data.catalogBuild = published.consumables === published.safety ? published.consumables : null;
+        if (published.consumables !== result.gameBuild || published.safety !== result.gameBuild) {
+          throw new Error('Refreshed catalogs could not be verified after publication');
+        }
+        if (!published.source || published.source.gameBuild !== result.gameBuild
+          || !sameGameFiles(published.source, await abortable(this.deps.readGameFileStamps(dir), signal))) {
+          throw new Error('game files changed during refresh; retrying later');
+        }
+        signal.throwIfAborted();
+        checkingPublication = false;
+        this.catalogsInvalidated = false;
+        this.current.data = { state: 'idle', gameBuild: result.gameBuild, catalogBuild: result.gameBuild, lastResult: result, error: null };
+        this.failures.delete(failureKey());
+        if (!this.shuttingDown) this.pluginHost?.notifyDataRefreshed();
+        log.info('Data', `Catalogs refreshed for build ${result.gameBuild} (${result.items} items, ${result.projectiles} projectiles, ${result.tiles} tiles, ${result.ms} ms)`);
+        this.changed(); return result;
+      } catch (error) {
+        if (signal.aborted) {
+          this.current.data.state = 'idle'; this.current.data.error = null; this.changed();
+          throw signal.reason;
+        }
+        if (checkingBuild || (checkingSource && this.catalogBuilds?.usesAppData) || checkingPublication) {
+          this.invalidateData('Game data could not be verified; waiting for verified catalogs');
+        }
+        const key = failureKey(), now = Date.now();
+        const warnAt = this.failures.get(key)?.warnAt ?? 0;
+        this.failures.set(key, { retryAt: now + 300_000, warnAt: now >= warnAt ? now + 300_000 : warnAt });
+        if (now >= warnAt) log.warn('Data', `Refresh failed: ${message(error)}`);
+        this.current.data.state = 'failed'; this.current.data.error = message(error); this.changed();
+        throw error;
+      }
+    }).finally(() => { this.dataFlight = null; if (this.dataAbort === abort) this.dataAbort = null; });
+    return this.dataFlight;
+  }
+
+  private async automaticDataCheck(): Promise<void> {
+    try { await this.checkData(); } catch { /* Retained in state and rate-limited above. */ }
+  }
+
   startProxy(): Promise<void> { return this.operation('starting proxy', () => this.start()); }
   private async start(): Promise<void> {
     if (this.current.proxy.state === 'running') return;
@@ -142,6 +289,9 @@ export class AppController extends EventEmitter<ControllerEvents> {
       }
       const stale = removeStaleTargetFiles();
       if (stale) log.info('Helper', `Removed ${stale} stale target file(s)`);
+      this.catalogBuilds = null;
+      await this.automaticDataCheck();
+      if (this.shuttingDown) return;
       stage = 'Proxy';
       const schema = loadSchema(pathToFileURL(this.resources.dataDir + sep));
       const host = this.host = this.deps.createHost({ schema, workerUrl: this.resources.workerUrl, listenPort: GAME_PORT,
@@ -161,6 +311,8 @@ export class AppController extends EventEmitter<ControllerEvents> {
       log.info('Proxy', `Listening on 127.0.0.1:${port}`);
       stage = 'Helper'; this.install(gameDir);
       this.current.proxy = { state: 'running', port, error: null }; this.changed();
+      this.dataTimer = setInterval(() => { void this.automaticDataCheck(); }, 60_000);
+      this.dataTimer.unref();
     } catch (error) {
       log.error(stage, message(error));
       this.current.proxy = { state: 'failed', port: null, error: message(error) }; this.changed();
@@ -172,6 +324,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private watchHost(host: ReturnType<ControllerDeps['createHost']>): void {
     // Retain exact listener references so an old worker cannot affect a subsequent start.
     const onSession = ({ id, remotePort }: { id: string; remotePort: number }) => {
+      void this.automaticDataCheck();
       this.sessions.add(id); this.sessionState(); log.info('Proxy', `Game connected (${id.slice(0, 8)}, port ${remotePort})`);
     };
     const onConnected = ({ id }: { id: string }) => { if (this.sessions.has(id)) { this.connected.add(id); this.sessionState(); } };
@@ -209,6 +362,10 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.current.sessions = { open: this.sessions.size, connected: this.connected.size }; this.changed();
   }
   private async cleanup(): Promise<void> {
+    this.dataAbort?.abort(new Error('Game data refresh cancelled'));
+    await this.dataFlight?.catch(() => {});
+    if (this.dataTimer) clearInterval(this.dataTimer);
+    this.dataTimer = null;
     const plugins = this.pluginHost, host = this.host;
     this.pluginHost = null; this.host = null;
     for (const detach of this.detachHost.splice(0)) detach();
@@ -282,6 +439,8 @@ export class AppController extends EventEmitter<ControllerEvents> {
   setGameDir(dir: string): Promise<void> {
     return this.operation('setting game folder', async () => {
       if (this.host) throw new Error('Stop the proxy before changing the game folder');
+      if (this.dataFlight) throw new OperationBusyError();
+      this.catalogBuilds = null;
       if (!dir.trim() || !this.deps.isGameDir(resolve(dir))) throw new Error('Folder does not contain RotMG Exalt.exe');
       this.config.update({ gameDir: resolve(dir) }); this.current.game.dir = resolve(dir); this.refreshHelper(); this.changed();
     });
@@ -327,8 +486,10 @@ export class AppController extends EventEmitter<ControllerEvents> {
   shutdown(): Promise<void> {
     if (!this.shutdownPromise) {
       this.shuttingDown = true;
+      this.dataAbort?.abort(new Error('Game data refresh cancelled'));
       this.shutdownPromise = (async () => {
         await this.pending;
+        await this.dataFlight?.catch(() => {});
         try { await this.stop(); } finally { this.detachLog(); }
       })();
     }
