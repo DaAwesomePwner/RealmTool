@@ -1,5 +1,7 @@
 import { definePlugin, type ClientConnection, type PluginContext } from '../../src/plugins/api.ts';
 
+const QUIET_NOTIFICATION_KEYS = new Set(['s.plus_symbol']);
+
 interface Session {
   started: number;
   position?: { x: number; y: number };
@@ -8,6 +10,7 @@ interface Session {
   usedItem?: number;
   chatted?: number;
   messagesLogged: number;
+  suppressed: number;
   lastMessage: string;
 }
 
@@ -51,18 +54,18 @@ export function register(ctx: PluginContext): void {
   ctx.registerSetting('logSystemMessages', { label: 'Log system messages', type: 'boolean', value: true });
   const sessions = new Map<ClientConnection, Session>();
   const publish = (client: ClientConnection, session: Session): void => {
-    ctx.setData('status', { sessionId: client.clientId.slice(0, 8), messagesLogged: session.messagesLogged, lastMessage: session.lastMessage });
+    ctx.setData('status', { sessionId: client.clientId.slice(0, 8), messagesLogged: session.messagesLogged, lastMessage: session.lastMessage, suppressed: session.suppressed });
   };
   function sessionFor(client: ClientConnection): Session {
     let session = sessions.get(client);
     if (!session) {
       // Also supports enabling the plugin during an existing connection.
-      session = { started: performance.now(), messagesLogged: 0, lastMessage: '' };
+      session = { started: performance.now(), messagesLogged: 0, lastMessage: '', suppressed: 0 };
       sessions.set(client, session);
     }
     return session;
   }
-  ctx.setData('status', { messagesLogged: 0, lastMessage: '' });
+  ctx.setData('status', { messagesLogged: 0, lastMessage: '', suppressed: 0 });
   ctx.on('clientConnected', client => {
     if (ctx.enabled) publish(client, sessionFor(client));
   });
@@ -72,11 +75,12 @@ export function register(ctx: PluginContext): void {
     if (!ctx.enabled || !session) return;
     const now = performance.now();
     const idle = (at: number | undefined): string => at === undefined ? 'never' : `${duration(now - at)} ago`;
-    ctx.log(sanitize(`[${client.clientId.slice(0, 8)}] Session ended after ${duration(now - session.started)}; idle: moved ${idle(session.moved)}, shot ${idle(session.shot)}, used item ${idle(session.usedItem)}, chatted ${idle(session.chatted)}`));
+    const summary = session.suppressed ? `; suppressed ${session.suppressed} "+N" notifications` : '';
+    ctx.log(sanitize(`[${client.clientId.slice(0, 8)}] Session ended after ${duration(now - session.started)}; idle: moved ${idle(session.moved)}, shot ${idle(session.shot)}, used item ${idle(session.usedItem)}, chatted ${idle(session.chatted)}${summary}`));
   });
   ctx.onEnabledChange(() => {
     sessions.clear();
-    ctx.setData('status', { messagesLogged: 0, lastMessage: '' });
+    ctx.setData('status', { messagesLogged: 0, lastMessage: '', suppressed: 0 });
   });
   ctx.registerCleanup(() => sessions.clear());
 
@@ -88,7 +92,19 @@ export function register(ctx: PluginContext): void {
       switch (name) {
         case 'FAILURE': message = `FAILURE ${d.errorId}: ${d.errorMessage}`; break;
         case 'GLOBALNOTIFICATION': message = `GLOBALNOTIFICATION ${d.notificationType}: ${d.text}`; break;
-        case 'NOTIFICATION': message = `NOTIFICATION type ${d.typeValue}/${d.textByte}: ${notificationStrings(packet.unreadData)} (${packet.unreadData.length} bytes)`; break;
+        case 'NOTIFICATION': {
+          const text = notificationStrings(packet.unreadData);
+          // Localization payloads can contain trailing commas, so extract keys without JSON parsing.
+          const quiet = [...text.matchAll(/"k"\s*:\s*"([^"\\]*)"/g)].some(match => QUIET_NOTIFICATION_KEYS.has(match[1]!));
+          if (quiet) {
+            const session = sessionFor(client);
+            session.suppressed++;
+            publish(client, session);
+            return;
+          }
+          message = `NOTIFICATION type ${d.typeValue}/${d.textByte}: ${text} (${packet.unreadData.length} bytes)`;
+          break;
+        }
         default: {
           // System senders may address a player; negative IDs alone also occur in private player traffic.
           if (typeof d.name !== 'string' || !(d.name === '' || d.name.startsWith('*') || (d.objectId < 0 && !d.recipient))) return;

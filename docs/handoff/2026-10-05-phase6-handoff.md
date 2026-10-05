@@ -43,6 +43,13 @@ The user installed `RealmTool_0.1.0_x64-setup.exe` and keeps it as their daily t
 - The desktop shell's real forced-termination path during a refresh.
 - The AFK experiment. Stand idle somewhere safe until disconnected, then read the `[Server Messages]` lines and the session-end idle line for that session in `%APPDATA%\RealmTool\logs\realmtool.log`.
 
+## First Server Messages session (user, 2026-10-05)
+
+- **A server-side disconnect is logged as `closed by game`.** Before a scheduled restart the server sent `NOTIFICATION type 4/34: This server will restart in N minutes, please exit the game accordingly` once a minute from 20 down to 1. At the restart it sent an empty `FAILURE 0:`, and the game closed the socket 6 ms later. So "closed by game" doesn't mean the client decided: look for a `FAILURE` immediately before the close.
+- **AFK still unsettled.** The restart ended the session before the idle threshold; the player had moved 29 s before the end. The test remains: idle until kicked, then check for a `FAILURE` or warning notification just before the close (server-enforced) versus none (client-enforced).
+- Full servers answer HELLO with `FAILURE 0: Can not add player due to connection amount limits`; the game retries every 5 s by itself.
+- `s.plus_symbol` notifications (floating "+N" numbers) made up 2,638 of ~2,700 lines, about 2.6/s. They are now counted on the session-end line instead of logged individually.
+
 ## Known gap
 
 Nothing in this repo or its research records how packet IDs and RC4 keys were originally extracted from Exalt (`docs/patch-day.md` §4). If an update changes them, new verified values must come from outside this repo.
