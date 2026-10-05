@@ -251,19 +251,83 @@ describe('AppController lifecycle', () => {
     expect(controller.state().data.state).toBe('failed');
   });
 
-  it('retries previously invalidated data after transient stat failure clears, even when its build still matches', async () => {
+  it.each(['bundled build', 'appdata build', 'appdata fingerprint'])('re-enables verified catalogs without extraction after a transient %s failure', async kind => {
+    await controller.shutdown(); vi.useFakeTimers();
+    const records: { module: string; level: string; message: string }[] = [];
+    const detach = log.addSink(r => records.push(r));
+    try {
+      let failRead = false;
+      const files = selection('A').source;
+      deps.readGameBuild = async () => {
+        if (failRead && kind.endsWith('build')) throw new Error('fixture locked file');
+        return 'A';
+      };
+      deps.catalogBuilds = () => ({ ...selection('A'), usesAppData: kind !== 'bundled build' });
+      deps.readGameFileStamps = async () => {
+        if (failRead && kind === 'appdata fingerprint') throw new Error('fixture locked file');
+        return files;
+      };
+      deps.refreshCatalogs = vi.fn(async () => ({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 }));
+      controller = make(); await controller.startProxy();
+      const invalidate = vi.fn(); contexts[0].onDataInvalidated(invalidate);
+      const reload = vi.fn(); contexts[0].onDataRefreshed(reload);
+      failRead = true;
+      hosts[0].emit('session', { id: 'failure', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
+      expect(invalidate).toHaveBeenCalledOnce();
+      expect(controller.state().data).toMatchObject({ state: 'failed', error: 'fixture locked file', lastResult: null });
+      failRead = false;
+      hosts[0].emit('session', { id: 'recovery', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
+      expect(deps.refreshCatalogs).not.toHaveBeenCalled(); expect(reload).toHaveBeenCalledOnce();
+      expect(controller.state().data).toMatchObject({ state: 'idle', error: null, lastResult: null });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reload).toHaveBeenCalledOnce(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+      expect(records.filter(r => r.module === 'Data' && r.level === 'info').map(r => r.message))
+        .toEqual(['Game data verified for build A; catalogs re-enabled']);
+      // A new failure must warn immediately, including the unknown-build key.
+      failRead = true;
+      hosts[0].emit('session', { id: 'second-failure', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
+      expect(records.filter(r => r.module === 'Data' && r.level === 'warn')).toHaveLength(2);
+    } finally { detach(); vi.useRealTimers(); }
+  });
+
+  it('clears failure backoff on verification so newly stale data refreshes immediately', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let failStats = false, files = selection('A').source;
+      deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => selection('A', files);
+      deps.readGameFileStamps = async () => { if (failStats) throw new Error('fixture locked file'); return files; };
+      deps.refreshCatalogs = vi.fn(async () => ({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 }));
+      controller = make(); await controller.startProxy();
+      failStats = true; await expect(controller.refreshData()).rejects.toThrow('locked file');
+      failStats = false;
+      hosts[0].emit('session', { id: 'recovery', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
+      expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+      files = { ...files, resourcesAssets: { size: 3, mtimeMs: 0 } };
+      hosts[0].emit('session', { id: 'stale', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
+      expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
+      expect(controller.state().data).toMatchObject({ state: 'idle', error: null });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('clears a recovered bundled stat failure without invalidation or losing the last refresh result', async () => {
     await controller.shutdown(); vi.useFakeTimers();
     try {
       let failStats = false;
-      deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => selection('A');
+      deps.readGameBuild = async () => 'A';
+      deps.catalogBuilds = () => ({ ...selection('A'), usesAppData: false });
       deps.readGameFileStamps = async () => { if (failStats) throw new Error('fixture locked file'); return selection('A').source; };
-      deps.refreshCatalogs = vi.fn(async () => ({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 }));
+      const result = { gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 };
+      deps.refreshCatalogs = vi.fn(async () => result);
       controller = make(); await controller.startProxy();
+      await controller.refreshData(); expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
+      const invalidate = vi.fn(); contexts[0].onDataInvalidated(invalidate);
       const reload = vi.fn(); contexts[0].onDataRefreshed(reload);
       failStats = true; await expect(controller.refreshData()).rejects.toThrow('locked file');
-      failStats = false; await vi.advanceTimersByTimeAsync(240_000); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(60_000); expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
-      expect(reload).toHaveBeenCalledOnce(); expect(controller.state().data.state).toBe('idle');
+      expect(controller.state().data).toMatchObject({ state: 'failed', error: 'fixture locked file', lastResult: result });
+      failStats = false; await vi.advanceTimersByTimeAsync(60_000);
+      expect(controller.state().data).toMatchObject({ state: 'idle', error: null, lastResult: result });
+      expect(invalidate).not.toHaveBeenCalled(); expect(reload).not.toHaveBeenCalled();
+      expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
   });
 

@@ -180,13 +180,14 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.dataFlight = Promise.resolve().then(async () => {
       let dir = this.current.game.dir ?? 'unknown';
       let build: string | null = null;
-      let checkingSource = true, checkingPublication = false;
+      let checkingBuild = true, checkingSource = true, checkingPublication = false;
       const failureKey = () => `${dir}:${build ?? 'unknown'}`;
       try {
         signal.throwIfAborted();
         dir = this.gameDir();
         build = await abortable(this.deps.readGameBuild(dir), signal);
         signal.throwIfAborted();
+        checkingBuild = false;
         this.current.data.gameBuild = build;
         this.catalogBuilds ??= this.deps.catalogBuilds(build);
         const { consumables, safety } = this.catalogBuilds;
@@ -199,7 +200,18 @@ export class AppController extends EventEmitter<ControllerEvents> {
         checkingSource = false;
         const { source, usesAppData } = this.catalogBuilds;
         const staleSource = usesAppData && (!source || source.gameBuild !== build || !sameGameFiles(source, files));
-        if (!manual && consumables === build && safety === build && !staleSource && !this.catalogsInvalidated) { this.changed(); return null; }
+        if (!manual && consumables === build && safety === build && !staleSource) {
+          this.current.data.state = 'idle'; this.current.data.error = null;
+          this.failures.delete(failureKey());
+          // Build-read failures cannot be keyed by the build that is now verified.
+          this.failures.delete(`${dir}:unknown`);
+          if (this.catalogsInvalidated) {
+            this.catalogsInvalidated = false;
+            if (!this.shuttingDown) this.pluginHost?.notifyDataRefreshed();
+            log.info('Data', `Game data verified for build ${build}; catalogs re-enabled`);
+          }
+          this.changed(); return null;
+        }
         if (staleSource || consumables !== build || safety !== build) {
           this.invalidateData('Game data is stale; waiting for verified catalogs');
         }
@@ -240,7 +252,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
           this.current.data.state = 'idle'; this.current.data.error = null; this.changed();
           throw signal.reason;
         }
-        if ((checkingSource && this.catalogBuilds?.usesAppData) || checkingPublication) {
+        if (checkingBuild || (checkingSource && this.catalogBuilds?.usesAppData) || checkingPublication) {
           this.invalidateData('Game data could not be verified; waiting for verified catalogs');
         }
         const key = failureKey(), now = Date.now();
