@@ -81,7 +81,7 @@ it('drives real API, built-ins and worker through connection, settings, profile 
     await once(ws, 'open');
     expect((await request<AppState>('/api/proxy/start', {})).proxy.state).toBe('running');
     const plugins = await request<PluginSnapshot[]>('/api/plugins');
-    expect(plugins).toHaveLength(4); expect(plugins.every(p => p.failed === null)).toBe(true);
+    expect(plugins).toHaveLength(5); expect(plugins.every(p => p.failed === null)).toBe(true);
     const factory = createFactory();
     async function connect(): Promise<Peer> {
       const state = await request<AppState>('/api/state');
