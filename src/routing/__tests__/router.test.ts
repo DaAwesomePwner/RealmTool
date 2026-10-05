@@ -72,6 +72,20 @@ describe('Router', () => {
     expect(router.size).toBe(0);
   });
 
+  it('keeps a token alive while the game keeps retrying it (full-server queue)', () => {
+    const { router, advance } = clockedRouter();
+    const current = { host: '10.0.0.5', port: 2050 };
+    router.rewriteReconnect(fromServer(reconnectBytes(factory, { host: '10.0.0.9', port: 2050, key: Buffer.from('k') })), current);
+    router.rewriteReconnect(fromServer(reconnectBytes(factory, { host: '10.0.0.8', port: 2050, key: Buffer.from('k') })), current);
+    for (let elapsed = 0; elapsed < 10 * 60_000; elapsed += 5_000) {
+      advance(5_000);
+      expect(router.routeHello(fromClient(helloBytes(factory, Buffer.from('token-2'))), null)?.destination.host).toBe('10.0.0.8');
+    }
+    // The token nobody retried still expires, even though a newer one was renewed past it.
+    expect(router.routeHello(fromClient(helloBytes(factory, Buffer.from('token-1'))), null)).toBeNull();
+    expect(router.size).toBe(1);
+  });
+
   it('evicts the oldest token beyond maxTokens', () => {
     let tokens = 0;
     const router = new Router({ now: () => 0, newToken: () => `t${++tokens}`, maxTokens: 2 });
