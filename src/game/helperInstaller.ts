@@ -1,14 +1,14 @@
 import { createHash } from 'node:crypto';
 import { closeSync, copyFileSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { resourcePaths } from '../app/resources.ts';
 
 export const HELPER_FILE = 'winhttp.dll';
 export const BACKUP_FILE = 'winhttp.dll.realmtool-backup';
 export const LOCK_FILE = 'winhttp.dll.realmtool-lock';
 /** Embedded in every helper build (native/helper/src/dllmain.cpp) so we never mistake a foreign DLL for ours. */
 export const HELPER_MARKER = 'RealmTool-Helper/';
-export const DEFAULT_HELPER_PATH = fileURLToPath(new URL('../../native/helper/bin/winhttp.dll', import.meta.url));
+export const DEFAULT_HELPER_PATH = resourcePaths().helperDll;
 
 export type InstallStatus = 'installed' | 'updated' | 'unchanged';
 export interface InstallResult {
@@ -17,6 +17,15 @@ export interface InstallResult {
   target: string;
 }
 export type UninstallStatus = 'removed' | 'restored' | 'not-installed' | 'foreign';
+
+export type HelperState = 'absent' | 'installed' | 'outdated' | 'foreign';
+export function inspectHelper(gameDir: string, helperPath: string): { state: HelperState; backup: boolean } {
+  const target = join(gameDir, HELPER_FILE);
+  const backup = existsSync(join(gameDir, BACKUP_FILE));
+  if (!existsSync(target)) return { state: 'absent', backup };
+  if (!isRealmToolHelper(target)) return { state: 'foreign', backup };
+  return { state: sha256(target) === sha256(helperPath) ? 'installed' : 'outdated', backup };
+}
 
 export interface InstallerOps {
   copyFile(src: string, dest: string): void;

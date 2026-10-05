@@ -35,6 +35,66 @@ function fixture(settings?: Record<string, unknown>, enabled?: boolean, loaded =
 }
 const status = () => new SafetyEngine(() => {}).status();
 
+describe('Auto Nexus UI status', () => {
+  it('publishes only the sanitized fresh status shape', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(1000);
+    const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');
+    sendStatus(f, 'on');
+    const expected = { clientId: f.client, collisionHp: 'on', catalog: ready,
+      protectionState: status().protectionState, automaticEligible: false,
+      confirmedHp: status().confirmedHp, maxHp: status().maxHp, lowerHp: status().lowerHp,
+      pendingDamage: 230, pendingCount: 2, attemptPhase: status().attemptPhase, sampledAgeMs: 0 };
+    expect(f.h.host.data('auto-nexus')!.get('status')).toEqual(expected);
+    expect(publish).toHaveBeenCalledExactlyOnceWith('status', expected);
+  });
+  it('coalesces to the latest sample at 250ms and cancels pending samples on disconnect and cleanup', () => {
+    vi.useFakeTimers(); cleanups.push(() => vi.useRealTimers());
+    let now = 1000; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');
+    sendStatus(f, 'on'); now = 1100; sendStatus(f, 'off');
+    now = 1200; sendStatus(f, 'fallback'); expect(publish).toHaveBeenCalledTimes(1);
+    now = 1250; vi.advanceTimersByTime(250);
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(publish.mock.calls[1][1]).toMatchObject({ collisionHp: 'fallback', sampledAgeMs: 50 });
+    now = 1300; sendStatus(f, 'on'); f.ctx.enabled = false; f.h.close(f.client);
+    expect(publish).toHaveBeenLastCalledWith('status', { clientId: f.client, state: 'disconnected' });
+    const count = publish.mock.calls.length; now = 2000; vi.advanceTimersByTime(1000);
+    expect(publish).toHaveBeenCalledTimes(count);
+    const other = f.h.connect('other'); sendStatus(f, 'on', other); sendStatus(f, 'off', other);
+    f.h.host.stop(); const stopped = publish.mock.calls.length; vi.advanceTimersByTime(1000);
+    expect(publish).toHaveBeenCalledTimes(stopped);
+  });
+  it('does not publish stale, future, or older-generation samples', () => {
+    let now = 4000; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');
+    const send = (generation: number, sampledAt: number) => f.h.workerMessage(f.client, 'auto-nexus', {
+      type: 'status', generation, sampledAt, status: status(), collisionHp: 'off', catalog: ready,
+    });
+    send(2, 1000); send(2, 4001); expect(publish).not.toHaveBeenCalled();
+    send(3, now); expect(publish).toHaveBeenCalledTimes(1);
+    now += 250; send(2, now); expect(publish).toHaveBeenCalledTimes(1);
+  });
+  it('rechecks freshness and generation at delayed publication and never revives a future sample', () => {
+    vi.useFakeTimers(); cleanups.push(() => vi.useRealTimers());
+    let now = 4000; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');
+    const send = (sampledAt = now) => f.h.workerMessage(f.client, 'auto-nexus', {
+      type: 'status', generation: 1, sampledAt, status: status(), collisionHp: 'off', catalog: ready,
+    });
+    send(); now += 100; send(); send(now + 1);
+    now += 150; vi.advanceTimersByTime(250);
+    expect(publish).toHaveBeenCalledTimes(1);
+    send(); now += 100; send(); now += 2001; vi.advanceTimersByTime(250);
+    expect(publish).toHaveBeenCalledTimes(2);
+    send(); now += 100; send();
+    f.h.workerMessage(f.client, 'auto-nexus', { type: 'decision', collisionHp: 'off', catalog: ready,
+      status: status(), writeDelayMs: 0,
+      decision: { origin: 'manual', connectionGeneration: 2, confirmedHp: 10, maxHp: 100, reason: 'manual' } });
+    now += 150; vi.advanceTimersByTime(250);
+    expect(publish).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('Auto Nexus facade', () => {
   it('declares exactly the five canonical controls', () => {
     expect(SETTING_DEFS).toEqual([

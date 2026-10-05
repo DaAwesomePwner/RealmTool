@@ -11,7 +11,8 @@ import {
   type PacketHook, type PluginContext, type PluginDefinition, type ServerInfo, type SettingDef, type WorkerChannel,
 } from './api.ts';
 import { IDENTITY_PACKETS, PlayerIdentity } from './identity.ts';
-import { SettingsStore } from './settings.ts';
+import { SettingsStore, validateSetting } from './settings.ts';
+import { toJsonSafe, type PluginSnapshot } from './snapshot.ts';
 
 const CREDENTIAL_PACKETS: ReadonlySet<string> = new Set(['HELLO']);
 
@@ -24,6 +25,7 @@ export interface PluginHostOptions {
   profile: ProfileStore;
   gameDir?: string | null;
   onData?: (pluginId: string, type: string, data: unknown) => void;
+  onChange?: (pluginId: string) => void;
 }
 
 interface Registered<T> { plugin: Plugin; fn: T }
@@ -57,6 +59,8 @@ class Plugin implements PluginContext {
   readonly settings: SettingsStore;
   readonly data = new Map<string, unknown>();
   failed = false;
+  failureMessage: string | null = null;
+  validationError: string | null = null;
   private enabledValue = true;
   private readonly enabledCallbacks: ((enabled: boolean) => void)[] = [];
   readonly cleanups: (() => void)[] = [];
@@ -68,7 +72,16 @@ class Plugin implements PluginContext {
     this.definition = definition;
     this.pluginId = definition.id;
     this.name = definition.name;
-    this.settings = new SettingsStore(definition.settings?.validate?.bind(definition.settings), () => host.changed());
+    this.settings = new SettingsStore((key, value) => {
+      try {
+        return definition.settings?.validate
+          ? definition.settings.validate(key, value)
+          : validateSetting(this.settings.definition(key)!, value);
+      } catch (error) {
+        this.validationError = describeError(error);
+        throw error;
+      }
+    }, () => host.changed(this.pluginId));
   }
 
   get enabled(): boolean { return !this.failed && this.enabledValue; }
@@ -79,7 +92,7 @@ class Plugin implements PluginContext {
     for (const callback of this.enabledCallbacks) {
       try { callback(value); } catch (error) { log.error(this.name, 'Enable callback failed', error); }
     }
-    this.host.changed();
+    this.host.changed(this.pluginId);
   }
 
   get worker(): WorkerChannel {
@@ -97,10 +110,11 @@ class Plugin implements PluginContext {
   getSetting<T = any>(key: string): T { return this.settings.get<T>(key); }
   updateSetting(key: string, value: unknown): boolean {
     if (this.failed) return false;
+    this.validationError = null;
     const accepted = this.settings.update(key, value);
     // SettingsStore buttons notify their callbacks without its store-wide change
     // callback. Every accepted context update still schedules a profile snapshot.
-    if (accepted && this.settings.definition(key)?.type === 'button') this.host.changed();
+    if (accepted && this.settings.definition(key)?.type === 'button') this.host.changed(this.pluginId);
     return accepted;
   }
 
@@ -122,7 +136,11 @@ class Plugin implements PluginContext {
   on(event: ConnectionEvent, fn: (client: ClientConnection) => void): void { this.host.addListener({ plugin: this, event, fn }); }
   onEnabledChange(fn: (enabled: boolean) => void): void { if (!this.failed) this.enabledCallbacks.push(fn); }
   registerCleanup(fn: () => void): void { if (!this.failed) this.cleanups.push(fn); }
-  setData(key: string, value: unknown): void { this.data.set(key, value); }
+  setData(key: string, value: unknown): void {
+    if (this.failed) return;
+    this.data.set(key, value);
+    this.host.notifyChange(this.pluginId);
+  }
   broadcastData(type: string, data: unknown): void { this.host.broadcast(this, type, data); }
   createPacket(name: string): Packet {
     this.require('inject');
@@ -151,6 +169,7 @@ export class PluginHost {
   private readonly definitions: readonly PluginDefinition[];
   private readonly profile: ProfileStore;
   private readonly onData: PluginHostOptions['onData'];
+  private readonly onChange: PluginHostOptions['onChange'];
   private readonly plugins = new Map<string, Plugin>();
   private readonly hooks = new Map<string, Registered<PacketHook>[]>();
   private readonly observers = new Map<string, Registered<PacketHook>[]>();
@@ -169,6 +188,7 @@ export class PluginHost {
     this.definitions = options.definitions;
     this.profile = options.profile;
     this.onData = options.onData;
+    this.onChange = options.onChange;
   }
 
   start(): InterestSpec {
@@ -200,8 +220,11 @@ export class PluginHost {
     this.proxy.off('module', this.onModule);
     this.pendingConfigs.clear();
     this.started = false;
-    this.profile.flush();
+    this.flush();
   }
+
+  /** Persist pending settings without stopping plugins or their worker modules. */
+  flush(): void { this.profile.flush(); }
 
   loaded(): string[] {
     return [...this.plugins.values()].filter(p => !p.failed).map(p => p.pluginId);
@@ -214,6 +237,35 @@ export class PluginHost {
 
   data(id: string): ReadonlyMap<string, unknown> | undefined {
     return this.context(id) ? this.plugins.get(id)!.data : undefined;
+  }
+
+  snapshot(): PluginSnapshot[] {
+    return [...this.plugins.values()].map(plugin => ({
+      id: plugin.pluginId, name: plugin.name, category: plugin.category,
+      enabled: plugin.enabled, failed: plugin.failureMessage,
+      settings: plugin.failed ? [] : structuredClone(plugin.settings.definitions().filter(def => !def.hidden)),
+      data: plugin.failed ? {} : toJsonSafe(Object.fromEntries(plugin.data)) as Record<string, unknown>,
+    }));
+  }
+
+  setEnabled(id: string, enabled: boolean): { ok: true } | { ok: false; error: string } {
+    const plugin = this.plugins.get(id);
+    if (!plugin) return { ok: false, error: `Unknown plugin: ${id}` };
+    if (plugin.failed) return { ok: false, error: plugin.failureMessage! };
+    if (typeof enabled !== 'boolean') return { ok: false, error: 'enabled must be a boolean' };
+    plugin.enabled = enabled;
+    return { ok: true };
+  }
+
+  updateSetting(id: string, key: string, value: unknown): { ok: true } | { ok: false; error: string } {
+    const plugin = this.plugins.get(id);
+    if (!plugin) return { ok: false, error: `Unknown plugin: ${id}` };
+    if (plugin.failed) return { ok: false, error: plugin.failureMessage! };
+    const def = plugin.settings.definition(key);
+    if (!def || def.hidden) return { ok: false, error: `Unknown setting: ${key}` };
+    if (def.type === 'button' && !plugin.enabled) return { ok: false, error: 'Plugin is disabled' };
+    return plugin.updateSetting(key, value) ? { ok: true }
+      : { ok: false, error: plugin.validationError ?? `Invalid value for ${key}` };
   }
 
   // ── called by Plugin / Client ─────────────────────────────
@@ -260,29 +312,39 @@ export class PluginHost {
     this.proxy.inject(client.clientId, this.factory.serialize(packet), toClient);
   }
 
-  changed(): void {
+  notifyChange(pluginId: string): void {
     if (this.applying || !this.started) return;
-    this.profile.scheduleSave(this.snapshot());
+    try { this.onChange?.(pluginId); }
+    catch (error) { log.error('Plugins', 'Change listener failed', error); }
+  }
+
+  changed(pluginId: string): void {
+    if (this.applying || !this.started) return;
+    this.profile.scheduleSave(this.profileSnapshot());
+    this.notifyChange(pluginId);
   }
 
   // ── internals ─────────────────────────────────────────────
 
   private load(definition: PluginDefinition): void {
-    if (definition.apiVersion !== PLUGIN_API_VERSION) {
-      log.error('Plugins', `${definition.name} targets plugin API ${definition.apiVersion}; this RealmTool supports ${PLUGIN_API_VERSION}`);
-      return;
-    }
     if (this.plugins.has(definition.id)) {
       log.error('Plugins', `Duplicate plugin id ${definition.id}; ignoring ${definition.name}`);
       return;
     }
     const plugin = new Plugin(this, definition);
     this.plugins.set(definition.id, plugin);
+    if (definition.apiVersion !== PLUGIN_API_VERSION) {
+      plugin.failureMessage = `${definition.name} targets plugin API ${definition.apiVersion}; this RealmTool supports ${PLUGIN_API_VERSION}`;
+      log.error('Plugins', plugin.failureMessage);
+      this.fail(plugin);
+      return;
+    }
     try {
       definition.register(plugin);
       this.applyProfile(plugin);
     } catch (error) {
       log.error('Plugins', `${definition.name} failed to load and is disabled`, error);
+      plugin.failureMessage = describeError(error);
       this.fail(plugin);
     }
   }
@@ -339,7 +401,7 @@ export class PluginHost {
     this.refreshInterest();
   }
 
-  private snapshot(): Profile {
+  private profileSnapshot(): Profile {
     const plugins: Profile['plugins'] = { ...this.loadedProfile.plugins };
     for (const plugin of this.plugins.values()) {
       if (plugin.failed) continue;
@@ -373,7 +435,7 @@ export class PluginHost {
 
   private emitConnection(event: ConnectionEvent, client: Client): void {
     for (const listener of this.listeners) {
-      if (listener.event !== event || listener.plugin.failed || !listener.plugin.enabled) continue;
+      if (listener.event !== event || listener.plugin.failed || (!listener.plugin.enabled && event !== 'clientDisconnected')) continue;
       try { listener.fn(client); } catch (error) { log.error(listener.plugin.name, `${event} handler failed`, error); }
     }
   }

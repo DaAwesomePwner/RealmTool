@@ -1,24 +1,29 @@
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { statSync } from 'node:fs';
+import { basename, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { BUILTIN_PLUGINS } from '../plugins/index.ts';
 import { appDataDir, ProfileStore } from './config/store.ts';
 import { findExaltDirs, isExaltDir } from './game/exaltFinder.ts';
 import { DEFAULT_HELPER_PATH, installHelper, uninstallHelper } from './game/helperInstaller.ts';
-import { describeLaunchTarget, findLaunchTarget, openLaunchTarget, type LaunchTarget } from './game/gameLauncher.ts';
-import { GAME_PORT } from './protocol/constants.ts';
+import { findLaunchTarget, openLaunchTarget, type LaunchTarget } from './game/gameLauncher.ts';
 import type { PluginDefinition } from './plugins/api.ts';
-import { PluginHost, type ProxyLike } from './plugins/host.ts';
-import { createFactory, loadSchema } from './protocol/schema.ts';
-import { createTargetResolver, parseTargetFile, removeStaleTargetFiles } from './routing/targetResolver.ts';
+import type { ProxyLike } from './plugins/host.ts';
+import { loadSchema } from './protocol/schema.ts';
+import { parseTargetFile } from './routing/targetResolver.ts';
 import { tcpOwnerSourceError } from './routing/tcpProcessIdentity.ts';
 import { ProxyHost, type ProxyHostOptions } from './transport/host.ts';
+import { loadConsumables } from './data/consumables.ts';
+import { loadSafetyCatalog } from './data/safety.ts';
+import { resourcePaths } from './app/resources.ts';
 import { log } from './util/log.ts';
+import { AppController } from './app/controller.ts';
+import { AppConfigStore } from './config/appConfig.ts';
+import { LogRing } from './util/logStore.ts';
+import { runSidecar } from './app/sidecar.ts';
+import { startApiServer } from './api/server.ts';
 
-/** The checkout whose node_modules must hold koffi. */
-const REPO_DIR = resolve(fileURLToPath(new URL('..', import.meta.url)));
-
-const COMMANDS = ['start', 'find-game', 'install-helper', 'uninstall-helper', 'config-path', 'help'] as const;
+const COMMANDS = ['start', 'serve', 'find-game', 'install-helper', 'uninstall-helper', 'config-path', 'help', 'selftest'] as const;
 type Command = typeof COMMANDS[number];
 
 export interface CliOptions {
@@ -28,12 +33,14 @@ export interface CliOptions {
   fallback?: string;
   launch: boolean;
   launcher?: string;
+  quiet?: boolean;
 }
 
 export const HELP = `Usage: realmtool <command> [options]
 
 Commands:
   start              Start the proxy, install the helper and open the RotMG Exalt Launcher (Ctrl+C to stop)
+  serve              Run the authenticated desktop API and start the proxy without opening the launcher
   find-game          List detected Exalt install folders
   install-helper     Copy the helper DLL into the game folder
   uninstall-helper   Remove the helper DLL and restore any backed-up winhttp.dll
@@ -45,8 +52,16 @@ Options:
   --fallback <ip>    Server to use when the helper recorded none
   --launcher <exe>    RotMG Exalt Launcher.exe to open (default: auto-detect Deca, then Steam)
   --no-launch        start: don't open the launcher
+  --quiet            uninstall-helper: suppress success output (uses all saved helper directories)
   -h, --help         Show this help
 `;
+
+function validateLauncherOption(path: string): void {
+  if (!path.trim()) throw new Error('--launcher must not be empty');
+  if (basename(path.trim()).toLowerCase() === 'rotmg exalt.exe') {
+    throw new Error('Select the RotMG Exalt Launcher, not the game executable');
+  }
+}
 
 export function parseCli(argv: string[]): CliOptions {
   const { values, positionals } = parseArgs({
@@ -58,6 +73,7 @@ export function parseCli(argv: string[]): CliOptions {
       fallback: { type: 'string' },
       launcher: { type: 'string' },
       'no-launch': { type: 'boolean', default: false },
+      quiet: { type: 'boolean' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -66,7 +82,7 @@ export function parseCli(argv: string[]): CliOptions {
   if (!(COMMANDS as readonly string[]).includes(requested)) throw new Error(`Unknown command "${requested}". Run "realmtool help".`);
   if (values['game-dir'] !== undefined && !values['game-dir'].trim()) throw new Error('--game-dir must not be empty');
   const launcher = values.launcher?.trim();
-  if (launcher === '') throw new Error('--launcher must not be empty');
+  if (launcher !== undefined) validateLauncherOption(launcher);
   const fallback = values.fallback === undefined ? undefined : parseTargetFile(values.fallback);
   if (fallback === null) {
     throw new Error(`--fallback must be a public IPv4 address, got ${values.fallback}`);
@@ -78,6 +94,7 @@ export function parseCli(argv: string[]): CliOptions {
     fallback,
     launch: !values['no-launch'],
     launcher,
+    quiet: values.quiet,
   };
 }
 
@@ -107,6 +124,7 @@ const defaultRunDeps: RunDeps = {
   profileDir: () => appDataDir(),
   launch: (onError, override) => {
     const target = findLaunchTarget(undefined, override);
+    if (target?.kind === 'deca') validateLauncherOption(target.exe);
     if (target) openLaunchTarget(target, onError);
     return target;
   },
@@ -122,105 +140,70 @@ const defaultRunDeps: RunDeps = {
 };
 
 export async function runProxy(options: CliOptions, gameDir: string, deps: RunDeps = defaultRunDeps): Promise<number> {
-  // Without the TCP owner lookup no connection can be matched to the helper's target, so
-  // the game would hang on the loading screen. Stop before touching the game folder.
-  const nativeError = deps.nativeModuleError();
-  if (nativeError) {
-    if (!options.fallback) {
-      log.error('RealmTool', `RealmTool can't load its native module (koffi): run "npm install" in ${REPO_DIR} and try again`);
-      return 1;
-    }
-    log.warn('Routing', `Native module unavailable; new connections will use the fallback server ${options.fallback}`);
-  }
-
-  const stale = removeStaleTargetFiles();
-  if (stale) log.info('Helper', `Removed ${stale} stale target file(s)`);
-
-  const schema = loadSchema();
-  const factory = createFactory(schema);
-  const host = deps.createHost({
-    schema,
-    listenPort: GAME_PORT,
-    fallbackDestination: options.fallback ? { host: options.fallback, port: GAME_PORT } : null,
-    resolveTarget: createTargetResolver({ proxyPort: GAME_PORT }),
+  if (options.launcher !== undefined) validateLauncherOption(options.launcher);
+  const config = new AppConfigStore(deps.profileDir());
+  config.update({ gameDir, launcher: options.launcher ?? null });
+  const controller = new AppController({ config, resources: { ...resourcePaths(), helperDll: options.helper },
+    logs: new LogRing(), fallback: options.fallback }, deps);
+  let finish!: (code: number) => void;
+  const finished = new Promise<number>(resolve => { finish = resolve; });
+  let shutdownRequested = false;
+  controller.on('state', state => { if (state.proxy.state === 'failed') finish(1); });
+  const dispose = deps.onShutdown(() => {
+    shutdownRequested = true;
+    finish(0);
+    // Cancels the remaining startup steps; finally below observes shutdown errors.
+    void controller.shutdown().catch(() => {});
   });
-  let dispose: (() => void) | undefined;
-  let plugins: PluginHost | undefined;
   try {
-    plugins = new PluginHost({ proxy: host, factory, definitions: deps.plugins, profile: new ProfileStore({ dir: deps.profileDir() }), gameDir });
-    plugins.start();
-    log.info('Plugins', `Loaded ${plugins.loaded().join(', ') || 'no plugins'}`);
-
-    host.on('session', ({ id, remotePort }) => log.info('Proxy', `Game connected (${id.slice(0, 8)}, port ${remotePort})`));
-    host.on('routed', ({ id, host: server, port, restored }) =>
-      log.info('Proxy', `${id.slice(0, 8)} → ${server}:${port}${restored ? ' (transfer)' : ''}`));
-    host.on('closed', ({ id, by }) => log.info('Proxy', `${id.slice(0, 8)} closed by ${by}`));
-    host.on('diagnostic', ({ id, message }) => log.warn('Proxy', `${id ? `${id.slice(0, 8)}: ` : ''}${message}`));
-    host.on('fault', ({ id, message }) => log.error('Proxy', `${id ? `${id.slice(0, 8)}: ` : ''}${message}`));
-
-    let shutdownRequested = false;
-    let finish!: (code: number) => void;
-    const finished = new Promise<number>(resolve => { finish = resolve; });
-    host.on('exit', ({ code, expected }) => {
-      if (!expected) {
-        shutdownRequested = true;
-        log.error('Proxy', `Network worker stopped unexpectedly (code ${code})`);
-        finish(1);
-      }
-    });
-    dispose = deps.onShutdown(() => {
-      shutdownRequested = true;
-      finish(0);
-    });
-
-    let port: number;
-    try {
-      port = await host.start();
-    } catch (error) {
-      log.error('Proxy', (error as Error).message);
-      return 1;
-    }
-    log.info('Proxy', `Listening on 127.0.0.1:${port}`);
+    try { await controller.startProxy(); } catch { return 1; }
     if (shutdownRequested) return await finished;
-    try {
-      const installed = installHelper(gameDir, options.helper);
-      log.info('Helper', `${installed.status} at ${installed.target}${installed.backedUp ? ' (previous winhttp.dll backed up)' : ''}`);
-    } catch (error) {
-      log.error('Helper', (error as Error).message);
-      return 1;
-    }
-    if (options.launch && !shutdownRequested) {
-      let launchFailed = false;
-      const onError = (error: Error) => {
-        launchFailed = true;
-        log.error('Game', `Could not open the launcher: ${error.message}`);
-        finish(1);
-      };
-      try {
-        const target = deps.launch(onError, options.launcher);
-        if (launchFailed) return 1;
-        if (target) {
-          log.info('Game', `Opened ${describeLaunchTarget(target)}. Click Play; RealmTool routes the game automatically.`);
-        } else {
-          log.warn('Game', 'Could not find the RotMG Exalt Launcher or Steam. Start the game the way you normally do; RealmTool is ready.');
-        }
-      } catch (error) {
-        onError(error as Error);
-        return 1;
-      }
-    } else if (!options.launch) {
+    if (options.launch) {
+      try { await controller.launchGame(); } catch { return 1; }
+    } else {
       log.info('Game', 'Start the game from your launcher; RealmTool is ready.');
     }
     return await finished;
   } finally {
+    try { await controller.shutdown(); } finally { dispose(); }
+  }
+}
+
+function forgetHelperDirs(config: AppConfigStore, processed: Set<string>): void {
+  if (!processed.size) return;
+  try { config.removeHelperDirs([...processed]); }
+  catch { /* Uninstallation must still finish if config saving is unavailable. */ }
+}
+
+function uninstallSavedHelpers(): number {
+  const store = new AppConfigStore(), config = store.get();
+  const dirs = new Map<string, string>();
+  for (const dir of [...config.helperDirs, ...(config.gameDir ? [config.gameDir] : [])]) {
+    const path = resolve(dir), key = path.toLowerCase();
+    if (!dirs.has(key)) dirs.set(key, path);
+  }
+  const processed = new Set<string>();
+  let code = 0;
+  for (const [key, dir] of dirs) {
     try {
-      log.info('Proxy', 'Stopping…');
-      plugins?.stop();
-      await host.stop();
-    } finally {
-      dispose?.();
+      if (!statSync(dir).isDirectory()) { processed.add(key); continue; }
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') processed.add(key);
+      // Keep targets we could not inspect so a later uninstall can retry them.
+      continue;
+    }
+    try {
+      uninstallHelper(dir);
+      // All returned statuses, including foreign, mean no helper remains to remove.
+      processed.add(key);
+    } catch (error) {
+      log.error('Helper', `${dir}: ${(error as Error).message}`);
+      code = 1;
     }
   }
+  forgetHelperDirs(store, processed);
+  return code;
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -230,6 +213,34 @@ export async function main(argv: string[]): Promise<number> {
   } catch (error) {
     console.error((error as Error).message);
     return 2;
+  }
+  if (options.command === 'selftest') {
+    const host = new ProxyHost({ schema: loadSchema(), listenPort: 0 });
+    try {
+      // Read package catalogs, independent of any user overrides.
+      const appDataDir = resourcePaths().root;
+      const consumables = loadConsumables({ appDataDir });
+      const safety = loadSafetyCatalog({ appDataDir });
+      if (!consumables.ok) throw new Error(consumables.reason);
+      if (!safety.ok) throw new Error(safety.reason);
+      await host.start();
+      console.log('selftest ok');
+      return 0;
+    } catch (error) {
+      log.error('Selftest', (error as Error).message);
+      return 1;
+    } finally { await host.stop(); }
+  }
+  if (options.command === 'serve') {
+    const logs = new LogRing();
+    return await runSidecar({ logs, env: process.env, stdin: process.stdin, stdout: process.stdout,
+      startApi: async (controller, token, origins) => {
+        const api = await startApiServer(controller, logs, { token, origins });
+        // runSidecar writes READY in the promise continuation, before this next turn.
+        const start = setImmediate(() => { void controller.startProxy().catch(() => { /* Controller retains and logs the failure. */ }); });
+        return { port: api.port, close: () => { clearImmediate(start); return api.close(); } };
+      },
+    });
   }
   if (options.command === 'help') {
     console.log(HELP);
@@ -244,6 +255,8 @@ export async function main(argv: string[]): Promise<number> {
     console.log(dirs.length ? dirs.join('\n') : 'No Exalt install found. Pass --game-dir or set ROTMG_PATH.');
     return dirs.length ? 0 : 1;
   }
+  // Quiet app uninstall only visits recorded targets, never discovery or overrides.
+  if (options.command === 'uninstall-helper' && options.quiet) return uninstallSavedHelpers();
   const gameDir = resolveGameDir(options);
   if (!gameDir) {
     log.error('Game', options.gameDir
@@ -253,12 +266,17 @@ export async function main(argv: string[]): Promise<number> {
   }
   try {
     if (options.command === 'install-helper') {
+      const store = new AppConfigStore();
+      try { store.addHelperDir(gameDir); }
+      catch (cause) { throw new Error('Could not save the game folder; the helper was not installed', { cause }); }
       const result = installHelper(gameDir, options.helper);
       log.info('Helper', `${result.status} at ${result.target}${result.backedUp ? ' (previous winhttp.dll backed up)' : ''}`);
       return 0;
     }
     if (options.command === 'uninstall-helper') {
-      log.info('Helper', `${uninstallHelper(gameDir)} (${gameDir})`);
+      const status = uninstallHelper(gameDir);
+      forgetHelperDirs(new AppConfigStore(), new Set([gameDir.toLowerCase()]));
+      if (!options.quiet) log.info('Helper', `${status} (${gameDir})`);
       return 0;
     }
     return await runProxy(options, gameDir);

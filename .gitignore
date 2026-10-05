@@ -5,3 +5,10 @@ native/helper/bin/
 native/helper/obj/
 *.log
 .DS_Store
+
+# Phase 5 build output
+/dist/
+/.cache/
+/ui/dist/
+/src-tauri/target/
+/src-tauri/gen/

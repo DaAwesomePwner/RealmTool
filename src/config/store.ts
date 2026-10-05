@@ -2,6 +2,7 @@ import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, un
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { log } from '../util/log.ts';
+import { validProfileName } from './profiles.ts';
 
 export const PROFILE_SCHEMA_VERSION = 1;
 
@@ -105,6 +106,7 @@ export class ProfileStore {
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: ProfileStoreOptions) {
+    if (!validProfileName(options.name ?? 'default')) throw new Error('Invalid profile name');
     this.path = join(options.dir, 'profiles', `${options.name ?? 'default'}.json`);
     this.debounceMs = options.debounceMs ?? 800;
     this.fs = options.fs ?? defaultProfileFs;

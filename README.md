@@ -1,12 +1,28 @@
 # RealmTool
 
-A lightweight launcher and companion for Realm of the Mad God Exalt. Phase 3b adds worker-owned Collision HP to Auto Nexus alongside Auto Drink, Chat Filter and Server Switch.
+A lightweight launcher and companion for Realm of the Mad God Exalt, with a desktop UI for Auto Nexus, Auto Drink, Chat Filter and Server Switch.
 
 RealmTool reuses selected, tested pieces of [realm-engine-client](https://github.com/DaAwesomePwner/realm-engine-client) (MIT). It drops the IL2CPP DLL, overlay, account manager, dashboard and 77 MiB of game assets.
 
-**Status:** Phase 3b complete: functional release gates done. Phase 5 UI and installer are still required before any release; live smoke testing remains pending.
+**Status:** Phase 5 UI shell and installer implemented. The installed app measures 95.65 MiB against the 120 MiB budget. Live game smoke testing remains pending; see the [Phase 5 handoff](docs/handoff/2026-10-04-phase5-handoff.md) for validation and remaining checks.
 
-## Usage
+## Install and first run
+
+Run `RealmTool_0.1.0_x64-setup.exe` from `src-tauri/target/release/bundle/nsis/`. It installs for the current Windows user without an admin prompt. Node is bundled; WebView2 is shared with Windows and its bootstrapper needs internet if the runtime is missing. This private installer is unsigned.
+
+Close Exalt before starting RealmTool from the Start menu. The app automatically starts the proxy and installs or updates the helper in the selected game folder, backing up a foreign `winhttp.dll`. Check the game folder and readiness bar; if detection failed, enter the Exalt Production folder and click Start proxy. Click Launch to open your launcher, then Play as usual.
+
+The readiness bar shows proxy/helper state, open and connected sessions, the active profile and any operation in progress. A connected session means an upstream connection exists; it does not prove that the helper is loaded in the game.
+
+- Plugin cards offer enable toggles, settings, an Advanced disclosure and status. Invalid edits show the backend message; accepted values may be clamped by the plugin's validator.
+- The log panel has a level filter and pauses autoscroll when you scroll up. It retains up to 1,000 records.
+- Profiles can be created, selected and deleted. Switching restarts the proxy and disconnects a connected game after confirmation.
+- Closing the window hides it to the tray while the proxy runs (with a notice on the first hide); otherwise it quits. Tray → Show reopens it; Tray → Quit shuts down the backend. The game and launcher survive quitting, although the proxy connection closes.
+- Quitting leaves the helper installed. Close Exalt and stop the proxy before using Uninstall helper. Windows Settings uninstall also removes the helper and restores a backed-up `winhttp.dll`.
+
+Local files live under `%APPDATA%\RealmTool`: `config.json` holds the game folder, launcher and active profile; `profiles\<name>.json` holds plugin settings; `logs\realmtool.log` rotates at 1 MiB with three files total (`realmtool.log`, `.1`, `.2`). Edit files only while RealmTool is stopped.
+
+## CLI development usage
 
 Requires Windows, Node ≥ 22.18, and Visual Studio 2022 C++ x64 tools to build the helper.
 

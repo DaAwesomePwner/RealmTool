@@ -10,19 +10,32 @@
   "scripts": {
     "start": "node src/cli.ts start",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p ui",
     "check": "npm run typecheck && npm test",
     "build:helper": "cmd /c native\\helper\\build.cmd",
     "verify:helper": "node tools/verify-helper.ts",
-    "gen:catalogs": "node tools/gen-catalogs.ts"
+    "gen:catalogs": "node tools/gen-catalogs.ts",
+    "build:backend": "node tools/build-backend.ts",
+    "fetch:node": "node tools/fetch-node.ts",
+    "build:app": "node tools/build-app.ts",
+    "measure:install": "node tools/measure-install.ts",
+    "ui:dev": "vite --config ui/vite.config.ts --configLoader native",
+    "ui:build": "vite build --config ui/vite.config.ts --configLoader native"
   },
   "dependencies": {
-    "koffi": "^2.9.0"
+    "koffi": "^2.9.0",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
+    "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/cli": "^2.12.1",
     "@types/node": "^22.15.0",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
     "fast-xml-parser": "^4.5.7",
+    "happy-dom": "^20.14.5",
     "typescript": "^5.9.0",
+    "vite": "^7.3.6",
     "vitest": "^3.2.0"
   },
   "allowScripts": {
