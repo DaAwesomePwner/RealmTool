@@ -30,14 +30,16 @@ export interface RouterOptions {
 interface PendingRoute {
   destination: Destination;
   key: Buffer;
-  createdAt: number;
+  lastUsedAt: number;
 }
 
 /**
  * The transfer handoff. A server RECONNECT names the next server and a key. We
  * rewrite it to point the game back at the proxy, carrying a random token in
  * place of the key. When the game's next HELLO presents that token, we connect
- * to the real server and send it the real key. Tokens are bounded and expire.
+ * to the real server and send it the real key. Tokens are bounded and expire
+ * once unused for the TTL. Each use renews a token: a game queueing for a full
+ * server retries the same token every few seconds for as long as the queue lasts.
  */
 export class Router {
   private readonly routes = new Map<string, PendingRoute>();
@@ -103,14 +105,19 @@ export class Router {
     this.store(token, {
       destination: { host: route.host || current.host, port: route.port || current.port },
       key: Buffer.from(route.key),
-      createdAt: this.now(),
+      lastUsedAt: this.now(),
     });
     return out;
   }
 
   private lookup(token: string): PendingRoute | null {
     this.prune();
-    return this.routes.get(token) ?? null;
+    const route = this.routes.get(token);
+    if (!route) return null;
+    route.lastUsedAt = this.now();
+    this.routes.delete(token);
+    this.routes.set(token, route);
+    return route;
   }
 
   private store(token: string, route: PendingRoute): void {
@@ -123,11 +130,11 @@ export class Router {
     this.routes.set(token, route);
   }
 
-  /** Insertion order is creation order, so expired routes are always at the front. */
+  /** Insertion order is last-use order, so expired routes are always at the front. */
   private prune(): void {
     const now = this.now();
     for (const [token, route] of this.routes) {
-      if (now - route.createdAt <= this.ttlMs) break;
+      if (now - route.lastUsedAt <= this.ttlMs) break;
       this.routes.delete(token);
     }
   }
