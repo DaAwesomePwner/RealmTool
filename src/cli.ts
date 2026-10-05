@@ -1,6 +1,8 @@
+import { isMainThread, workerData } from 'node:worker_threads';
+import { parentedRefresh, runCatalogJob } from './catalogs/parentRefresh.ts';
 import { pathToFileURL } from 'node:url';
 import { statSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { BUILTIN_PLUGINS } from '../plugins/index.ts';
 import { appDataDir, ProfileStore } from './config/store.ts';
@@ -23,12 +25,14 @@ import { LogRing } from './util/logStore.ts';
 import { runSidecar } from './app/sidecar.ts';
 import { startApiServer } from './api/server.ts';
 
-const COMMANDS = ['start', 'serve', 'find-game', 'install-helper', 'uninstall-helper', 'config-path', 'help', 'selftest'] as const;
+const COMMANDS = ['start', 'serve', 'find-game', 'install-helper', 'uninstall-helper', 'config-path', 'help', 'selftest', 'refresh-data'] as const;
 type Command = typeof COMMANDS[number];
 
 export interface CliOptions {
   command: Command;
   gameDir?: string;
+  outDir?: string;
+  parentPipe?: boolean;
   helper: string;
   fallback?: string;
   launch: boolean;
@@ -41,6 +45,7 @@ export const HELP = `Usage: realmtool <command> [options]
 Commands:
   start              Start the proxy, install the helper and open the RotMG Exalt Launcher (Ctrl+C to stop)
   serve              Run the authenticated desktop API and start the proxy without opening the launcher
+  refresh-data       Refresh local game catalogs (no proxy restart needed)
   find-game          List detected Exalt install folders
   install-helper     Copy the helper DLL into the game folder
   uninstall-helper   Remove the helper DLL and restore any backed-up winhttp.dll
@@ -48,6 +53,7 @@ Commands:
 
 Options:
   --game-dir <dir>   Exalt "Production" folder (default: auto-detect)
+  --out-dir <dir>    refresh-data: output folder (default: application data/catalogs)
   --helper <file>    Helper DLL to install (default: native/helper/bin/winhttp.dll)
   --fallback <ip>    Server to use when the helper recorded none
   --launcher <exe>    RotMG Exalt Launcher.exe to open (default: auto-detect Deca, then Steam)
@@ -69,6 +75,8 @@ export function parseCli(argv: string[]): CliOptions {
     allowPositionals: true,
     options: {
       'game-dir': { type: 'string' },
+      'out-dir': { type: 'string' },
+      'parent-pipe': { type: 'boolean' },
       helper: { type: 'string' },
       fallback: { type: 'string' },
       launcher: { type: 'string' },
@@ -90,6 +98,8 @@ export function parseCli(argv: string[]): CliOptions {
   return {
     command: requested as Command,
     gameDir: values['game-dir'],
+    outDir: values['out-dir'],
+    parentPipe: values['parent-pipe'],
     helper: values.helper ?? DEFAULT_HELPER_PATH,
     fallback,
     launch: !values['no-launch'],
@@ -212,7 +222,27 @@ export async function main(argv: string[]): Promise<number> {
     options = parseCli(argv);
   } catch (error) {
     console.error((error as Error).message);
-    return 2;
+    return argv[0] === 'refresh-data' ? 1 : 2;
+  }
+  if (options.command === 'refresh-data') {
+    try {
+      const started = performance.now();
+      const gameDir = options.gameDir ?? new AppConfigStore().get().gameDir ?? findExaltDirs()[0];
+      if (!gameDir) throw new Error('No Exalt install found. Pass --game-dir or set ROTMG_PATH.');
+      if (options.outDir !== undefined && !options.outDir.trim()) throw new Error('--out-dir must not be empty');
+      const { generateCatalogs } = await import('./catalogs/generate.ts');
+      const args = ['--game-dir', gameDir, '--out-dir', options.outDir ?? join(appDataDir(), 'data', 'catalogs')];
+      const result = options.parentPipe ? await parentedRefresh(new URL(import.meta.url), args, process.stdin)
+        : generateCatalogs(args, { writeSource: true });
+      console.log(JSON.stringify({ gameBuild: result.gameBuild, items: result.consumables.items,
+        projectiles: result.safety.projectiles, tiles: result.safety.tiles, ms: Math.round(performance.now() - started) }));
+      return 0;
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      // A lost supervisor must terminate all extraction threads immediately.
+      if (options.parentPipe) process.exit(1);
+      return 1;
+    }
   }
   if (options.command === 'selftest') {
     const host = new ProxyHost({ schema: loadSchema(), listenPort: 0 });
@@ -286,6 +316,8 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (!isMainThread && workerData?.kind === 'catalog-refresh') {
+  void runCatalogJob(workerData);
+} else if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).then(code => { process.exitCode = code; });
 }

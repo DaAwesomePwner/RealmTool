@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, statSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +20,34 @@ afterEach(() => {
 });
 
 describe('consumables JSON runtime loader', () => {
+  it('rejects stale appdata before plugin configuration, while accepting a verified replacement', () => {
+    const options = setup(), out = join(options.appDataDir, 'data/catalogs'), gameDir = join(options.appDataDir, 'game');
+    const data = join(gameDir, 'RotMG Exalt_Data'); mkdirSync(data, { recursive: true }); mkdirSync(out, { recursive: true });
+    writeFileSync(join(data, 'resources.assets'), 'assets'); writeFileSync(join(data, 'boot.config'), 'build');
+    writeFileSync(join(out, 'consumables.json'), JSON.stringify(fixture()));
+    const selected = { ...options, gameDir, gameBuild: fixture().gameBuild };
+    expect(loadConsumables(selected)).toMatchObject({ ok: false });
+    const stamp = (name: string) => { const { size, mtimeMs } = statSync(join(data, name)); return { size, mtimeMs }; };
+    const source = { schemaVersion: 1, gameBuild: fixture().gameBuild, resourcesAssets: stamp('resources.assets'), bootConfig: stamp('boot.config') };
+    writeFileSync(join(out, 'source.json'), JSON.stringify(source));
+    expect(loadConsumables(selected)).toMatchObject({ ok: true });
+    utimesSync(join(data, 'resources.assets'), new Date(), new Date(source.resourcesAssets.mtimeMs + 2000));
+    expect(loadConsumables(selected)).toMatchObject({ ok: false });
+    writeFileSync(options.bundledPath, JSON.stringify(fixture()));
+    expect(loadConsumables(selected)).toMatchObject({ ok: true, path: options.bundledPath });
+  });
+  it('prefers a matching bundle over stale or invalid overrides, then matching overrides', () => {
+    const options = setup();
+    const dir = join(options.appDataDir, 'data/catalogs'); mkdirSync(dir, { recursive: true });
+    const path = join(dir, 'consumables.json');
+    writeFileSync(options.bundledPath, JSON.stringify(fixture()));
+    writeFileSync(path, JSON.stringify({ ...fixture(), gameBuild: 'old' }));
+    expect(loadConsumables({ ...options, gameBuild: 'fixture-build' })).toMatchObject({ ok: true, path: options.bundledPath });
+    writeFileSync(path, '{bad');
+    expect(loadConsumables({ ...options, gameBuild: 'fixture-build' })).toMatchObject({ ok: true, path: options.bundledPath });
+    writeFileSync(path, JSON.stringify(fixture()));
+    expect(loadConsumables({ ...options, gameBuild: 'fixture-build' })).toMatchObject({ ok: true, path });
+  });
   it('loads the real catalog from the default bundled path', () => {
     const { appDataDir } = setup();
     const result = loadConsumables({ appDataDir });

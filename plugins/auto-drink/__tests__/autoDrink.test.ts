@@ -2,13 +2,33 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_AUTO_DRINK_SETTINGS as defaults } from '../../../src/auto-drink/AutoDrinkTypes.ts';
 import { parseExcludedItems, parseSlotPriority, SETTING_DEFS } from '../settings.ts';
-import { fixture, records, workerStatus, item } from './fixture.ts';
+import { fixture, records, workerStatus, item, catalog } from './fixture.ts';
 import { readGameBuild } from '../../../src/game/gameBuild.ts';
 import { createAutoDrinkModule } from '../worker.ts';
 import { SessionAutomation } from '../../../src/transport/automation.ts';
 import type { AutoDrinkEvent } from '../messages.ts';
 
 describe('Auto Drink facade through the RealmTool host', () => {
+  it('disarms stale data immediately and cannot re-enable it until verified reload', () => {
+    const f = fixture(); f.ctx.enabled = true;
+    f.host.notifyDataInvalidated('game files changed');
+    expect(f.config().items).toEqual([]);
+    f.ctx.enabled = false; f.ctx.enabled = true; f.connect();
+    expect(f.config().items).toEqual([]);
+    f.host.notifyDataRefreshed(); expect(f.config().items).toEqual([item]);
+  });
+  it('reloads into the current session and keeps the previous catalog on failure', () => {
+    const f = fixture({ catalog: { ok: false, reason: 'missing' } }); f.connect();
+    expect(f.config().items).toEqual([]);
+    f.loader.mockReturnValue(catalog); f.host.notifyDataRefreshed();
+    expect(f.config().items).toEqual([item]);
+    expect(f.config().gameBuild).toBe('test-build');
+    const before = f.config(), count = f.proxy.configured.length;
+    f.loader.mockReturnValue({ ok: false, reason: 'bad' }); f.host.notifyDataRefreshed();
+    expect(f.config()).toBe(before); expect(f.proxy.configured).toHaveLength(count);
+    f.loader.mockImplementation(() => { throw new Error('fixture reload failure'); }); f.host.notifyDataRefreshed();
+    expect(f.config()).toBe(before);
+  });
   it('starts disabled before the enable callback, publishes strict defaults and an offline status', () => {
     const timer=vi.spyOn(globalThis,'setInterval');const f=fixture();
     expect(f.ctx.name).toBe('Auto Drink');expect(f.ctx.category).toBe('automation');expect(f.ctx.enabled).toBe(false);
@@ -83,7 +103,7 @@ describe('Auto Drink facade through the RealmTool host', () => {
   it('rejects a catalog generated for another installed build with the exact recovery log', () => {
     const f = fixture({ buildReader: () => 'installed-build' });
     expect(f.config().items).toEqual([]);
-    expect(records.map(r => r.message)).toContain('Consumables catalog unavailable: catalog is for game build test-build but the installed game is installed-build; run npm run gen:catalogs');
+    expect(records.map(r => r.message)).toContain('Consumables catalog unavailable: catalog is for game build test-build but the installed game is installed-build; RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log');
     expect(records.some(r => r.message.startsWith('Loaded '))).toBe(false);
   });
   it('rechecks each connection, disables a stale catalog and restores it when the installed build matches again', () => {
@@ -95,7 +115,7 @@ describe('Auto Drink facade through the RealmTool host', () => {
     records.length = 0;
     build = 'updated-build';
     f.connect('updated');
-    const reason = 'catalog is for game build test-build but the installed game is updated-build; run npm run gen:catalogs';
+    const reason = 'catalog is for game build test-build but the installed game is updated-build; RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log';
     expect(f.config().items).toEqual([]);
     expect(f.data().reason).toBe(`consumables catalog unavailable: ${reason}`);
     expect(records.map(r => r.message)).toEqual([`Consumables catalog unavailable: ${reason}`]);
@@ -150,9 +170,9 @@ describe('Auto Drink facade through the RealmTool host', () => {
     expect(records.some(r => r.message.startsWith('Consumables catalog unavailable: installed game build unknown (')
       && r.message.includes('boot.config') && r.message.includes('ENOENT'))).toBe(true);
   });
-  it('retains catalog load errors without trying to read the installed build', () => {
+  it('retains catalog load errors after determining build preference', () => {
     const f = fixture({ catalog: { ok: false, reason: 'catalog missing' } });
-    expect(f.config().items).toEqual([]); expect(f.buildReader).not.toHaveBeenCalled();
+    expect(f.config().items).toEqual([]); expect(f.buildReader).toHaveBeenCalledExactlyOnceWith('C:/fixture/game');
     expect(records.map(r => r.message)).toContain('Consumables catalog unavailable: catalog missing');
   });
   it('receives exactly one final disconnected worker status on close despite the status throttle', () => {

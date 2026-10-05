@@ -31,7 +31,7 @@ export class ApiClient {
     const response = await fetch(this.base + path, {
       method, headers: { Authorization: `Bearer ${this.token}`, ...(method !== 'GET' ? { 'Content-Type': 'application/json' } : {}) },
       ...(method === 'GET' ? {} : { body: JSON.stringify(body ?? {}) }),
-      cache: 'no-store', redirect: 'error', credentials: 'omit', signal: AbortSignal.timeout(15_000),
+      cache: 'no-store', redirect: 'error', credentials: 'omit', signal: AbortSignal.timeout(['/api/refresh-data', '/api/proxy/start', '/api/game/launch', '/api/profiles/select'].includes(path) ? 135_000 : 15_000),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : `Request failed (${response.status})`);

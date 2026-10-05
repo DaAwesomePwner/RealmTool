@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { readCatalogSourceSync, readGameFileStampsSync, sameGameFiles } from './catalogSource.ts';
 import { join } from 'node:path';
 import { resourcePaths } from '../app/resources.ts';
 import { appDataDir } from '../config/store.ts';
@@ -77,18 +78,28 @@ export function toSafetyCatalog(file: SafetyCatalogFile): SafetyCatalog {
   };
 }
 
-export function loadSafetyCatalog(options: { appDataDir?: string; bundledPath?: string } = {}): SafetyCatalogLoad {
+export function loadSafetyCatalog(options: { appDataDir?: string; bundledPath?: string; gameBuild?: string; gameDir?: string } = {}): SafetyCatalogLoad {
   const bundled = options.bundledPath ?? join(resourcePaths().dataDir, 'catalogs/safety.json');
+  let first: SafetyCatalogLoad | undefined;
   for (const path of [join(options.appDataDir ?? appDataDir(), 'data', 'catalogs', 'safety.json'), bundled]) {
-    let bytes: Buffer;
-    try { bytes = readFileSync(path); }
-    catch (error) {
+    let result: SafetyCatalogLoad;
+    try {
+      const bytes = readFileSync(path);
+      if (bytes.length > limits.maxFileBytes) throw new Error(`catalog exceeds ${limits.maxFileBytes} bytes`);
+      result = { ok: true, catalog: validateSafetyCatalog(JSON.parse(bytes.toString('utf8'))), path };
+      if (options.gameDir && path === join(options.appDataDir ?? appDataDir(), 'data', 'catalogs', 'safety.json')) {
+        const source = readCatalogSourceSync(join(options.appDataDir ?? appDataDir(), 'data', 'catalogs'));
+        if (!source || source.gameBuild !== result.catalog.gameBuild
+          || !sameGameFiles(source, readGameFileStampsSync(join(options.gameDir, 'RotMG Exalt_Data')))) {
+          throw new Error('catalog source fingerprint is missing or stale; waiting for verified game data');
+        }
+      }
+    } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      return { ok: false, reason: `${path}: ${String(error)}` };
+      result = { ok: false, reason: `${path}: ${error instanceof SyntaxError ? 'Invalid JSON: ' : ''}${String(error)}` };
     }
-    if (bytes.length > limits.maxFileBytes) return { ok: false, reason: `${path}: catalog exceeds ${limits.maxFileBytes} bytes` };
-    try { return { ok: true, catalog: validateSafetyCatalog(JSON.parse(bytes.toString('utf8'))), path }; }
-    catch (error) { return { ok: false, reason: `${path}: ${error instanceof SyntaxError ? 'Invalid JSON: ' : ''}${String(error)}` }; }
+    first ??= result;
+    if (!options.gameBuild || (result.ok && result.catalog.gameBuild === options.gameBuild)) return result;
   }
-  return { ok: false, reason: 'safety catalog not found' };
+  return first ?? { ok: false, reason: 'safety catalog not found' };
 }

@@ -63,6 +63,8 @@ class Plugin implements PluginContext {
   validationError: string | null = null;
   private enabledValue = true;
   private readonly enabledCallbacks: ((enabled: boolean) => void)[] = [];
+  readonly dataInvalidatedHandlers: ((reason: string) => void)[] = [];
+  readonly dataRefreshedHandlers: (() => void)[] = [];
   readonly cleanups: (() => void)[] = [];
   readonly workerHandlers: ((client: ClientConnection, message: unknown) => void)[] = [];
   private readonly host: PluginHost;
@@ -135,6 +137,8 @@ class Plugin implements PluginContext {
   }
   on(event: ConnectionEvent, fn: (client: ClientConnection) => void): void { this.host.addListener({ plugin: this, event, fn }); }
   onEnabledChange(fn: (enabled: boolean) => void): void { if (!this.failed) this.enabledCallbacks.push(fn); }
+  onDataInvalidated(fn: (reason: string) => void): void { if (!this.failed) this.dataInvalidatedHandlers.push(fn); }
+  onDataRefreshed(fn: () => void): void { if (!this.failed) this.dataRefreshedHandlers.push(fn); }
   registerCleanup(fn: () => void): void { if (!this.failed) this.cleanups.push(fn); }
   setData(key: string, value: unknown): void {
     if (this.failed) return;
@@ -225,6 +229,26 @@ export class PluginHost {
 
   /** Persist pending settings without stopping plugins or their worker modules. */
   flush(): void { this.profile.flush(); }
+
+  notifyDataInvalidated(reason: string): void {
+    if (!this.started) return;
+    for (const plugin of this.plugins.values()) {
+      if (plugin.failed) continue;
+      for (const handler of plugin.dataInvalidatedHandlers) {
+        try { handler(reason); } catch (error) { log.warn(plugin.name, `Catalog invalidation failed: ${describeError(error)}`); }
+      }
+    }
+  }
+
+  notifyDataRefreshed(): void {
+    if (!this.started) return;
+    for (const plugin of this.plugins.values()) {
+      if (plugin.failed) continue;
+      for (const handler of plugin.dataRefreshedHandlers) {
+        try { handler(); } catch (error) { log.warn(plugin.name, `Catalog reload failed: ${describeError(error)}`); }
+      }
+    }
+  }
 
   loaded(): string[] {
     return [...this.plugins.values()].filter(p => !p.failed).map(p => p.pluginId);
@@ -381,6 +405,8 @@ export class PluginHost {
       try { cleanup(); } catch (error) { log.error(plugin.name, 'Cleanup failed', error); }
     }
     plugin.workerHandlers.length = 0;
+    plugin.dataRefreshedHandlers.length = 0;
+    plugin.dataInvalidatedHandlers.length = 0;
   }
 
   private flushConfigs(): void {

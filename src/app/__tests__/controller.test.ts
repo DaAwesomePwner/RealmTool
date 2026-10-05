@@ -31,6 +31,7 @@ describe('AppController lifecycle', () => {
     config = new AppConfigStore(join(root, 'config')); config.update({ gameDir: game });
     hosts = []; contexts = [];
     deps = {
+      readGameFileStamps: async () => ({ resourcesAssets: { size: 1, mtimeMs: 0 }, bootConfig: { size: 2, mtimeMs: 0 } }),
       findGameDirs: () => [game], nativeModuleError: () => null,
       createHost: vi.fn(options => {
         expect(options.workerUrl).toEqual(resourcePaths().workerUrl);
@@ -51,6 +52,9 @@ describe('AppController lifecycle', () => {
     log.setConsole(false); detach = log.addSink(() => {});
     controller = make();
   });
+  function selection(build: string, files = { resourcesAssets: { size: 1, mtimeMs: 0 }, bootConfig: { size: 2, mtimeMs: 0 } }) {
+    return { consumables: build, safety: build, usesAppData: true, source: { schemaVersion: 1 as const, gameBuild: build, ...files } };
+  }
   function make() {
     return new AppController({ config, resources: { ...resourcePaths(), helperDll: helper }, logs: new LogRing() }, deps);
   }
@@ -58,6 +62,250 @@ describe('AppController lifecycle', () => {
     await controller.shutdown(); detach(); log.setConsole(true); vi.unstubAllEnvs();
     expect(root.startsWith(join(tmpdir(), 'realmtool-controller-'))).toBe(true);
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it('waits for mismatched data before loading plugins, shares refreshes, then reloads live', async () => {
+    await controller.shutdown();
+    deps.readGameBuild = vi.fn(async () => 'new');
+    let published = 'old'; deps.catalogBuilds = () => selection(published);
+    let finish!: (value: any) => void;
+    deps.refreshCatalogs = vi.fn(() => new Promise<import('../refreshData.ts').RefreshResult>(resolve => { finish = resolve; }));
+    controller = make();
+    const started = controller.startProxy();
+    await vi.waitFor(() => expect(deps.refreshCatalogs).toHaveBeenCalledOnce());
+    expect(controller.state().data.state).toBe('refreshing'); expect(contexts).toHaveLength(0);
+    const manual = controller.refreshData();
+    published = 'new'; finish({ gameBuild: 'new', items: 1, projectiles: 2, tiles: 3, ms: 4 });
+    await Promise.all([started, manual]);
+    expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
+    expect(controller.state().data).toMatchObject({ state: 'idle', catalogBuild: 'new', error: null });
+    const reload = vi.fn(); contexts[0].onDataRefreshed(reload);
+    const second = controller.refreshData();
+    await vi.waitFor(() => expect(deps.refreshCatalogs).toHaveBeenCalledTimes(2));
+    finish({ gameBuild: 'new', items: 2, projectiles: 3, tiles: 4, ms: 5 }); await second;
+    expect(reload).toHaveBeenCalledOnce(); expect(hosts).toHaveLength(1); expect(hosts[0].stop).not.toHaveBeenCalled();
+  });
+
+  it('keeps proxy startup working on failure, backs off sessions and polls for five minutes, and allows manual retry', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    const warnings: string[] = []; const detach = log.addSink(r => { if (r.module === 'Data' && r.level === 'warn') warnings.push(r.message); });
+    try {
+      deps.readGameBuild = vi.fn(async () => 'new'); deps.catalogBuilds = () => ({ consumables: 'old', safety: 'old' });
+      deps.refreshCatalogs = vi.fn(async () => { throw new Error('fixture extraction failure'); });
+      controller = make(); await controller.startProxy();
+      expect(controller.state().proxy.state).toBe('running'); expect(controller.state().data.state).toBe('failed');
+      hosts[0].emit('session', { id: 'one', remotePort: 123 });
+      await vi.advanceTimersByTimeAsync(240_000);
+      expect(deps.refreshCatalogs).toHaveBeenCalledOnce(); expect(warnings).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(deps.refreshCatalogs).toHaveBeenCalledTimes(2); expect(warnings).toHaveLength(2);
+      await expect(controller.refreshData()).rejects.toThrow('fixture extraction failure');
+      expect(deps.refreshCatalogs).toHaveBeenCalledTimes(3); expect(warnings).toHaveLength(2);
+      await controller.stopProxy(); await vi.advanceTimersByTimeAsync(600_000);
+      expect(deps.refreshCatalogs).toHaveBeenCalledTimes(3);
+    } finally { detach(); vi.useRealTimers(); }
+  });
+
+  it('backs off for five minutes after a manual failure but immediately attempts a different build', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let build = 'A'; deps.readGameBuild = async () => build;
+      deps.catalogBuilds = () => ({ consumables: null, safety: null });
+      deps.refreshCatalogs = vi.fn(async () => { throw new Error('fixture update in progress'); });
+      controller = make(); await controller.startProxy();
+      await vi.advanceTimersByTimeAsync(240_000);
+      await expect(controller.refreshData()).rejects.toThrow('fixture update in progress');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(deps.refreshCatalogs).toHaveBeenCalledTimes(2);
+      build = 'B'; hosts[0].emit('session', { id: 'new-build', remotePort: 123 });
+      await vi.advanceTimersByTimeAsync(0); expect(deps.refreshCatalogs).toHaveBeenCalledTimes(3);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('rejects a manual refresh interrupted by shutdown before extraction starts', async () => {
+    await controller.shutdown();
+    let finish!: (build: string) => void;
+    deps.readGameBuild = vi.fn(() => new Promise<string>(resolve => { finish = resolve; }));
+    deps.refreshCatalogs = vi.fn(); controller = make();
+    const pending = controller.refreshData();
+    const rejected = expect(pending).rejects.toThrow('refresh cancelled');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    const stopped = controller.shutdown(); finish('A');
+    await rejected; await stopped; expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+  });
+
+  it('detects updates on sessions and the 60 second poll without restarting', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let build = 'A'; deps.readGameBuild = async () => build;
+      let published = 'A'; deps.catalogBuilds = () => selection(published);
+      deps.refreshCatalogs = vi.fn(async () => { published = build; return { gameBuild: build, items: 1, projectiles: 2, tiles: 3, ms: 4 }; });
+      controller = make(); await controller.startProxy(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+      build = 'B'; hosts[0].emit('session', { id: 'one', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
+      expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
+      build = 'C'; await vi.advanceTimersByTimeAsync(60_000);
+      expect(deps.refreshCatalogs).toHaveBeenCalledTimes(2); expect(hosts).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['missing', 'invalid', 'build', 'assets', 'boot', 'matching'])('checks appdata source fingerprints: %s', async kind => {
+    await controller.shutdown();
+    const out = join(config.dir, 'data/catalogs'); mkdirSync(out, { recursive: true });
+    for (const name of ['consumables', 'safety']) {
+      const catalog = JSON.parse(readFileSync(join(resourcePaths().dataDir, `catalogs/${name}.json`), 'utf8'));
+      writeFileSync(join(out, `${name}.json`), JSON.stringify({ ...catalog, gameBuild: 'same' }));
+    }
+    const source = { schemaVersion: 1, gameBuild: 'same', resourcesAssets: { size: 1, mtimeMs: 0 }, bootConfig: { size: 2, mtimeMs: 0 } };
+    const stale = structuredClone(source);
+    if (kind === 'build') stale.gameBuild = 'old';
+    if (kind === 'assets') stale.resourcesAssets.size++;
+    if (kind === 'boot') stale.bootConfig.mtimeMs++;
+    if (kind !== 'missing') writeFileSync(join(out, 'source.json'), kind === 'invalid' ? '{bad' : JSON.stringify(stale));
+    deps.readGameBuild = async () => 'same';
+    deps.refreshCatalogs = vi.fn(async () => {
+      writeFileSync(join(out, 'source.json'), JSON.stringify(source));
+      return { gameBuild: 'same', items: 1, projectiles: 2, tiles: 3, ms: 4 };
+    });
+    controller = make(); await controller.startProxy();
+    expect(deps.refreshCatalogs).toHaveBeenCalledTimes(kind === 'matching' ? 0 : 1);
+    expect(controller.state().data.state).toBe('idle');
+  });
+
+  it('accepts a matching bundled catalog without a fingerprint and only stats files on later checks', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      const build = JSON.parse(readFileSync(join(resourcePaths().dataDir, 'catalogs/safety.json'), 'utf8')).gameBuild;
+      deps.readGameBuild = vi.fn(async () => build); deps.refreshCatalogs = vi.fn();
+      const stats = deps.readGameFileStamps = vi.fn(deps.readGameFileStamps!);
+      controller = make(); await controller.startProxy();
+      expect(deps.refreshCatalogs).not.toHaveBeenCalled(); expect(controller.state().data.catalogBuild).toBe(build);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(stats).toHaveBeenCalledTimes(2); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['resourcesAssets', 'bootConfig'] as const)('waits for quiet %s at startup without blocking the proxy or applying backoff', async file => {
+    await controller.shutdown(); vi.useFakeTimers();
+    const records: { module: string; level: string; message: string }[] = [];
+    const detach = log.addSink(r => records.push(r));
+    try {
+      const now = Date.now(), stamps = { resourcesAssets: { size: 1, mtimeMs: 0 }, bootConfig: { size: 2, mtimeMs: 0 } };
+      stamps[file].mtimeMs = now;
+      deps.readGameBuild = async () => 'new'; deps.readGameFileStamps = async () => stamps;
+      let published = 'old'; deps.catalogBuilds = vi.fn(() => selection(published, stamps));
+      deps.refreshCatalogs = vi.fn(async () => { published = 'new'; return { gameBuild: 'new', items: 1, projectiles: 2, tiles: 3, ms: 4 }; });
+      controller = make(); await controller.startProxy();
+      expect(controller.state().proxy.state).toBe('running'); expect(controller.state().data.state).toBe('idle');
+      hosts[0].emit('session', { id: 'quiet', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
+      expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+      expect(records.filter(r => r.module === 'Data').map(r => r.message)).toEqual(['Game files are still changing; waiting to refresh']);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(deps.refreshCatalogs).toHaveBeenCalledOnce(); expect(controller.state().data.state).toBe('idle');
+      expect(records.filter(r => r.module === 'Data' && r.level === 'warn')).toHaveLength(0);
+      expect(deps.catalogBuilds).toHaveBeenCalledTimes(2); // Initial selection, then successful publication.
+    } finally { detach(); vi.useRealTimers(); }
+  });
+
+  it('manual refresh bypasses the automatic quiet period', async () => {
+    await controller.shutdown();
+    deps.readGameBuild = async () => 'new';
+    const files = { resourcesAssets: { size: 1, mtimeMs: Date.now() }, bootConfig: { size: 2, mtimeMs: Date.now() } };
+    deps.readGameFileStamps = async () => files;
+    let published = 'old'; deps.catalogBuilds = () => selection(published, files);
+    deps.refreshCatalogs = vi.fn(async () => { published = 'new'; return { gameBuild: 'new', items: 1, projectiles: 2, tiles: 3, ms: 4 }; });
+    controller = make(); await controller.startProxy(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+    await controller.refreshData(); expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
+  });
+
+  it('detects assets replaced after boot changed, even with an unchanged build and cached catalog selection', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      const original = { resourcesAssets: { size: 1, mtimeMs: 0 }, bootConfig: { size: 2, mtimeMs: 0 } };
+      let current = structuredClone(original);
+      deps.readGameBuild = async () => 'new'; deps.readGameFileStamps = async () => current;
+      deps.catalogBuilds = vi.fn(() => ({ consumables: 'new', safety: 'new', usesAppData: true,
+        source: { schemaVersion: 1 as const, gameBuild: 'new', ...original } }));
+      deps.refreshCatalogs = vi.fn(async () => { throw new Error('fixture extraction failure'); });
+      controller = make(); await controller.startProxy(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+      const invalidated = vi.fn(); contexts[0].onDataInvalidated(invalidated);
+      current = { ...current, resourcesAssets: { size: 3, mtimeMs: 1 } };
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(deps.refreshCatalogs).toHaveBeenCalledOnce(); expect(deps.catalogBuilds).toHaveBeenCalledOnce();
+      expect(invalidated).toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['build mismatch', 'unreadable fingerprint'])('invalidates running plugins when stats fail: %s', async kind => {
+    await controller.shutdown();
+    let build = 'A', failStats = false;
+    const files = { resourcesAssets: { size: 1, mtimeMs: 0 }, bootConfig: { size: 2, mtimeMs: 0 } };
+    deps.readGameBuild = async () => build;
+    deps.readGameFileStamps = async () => { if (failStats) throw new Error('fixture files temporarily unavailable'); return files; };
+    deps.catalogBuilds = () => ({ consumables: 'A', safety: 'A', usesAppData: kind === 'unreadable fingerprint',
+      source: { schemaVersion: 1, gameBuild: 'A', ...files } });
+    deps.refreshCatalogs = vi.fn(); controller = make(); await controller.startProxy();
+    const invalidate = vi.fn(); contexts[0].onDataInvalidated(invalidate);
+    if (kind === 'build mismatch') build = 'B'; failStats = true;
+    await expect(controller.refreshData()).rejects.toThrow('temporarily unavailable');
+    expect(invalidate).toHaveBeenCalled(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+    expect(controller.state().data.state).toBe('failed');
+  });
+
+  it('retries previously invalidated data after transient stat failure clears, even when its build still matches', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let failStats = false;
+      deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => selection('A');
+      deps.readGameFileStamps = async () => { if (failStats) throw new Error('fixture locked file'); return selection('A').source; };
+      deps.refreshCatalogs = vi.fn(async () => ({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 }));
+      controller = make(); await controller.startProxy();
+      const reload = vi.fn(); contexts[0].onDataRefreshed(reload);
+      failStats = true; await expect(controller.refreshData()).rejects.toThrow('locked file');
+      failStats = false; await vi.advanceTimersByTimeAsync(240_000); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000); expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
+      expect(reload).toHaveBeenCalledOnce(); expect(controller.state().data.state).toBe('idle');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['missing', 'old', 'missing fingerprint', 'wrong fingerprint'])('rejects unverifiable child success (%s) and retries after backoff', async kind => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let build = 'A', published = false;
+      deps.readGameBuild = async () => build;
+      deps.catalogBuilds = () => {
+        if (!published) return selection('A');
+        if (kind === 'missing') return { consumables: null, safety: null };
+        if (kind === 'old') return selection('A');
+        return { ...selection(build), source: kind === 'missing fingerprint' ? null : selection('old').source };
+      };
+      deps.refreshCatalogs = vi.fn(async () => { published = true; return { gameBuild: build, items: 1, projectiles: 2, tiles: 3, ms: 4 }; });
+      controller = make(); await controller.startProxy();
+      const reload = vi.fn(); contexts[0].onDataRefreshed(reload);
+      build = 'B'; hosts[0].emit('session', { id: 'new', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
+      expect(controller.state().data).toMatchObject({ state: 'failed', catalogBuild: kind === 'missing' ? null : kind === 'old' ? 'A' : 'B', lastResult: null });
+      expect(reload).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(240_000); expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(60_000); expect(deps.refreshCatalogs).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['shutdown', 'stopProxy'] as const)('%s cancels refresh promptly without waiting for extraction or accepting late results', async stop => {
+    await controller.shutdown();
+    deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => ({ consumables: 'A', safety: 'A' });
+    let finish!: (result: import('../refreshData.ts').RefreshResult) => void, signal: AbortSignal | undefined;
+    deps.refreshCatalogs = vi.fn((_game, _out, input) => { signal = input; return new Promise<import('../refreshData.ts').RefreshResult>(resolve => { finish = resolve; }); });
+    controller = make(); await controller.startProxy();
+    const reload = vi.fn(); contexts[0].onDataRefreshed(reload);
+    const refresh = controller.refreshData().catch(error => error);
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    let completed = false; const stopping = controller[stop]().then(() => { completed = true; });
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const prompt = completed, aborted = signal?.aborted;
+    // Release the fake even on RED so teardown never hangs.
+    finish({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 });
+    await stopping; await refresh;
+    expect(prompt).toBe(true); expect(aborted).toBe(true); expect(reload).not.toHaveBeenCalled();
+    expect(controller.state().data.lastResult).toBeNull();
   });
 
   it('fails native preflight before stale cleanup or game-folder mutation', async () => {
@@ -174,6 +422,7 @@ describe('AppController lifecycle', () => {
     const starting = controller.startProxy();
     await expect(controller.stopProxy()).rejects.toBeInstanceOf(OperationBusyError);
     expect(deps.installHelper).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(listen).toBeTypeOf('function'));
     listen(2050); await starting;
     expect(deps.installHelper).toHaveBeenCalledOnce();
     expect(controller.state().proxy.state).toBe('running');
@@ -303,7 +552,9 @@ describe('AppController lifecycle', () => {
       return host as unknown as ReturnType<ControllerDeps['createHost']>;
     };
     controller = make(); const starting = controller.startProxy();
+    await vi.waitFor(() => expect(listen).toBeTypeOf('function'));
     const shutdown = controller.shutdown(); expect(controller.shutdown()).toBe(shutdown);
+    await vi.waitFor(() => expect(listen).toBeTypeOf('function'));
     listen(2050); await starting; await shutdown;
     expect(deps.installHelper).not.toHaveBeenCalled(); expect(hosts[0].stop).toHaveBeenCalledOnce();
     expect(controller.state().proxy.state).toBe('stopped');
