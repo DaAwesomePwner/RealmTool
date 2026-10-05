@@ -43,6 +43,7 @@ Do not run Realm Engine against the same game installation at the same time.
 
 ## Plugins (Phase 2)
 
+- **Anti-AFK:** off by default. When enabled, posts one left click to the session's game window after 5 minutes without activity (configurable from 1–15 minutes) to prevent idle disconnects. The click shoots toward your cursor and is skipped while the cursor is over the game's buttons or panels outside the central safe box. It automates input without injection.
 - **Chat Filter:** on by default. Its settings live in the profile. Edit them with RealmTool stopped, because RealmTool saves its own state on exit. `node src/cli.ts config-path` prints the profile location.
 - **Server Switch:** `/con <server>` (names like `USWest`, abbreviations like `usw`, or an IPv4), `/goto <ip>[:port]`, `/ip`. Exalt's own server label doesn't change.
 
