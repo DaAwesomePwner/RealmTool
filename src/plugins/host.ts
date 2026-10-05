@@ -1,5 +1,8 @@
 import type { Profile, ProfileStore } from '../config/store.ts';
 import { PROFILE_SCHEMA_VERSION } from '../config/store.ts';
+import { pulseGameWindow, type GameInputSource, type GameWindow, type PulseResult } from '../input/gameInput.ts';
+import { win32GameInputSource, win32GameInputError } from '../input/win32GameInput.ts';
+import type { ProcessIdentity } from '../routing/tcpProcessIdentity.ts';
 import type { Packet } from '../protocol/Packet.ts';
 import type { PacketFactory } from '../protocol/PacketFactory.ts';
 import type { PacketEvent, ProxyHost } from '../transport/host.ts';
@@ -8,7 +11,7 @@ import { log } from '../util/log.ts';
 import { describeError } from '../util/describeError.ts';
 import {
   PLUGIN_API_VERSION, type Capability, type ClientConnection, type CommandHook, type ConnectionEvent,
-  type PacketHook, type PluginContext, type PluginDefinition, type ServerInfo, type SettingDef, type WorkerChannel,
+  type InputApi, type PacketHook, type PluginContext, type PluginDefinition, type ServerInfo, type SettingDef, type WorkerChannel,
 } from './api.ts';
 import { IDENTITY_PACKETS, PlayerIdentity } from './identity.ts';
 import { SettingsStore, validateSetting } from './settings.ts';
@@ -24,6 +27,8 @@ export interface PluginHostOptions {
   definitions: readonly PluginDefinition[];
   profile: ProfileStore;
   gameDir?: string | null;
+  /** Game-window input source; defaults to the lazily loaded Win32 source. `null` disables input. */
+  input?: GameInputSource | null;
   onData?: (pluginId: string, type: string, data: unknown) => void;
   onChange?: (pluginId: string) => void;
 }
@@ -33,14 +38,16 @@ interface Listener { plugin: Plugin; event: ConnectionEvent; fn: (client: Client
 
 class Client implements ClientConnection {
   readonly clientId: string;
+  readonly remotePort: number;
   connected = true;
   server: ServerInfo | null = null;
   readonly identity = new PlayerIdentity();
   private readonly host: PluginHost;
 
-  constructor(host: PluginHost, clientId: string) {
+  constructor(host: PluginHost, clientId: string, remotePort: number) {
     this.host = host;
     this.clientId = clientId;
+    this.remotePort = remotePort;
   }
 
   get playerData(): { name: string; ownerObjectId: number } {
@@ -52,6 +59,7 @@ class Client implements ClientConnection {
 }
 
 class Plugin implements PluginContext {
+  private readonly inputApi: InputApi = { pulse: client => this.host.pulse(client) };
   readonly pluginId: string;
   readonly definition: PluginDefinition;
   name: string;
@@ -104,6 +112,11 @@ class Plugin implements PluginContext {
       send: (client, message) => this.host.sendWorker(this, client, message),
       onMessage: handler => { if (!this.failed) this.workerHandlers.push(handler); },
     };
+  }
+
+  get input(): InputApi {
+    this.require('input');
+    return this.inputApi;
   }
 
   registerSetting(key: string, def: Omit<SettingDef, 'key'>, onChange?: (value: any) => void): void {
@@ -167,6 +180,10 @@ class Plugin implements PluginContext {
 
 /** Loads plugins and connects them to the proxy's packet stream. */
 export class PluginHost {
+  private readonly inputOverride: GameInputSource | null | undefined;
+  private inputUnavailableWarned = false;
+  private readonly identities = new WeakMap<Client, ProcessIdentity>();
+  private readonly identifyWarned = new WeakSet<Client>();
   readonly factory: PacketFactory;
   readonly gameDir: string | null;
   private readonly proxy: ProxyLike;
@@ -186,6 +203,7 @@ export class PluginHost {
   private started = false;
 
   constructor(options: PluginHostOptions) {
+    this.inputOverride = options.input;
     this.proxy = options.proxy;
     this.factory = options.factory;
     this.gameDir = options.gameDir ?? null;
@@ -293,6 +311,45 @@ export class PluginHost {
   }
 
   // ── called by Plugin / Client ─────────────────────────────
+
+  async pulse(client: ClientConnection): Promise<PulseResult> {
+    const known = this.clients.get(client.clientId);
+    if (!this.started || !known || known !== client || !known.connected) return { ok: false, reason: 'no-process' };
+    const source = this.inputSource();
+    if (!source) return { ok: false, reason: 'unavailable' };
+    let identity: ProcessIdentity | null;
+    try {
+      identity = source.identify(known.remotePort);
+    } catch {
+      if (!this.identifyWarned.has(known)) {
+        this.identifyWarned.add(known);
+        log.warn('Plugins', 'Game-window input could not identify the session process');
+      }
+      return { ok: false, reason: 'no-process' };
+    }
+    if (!identity) return { ok: false, reason: 'no-process' };
+    const first = this.identities.get(known);
+    if (!first) this.identities.set(known, { ...identity });
+    else if (first.pid !== identity.pid || first.processStartTime !== identity.processStartTime) {
+      return { ok: false, reason: 'process-changed' };
+    }
+    let window: GameWindow | null;
+    try { window = source.findGameWindow(identity.pid); }
+    catch { return { ok: false, reason: 'no-window' }; }
+    if (!window) return { ok: false, reason: 'no-window' };
+    try { return await pulseGameWindow(window, source); }
+    catch { return { ok: false, reason: 'post-failed' }; }
+  }
+
+  private inputSource(): GameInputSource | null {
+    if (this.inputOverride !== undefined) return this.inputOverride;
+    const source = win32GameInputSource();
+    if (!source && !this.inputUnavailableWarned) {
+      this.inputUnavailableWarned = true;
+      log.warn('Plugins', win32GameInputError() ?? 'Game-window input unavailable');
+    }
+    return source;
+  }
 
   addHook(plugin: Plugin, name: string, fn: PacketHook, prepend: boolean): void {
     if (plugin.failed) return;
@@ -466,8 +523,8 @@ export class PluginHost {
     }
   }
 
-  private readonly onSession = ({ id }: { id: string }): void => {
-    const client = new Client(this, id);
+  private readonly onSession = ({ id, remotePort }: { id: string; remotePort: number }): void => {
+    const client = new Client(this, id, remotePort);
     this.clients.set(id, client);
     this.emitConnection('clientConnected', client);
   };
