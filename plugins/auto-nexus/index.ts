@@ -4,7 +4,7 @@ import { loadSafetyCatalog, type SafetyCatalogLoad } from '../../src/data/safety
 import { readGameBuild } from '../../src/game/gameBuild.ts';
 import { log } from '../../src/util/log.ts';
 import type { SafetyCatalogState } from '../../src/safety/SafetyCatalog.ts';
-import { safetySettings } from '../../src/safety/SafetyTypes.ts';
+import { safetySettings, type SafetyDecisionEvidence } from '../../src/safety/SafetyTypes.ts';
 import { SETTING_DEFS, migrate, validate } from './settings.ts';
 import type { AutoNexusConfig, AutoNexusEvent } from './messages.ts';
 
@@ -161,7 +161,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
       const label = decision.origin === 'manual' ? 'MANUAL NEXUS' : 'AUTO NEXUS';
       const t = ctx.getSetting<number>('ForceAutoNexusHealth');
       const text = `Server HP ${decision.confirmedHp ?? '?'}/${decision.maxHp}${event.collisionHp === 'on' ? `; estimated HP ${decision.lowerHp ?? '?'}` : ''}; threshold ${t}%; ${decision.reason}; ${modeText(event.collisionHp, event.catalog)}; local write attempt ${writeDelayMs.toFixed(3)}ms (not server acceptance)`;
-      ctx.log(`${label} — ${text}`);
+      ctx.log(`${label} — ${text}${lossText(decision.evidence)}`);
       if (ctx.getSetting<boolean>('ShowChatMessageOnNexus')) ctx.sendNotification(client, label, text);
     }
   });
@@ -189,6 +189,15 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
 
 export default definePlugin({ id: 'auto-nexus', name: 'Auto Nexus', apiVersion: 1,
   capabilities: ['packets', 'commands', 'notifications', 'worker'], register, settings: { validate, migrate } });
+
+/** The log's breakdown of the predicted loss: which collision reports the estimate subtracted from server HP. */
+export function lossText(evidence: SafetyDecisionEvidence | undefined): string {
+  if (!evidence?.pendingCount || !Array.isArray(evidence.impacts)) return '';
+  const listed = evidence.impacts.map(i => `${i.source} ${i.amount}${i.raw === null ? '' : ` (raw ${i.raw})`} ${i.kind}`
+    + `${i.kind === 'assumed' && i.reason ? ` (${i.reason})` : ''} ${Math.round(i.ageMs)} ms ago`);
+  if (evidence.pendingCount > evidence.impacts.length) listed.push(`${evidence.pendingCount - evidence.impacts.length} more`);
+  return `; pending loss ${evidence.pendingDamage} from ${evidence.pendingCount} report${evidence.pendingCount === 1 ? '' : 's'}: ${listed.join(', ')}`;
+}
 
 function modeText(mode: AutoNexusEvent['collisionHp'], catalog: SafetyCatalogState): string {
   return mode === 'fallback'

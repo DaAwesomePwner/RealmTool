@@ -20,7 +20,7 @@ export interface PredictionState {
 interface PredictionEvidence {
   pendingCount: number; pendingDamage: number;
   impacts: { id: string; amount: number; source: ImpactSource; ageMs: number;
-    kind: LossAssessment['kind']; credited: number; writtenAt: number | null }[];
+    kind: LossAssessment['kind']; reason: string | null; raw: number | null; credited: number; writtenAt: number | null }[];
 }
 
 /** Worker-owned accounting. Server snapshots have no proven impact-inclusion marker.
@@ -168,7 +168,8 @@ export class HealthPredictor {
       const remaining = Math.max(0, hit.assessment.amount - hit.credited);
       pendingDamage += remaining;
       if (impacts.length < 8) impacts.push({ id, amount: remaining, source: hit.source, ageMs: now - hit.at,
-        kind: hit.assessment.kind, credited: hit.credited, writtenAt: hit.writtenAt });
+        kind: hit.assessment.kind, reason: hit.assessment.reason, raw: hit.assessment.raw ?? null,
+        credited: hit.credited, writtenAt: hit.writtenAt });
     }
     return { pendingCount: this.impacts.size, pendingDamage, impacts };
   }
