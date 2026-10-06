@@ -205,7 +205,7 @@ it('measurement retains credited loss and never produces negative remaining dama
   p.timing(600, 80); p.snapshot(677, 600);
   p.impact('a', { amount: 0, kind: 'measured', reason: null }, 610, 'server-damage', 12000, null, true);
   expect(p.evidence(620)).toEqual({ pendingCount: 1, pendingDamage: 0, impacts: [
-    { id: 'a', amount: 0, source: 'player-hit', ageMs: 210, kind: 'measured', credited: 30, writtenAt: 411 },
+    { id: 'a', amount: 0, source: 'player-hit', ageMs: 210, kind: 'measured', reason: null, raw: null, credited: 30, writtenAt: 411 },
   ] });
 });
 it.each([NaN, Infinity, -1])('invalid assessment %s faults without changing HP or debt', amount => {

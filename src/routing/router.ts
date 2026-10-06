@@ -16,6 +16,8 @@ export interface HelloRoute {
   hello: Buffer;
   /** True when this HELLO followed a RECONNECT we rewrote. */
   restored: boolean;
+  /** For a restored HELLO: what the RECONNECT carried, and how long ago it arrived. */
+  transfer?: { gameId: number; keyTime: number; keyLength: number; ageMs: number };
 }
 
 export interface RouterOptions {
@@ -30,6 +32,9 @@ export interface RouterOptions {
 interface PendingRoute {
   destination: Destination;
   key: Buffer;
+  gameId: number;
+  keyTime: number;
+  createdAt: number;
   lastUsedAt: number;
 }
 
@@ -72,7 +77,9 @@ export class Router {
     if (pending) {
       const offset = findHelloKeyOffset(hello.rawBytes);
       if (offset < 0) return null;
-      return { destination: { ...pending.destination }, hello: patchHelloKey(hello.rawBytes, offset, pending.key), restored: true };
+      return { destination: { ...pending.destination }, hello: patchHelloKey(hello.rawBytes, offset, pending.key), restored: true,
+        transfer: { gameId: pending.gameId, keyTime: pending.keyTime, keyLength: pending.key.length,
+          ageMs: Math.round(this.now() - pending.createdAt) } };
     }
     if (!initial) return null;
     return { destination: { ...initial }, hello: Buffer.from(hello.rawBytes), restored: false };
@@ -105,6 +112,9 @@ export class Router {
     this.store(token, {
       destination: { host: route.host || current.host, port: route.port || current.port },
       key: Buffer.from(route.key),
+      gameId: route.gameId,
+      keyTime: route.keyTime,
+      createdAt: this.now(),
       lastUsedAt: this.now(),
     });
     return out;

@@ -93,7 +93,10 @@ export function register(ctx: PluginContext): void {
         case 'FAILURE': message = `FAILURE ${d.errorId}: ${d.errorMessage}`; break;
         case 'GLOBALNOTIFICATION': message = `GLOBALNOTIFICATION ${d.notificationType}: ${d.text}`; break;
         case 'NOTIFICATION': {
-          const text = notificationStrings(packet.unreadData);
+          // Effect 5 is the realm queue: int32 message type, int16 position (RealmShark NotificationPacket).
+          const text = d.typeValue === 5 && packet.unreadData.length >= 6
+            ? `queue message ${packet.unreadData.readInt32BE(0)}, position ${packet.unreadData.readInt16BE(4)}`
+            : notificationStrings(packet.unreadData);
           // Localization payloads can contain trailing commas, so extract keys without JSON parsing.
           const quiet = [...text.matchAll(/"k"\s*:\s*"([^"\\]*)"/g)].some(match => QUIET_NOTIFICATION_KEYS.has(match[1]!));
           if (quiet) {

@@ -6,10 +6,12 @@ import { RC4Cipher } from '../protocol/RC4Cipher.ts';
 import type { Packet } from '../protocol/Packet.ts';
 import type { PacketFactory } from '../protocol/PacketFactory.ts';
 import type { Destination, Router } from '../routing/router.ts';
+import { describeHello, describeReconnect } from '../routing/describeRoute.ts';
 import type { Interest } from './interest.ts';
 import type { CloseSide, WorkerEvent } from './messages.ts';
 import type { HeldPacket, PendingDelivery, TransportState, WorkerModule, WorkerSessionContext, WorkerSessionModule, WriteKind } from './modules.ts';
 import { SessionAutomation } from './automation.ts';
+import { SessionTrace } from './trace.ts';
 
 export interface SessionEnv {
   factory: PacketFactory;
@@ -72,6 +74,7 @@ export class Session {
   private readonly env: SessionEnv;
   private readonly modules: ActiveModule[];
   private readonly automation = new SessionAutomation();
+  private readonly trace: SessionTrace;
   private server: net.Socket | null = null;
   private serverReady = false;
   private serverResponded = false;
@@ -85,6 +88,7 @@ export class Session {
   private helloForRetry: Buffer | null = null;
   private helloTimer: ReturnType<typeof setTimeout> | null = null;
   private helloAttempt = 0;
+  private helloSentAt = 0;
   private clientFrames = new FrameDecoder(new RC4Cipher(RC4_KEYS.clientToServer));
   private serverFrames = new FrameDecoder(new RC4Cipher(RC4_KEYS.serverToClient));
   private toClientCipher = new RC4Cipher(RC4_KEYS.serverToClient);
@@ -104,6 +108,7 @@ export class Session {
     this.id = id;
     this.client = client;
     this.env = env;
+    this.trace = new SessionTrace(env.now());
     this.modules = [...env.modules].sort((a, b) => a.priority - b.priority).map(module => ({
       id: module.id,
       client: new Set(module.observe?.client ?? []),
@@ -115,7 +120,7 @@ export class Session {
     }));
     client.setNoDelay(true);
     client.on('data', data => this.receive(data, true, this.clientFrames));
-    client.on('error', error => this.fault(error));
+    client.on('error', error => this.fault(new Error(`Game connection error (${error.message})`)));
     client.on('close', () => this.close('game'));
     this.targetTimer = setTimeout(() => this.setTarget(null), env.targetTimeoutMs);
     env.post({ type: 'opened', id, remotePort: client.remotePort ?? 0 });
@@ -154,6 +159,7 @@ export class Session {
   close(by: CloseSide = 'proxy'): void {
     if (this.closed) return;
     this.closed = true;
+    this.env.post({ type: 'note', id: this.id, message: this.summary() });
     if (this.targetTimer) clearTimeout(this.targetTimer);
     if (this.helloTimer) clearTimeout(this.helloTimer);
     this.heldHello = null;
@@ -192,7 +198,19 @@ export class Session {
     return out;
   }
 
+  private summary(): string {
+    const now = this.env.now();
+    const held = [];
+    for (const pending of this.pending.values()) {
+      if (pending.result !== undefined) continue;
+      const { name, fromClient } = pending.observation;
+      held.push({ name, fromClient, ageMs: now - pending.receivedAt });
+    }
+    return this.trace.summary(now, held, { game: this.client.writableLength, server: this.server?.writableLength ?? 0 });
+  }
+
   private notifyDropped(observation: Observation): void {
+    this.trace.dropped(observation.fromClient);
     const now = this.env.now();
     for (const module of this.modules) {
       if ((observation.fromClient ? module.client : module.server).has(observation.name)) {
@@ -250,6 +268,8 @@ export class Session {
     if (this.closed) return;
     const direction = fromClient ? 'client' : 'server';
     const name = this.env.factory.getPacketName(frame[4], direction);
+    this.trace.received(fromClient, name, frame.length, this.env.now());
+    if (fromClient && name === 'ESCAPE') this.env.post({ type: 'note', id: this.id, message: 'Game sent ESCAPE (Nexus request)' });
     for (const module of this.modules) {
       if (this.call(module, 'suppressEntry', () => module.hooks.suppressEntry?.(name, fromClient) ?? false, false)) return;
     }
@@ -304,6 +324,7 @@ export class Session {
       return;
     }
     this.env.post({ type: 'routed', id: this.id, host: route.destination.host, port: route.destination.port, restored: route.restored });
+    this.env.post({ type: 'note', id: this.id, message: describeHello(hello, route) });
     if (this.env.interest.classify('HELLO', true) !== 'none') {
       // HELLO is routed by the worker; the main thread may read it (e.g. the access token) but never decide on it.
       this.env.post({ type: 'packet', id: this.id, sequence: 0, generation: this.generation, fromClient: true, observeOnly: true, data: frame });
@@ -363,11 +384,12 @@ export class Session {
       if (this.closed || this.server !== server) return;
       // A server that accepted HELLO and then reset has refused it; resending looks like a flood.
       if (error && this.serverReady && !this.serverResponded) {
-        this.fault(new Error(`${label} reset the connection after HELLO (${error.message}); not retrying`));
+        const elapsed = Math.round(this.env.now() - this.helloSentAt);
+        this.fault(new Error(`${label} reset the connection ${elapsed} ms after HELLO (${error.message}); not retrying`));
         return;
       }
       if (this.serverResponded || !this.helloForRetry || this.helloAttempt >= MAX_HELLO_RETRIES) {
-        this.fault(error ?? new Error(`${label} never answered HELLO`));
+        this.fault(error ? new Error(`Server connection error (${error.message})`) : new Error(`${label} never answered HELLO`));
         return;
       }
       ++this.helloAttempt;
@@ -389,6 +411,8 @@ export class Session {
       if (this.closed || this.server !== server || !this.helloForRetry) return;
       this.serverReady = true;
       this.writeRaw(this.helloForRetry, false);
+      this.helloSentAt = this.env.now();
+      this.trace.helloSent(this.helloSentAt);
       const queued = this.beforeConnect;
       this.beforeConnect = [];
       this.beforeConnectBytes = 0;
@@ -461,17 +485,19 @@ export class Session {
         }
       }
       if (toClient && name === 'RECONNECT') {
-        const rewritten = this.destination ? this.env.router.rewriteReconnect(decode(), this.destination) : null;
+        const original = decode();
+        const rewritten = this.destination ? this.env.router.rewriteReconnect(original, this.destination) : null;
         if (!rewritten) {
           this.env.post({ type: 'diagnostic', id: this.id, message: 'Dropped a malformed RECONNECT; the current route is unchanged' });
           if (observation !== null) this.notifyDropped(observation);
           return false;
         }
         out = rewritten;
+        this.env.post({ type: 'note', id: this.id, message: describeReconnect(original) });
         // Final-write subscribers must see the rewritten bytes, never the original route.
         packet = null;
       }
-      accepted = this.writeRaw(out, toClient, done);
+      accepted = this.writeRaw(out, toClient, done, kind !== 'normal');
       if (!accepted) {
         if (observation !== null) this.notifyDropped(observation);
         return false;
@@ -500,9 +526,10 @@ export class Session {
     return true;
   }
 
-  private writeRaw(data: Buffer, toClient: boolean, done?: (error?: Error | null) => void): boolean {
+  private writeRaw(data: Buffer, toClient: boolean, done?: (error?: Error | null) => void, byRealmTool = false): boolean {
     const socket = toClient ? this.client : this.server;
     if (!socket || socket.destroyed || !socket.writable) return false;
+    this.trace.sent(toClient, data.length, byRealmTool);
     const encrypted = Buffer.from(data);
     (toClient ? this.toClientCipher : this.toServerCipher).cipher(encrypted);
     socket.write(encrypted, done);

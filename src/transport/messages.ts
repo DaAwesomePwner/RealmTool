@@ -31,6 +31,7 @@ export type WorkerEvent =
   | { type: 'packet'; id: string; sequence: number; generation: number; fromClient: boolean; observeOnly: boolean; data: Uint8Array }
   | { type: 'closed'; id: string; by: CloseSide }
   | { type: 'diagnostic'; id?: string; message: string }
+  | { type: 'note'; id: string; message: string }
   | { type: 'fault'; id?: string; message: string }
   | { type: 'module'; moduleId: string; id?: string; message: unknown };
 

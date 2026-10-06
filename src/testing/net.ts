@@ -45,6 +45,11 @@ export class Peer {
   destroy(): void {
     this.socket.destroy();
   }
+
+  /** Abort with a TCP reset, as a crashed or timed-out peer does. */
+  reset(): void {
+    this.socket.resetAndDestroy();
+  }
 }
 
 /** A fake game client connected to the proxy. */

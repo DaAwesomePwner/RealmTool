@@ -223,6 +223,21 @@ describe('Auto Nexus facade', () => {
     expect(records.filter(r => r.message.startsWith(`${label} —`))).toHaveLength(2);
   });
 
+  it('logs which collision reports made up the predicted loss, without changing the chat text', () => {
+    const f = fixture();
+    const hit = (amount: number, kind: 'assumed' | 'mitigated-estimate', reason: string | null, raw: number | null, ageMs: number) =>
+      ({ id: String(amount), amount, source: 'player-hit' as const, ageMs, kind, reason, raw, credited: 0, writtenAt: null });
+    const decision: SafetyDecision = { origin: 'automatic', attemptId: 1, connectionGeneration: 1, lifecycleRevision: 1,
+      reason: 'predicted HP crosses threshold', epoch: 1, confirmedHp: 755, lowerHp: 183, maxHp: 755, thresholdHp: 188, at: 1,
+      evidence: { trigger: 'reported impact', preHitPrediction: true, reactionMs: 400, pendingCount: 3, pendingDamage: 572,
+        impacts: [hit(200, 'assumed', 'missing-shot', null, 140.4), hit(372, 'mitigated-estimate', 'standard projectile', 420, 0)] } };
+    f.h.workerMessage(f.client, 'auto-nexus', { type: 'decision', catalog: ready, collisionHp: 'on', decision, status: status(), writeDelayMs: 0.25 });
+    expect(f.reply().text).not.toContain('pending loss');
+    expect(records.at(-1)?.message).toMatch(/; local write attempt 0\.250ms \(not server acceptance\); pending loss 572 from 3 reports: /);
+    expect(records.at(-1)?.message).toContain('pending loss 572 from 3 reports: player-hit 200 assumed (missing-shot) 140 ms ago, '
+      + 'player-hit 372 (raw 420) mitigated-estimate 0 ms ago, 1 more');
+  });
+
   it('cleans up subscriptions and disarms the worker on stop', () => {
     const f = fixture(); f.h.host.stop();
     expect(f.h.proxy.configured.at(-1)).toMatchObject({ 'auto-nexus': { settings: { enabled: false } } });

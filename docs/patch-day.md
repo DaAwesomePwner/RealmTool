@@ -61,7 +61,18 @@ Use **Refresh game data** in the app's readiness area, `POST /api/refresh-data`,
 | `Expected HELLO as the first game packet, got …` | The initial ID no longer identifies HELLO, or the initial exchange changed. |
 | `Could not decode the game's HELLO; packet definitions may be out of date for this game build` | HELLO schema or decrypted body is incompatible; inspect layout and cipher keys. |
 | `No destination for this connection: the helper recorded no server and no fallback server is configured` | Routing has no usable destination; inspect helper/target resolution before blaming catalogs. |
-| `reset the connection after HELLO …; not retrying`, `did not answer HELLO within …`, or `never answered HELLO` | Upstream rejection/silence; investigate server availability as well as protocol compatibility. This alone does not identify a changed key. |
+| `reset the connection N ms after HELLO …; not retrying`, `did not answer HELLO within …`, or `never answered HELLO` | Upstream rejection/silence; investigate server availability as well as protocol compatibility. This alone does not identify a changed key. |
+| `Game connection error (…)` / `Server connection error (…)` | The named socket failed (e.g. `read ECONNRESET`). A game-side reset with the game still running usually means the client gave up; a server-side reset after it answered usually means the server dropped an unresponsive client. |
+
+Each connection also logs these info lines (`[Proxy] <id>: …`), with keys and tokens reduced to lengths:
+
+| Log text | What it tells you |
+|---|---|
+| `RECONNECT "<name>" to <server>, gameId …, keyTime …` | Where the server sent the game, e.g. a dungeon or the Nexus. |
+| `HELLO gameId …, keyTime …, build "<client version>" …; restored a N-byte key from a RECONNECT X ms old` | The game's login. `(MISMATCH)` means the HELLO doesn't match its RECONNECT. |
+| `Game sent ESCAPE (Nexus request)` | The game asked for the Nexus itself. Auto Nexus logs its own escapes as `AUTO NEXUS — …`. |
+| `AUTO NEXUS — …; pending loss N from M reports: …` | The collision reports the estimate subtracted from server HP: source (`player-hit`, `ground`, `aoe`, `server-damage`), remaining damage, raw damage when known, and how old each was. `assumed` entries are fallbacks of at least 200 for hits RealmTool couldn't identify (reason in brackets, e.g. `missing-shot`); several of those with full server HP point at a false trigger. |
+| `Session summary after …` | Frames and bytes in each direction, when the server first answered after HELLO, when each side last sent, packets held for a plugin, data the game or server hadn't taken, and the server's first packets. `server→proxy` data with little `proxy→game` delivery points at RealmTool; matching counts with the game silent point at the game. |
 
 `PacketFactory` preserves unknown IDs as raw packets. Known packets whose required fields cannot be read also fall back to raw bytes; trailing unread bytes are retained. A non-quiet factory warns `Failed to parse <name> (id=<id>): …`, but the **network worker uses a quiet factory**. Do not expect a warning for every undecodable frame, or treat a quiet log as compatibility evidence. Initial HELLO must decode for routing to proceed. Transfer-only failures also warrant checking RECONNECT parsing and HELLO key restoration in `src/routing/`.
 
