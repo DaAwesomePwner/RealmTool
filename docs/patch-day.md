@@ -61,7 +61,7 @@ Use **Refresh game data** in the app's readiness area, `POST /api/refresh-data`,
 | `Expected HELLO as the first game packet, got …` | The initial ID no longer identifies HELLO, or the initial exchange changed. |
 | `Could not decode the game's HELLO; packet definitions may be out of date for this game build` | HELLO schema or decrypted body is incompatible; inspect layout and cipher keys. |
 | `No destination for this connection: the helper recorded no server and no fallback server is configured` | Routing has no usable destination; inspect helper/target resolution before blaming catalogs. |
-| `reset the connection after HELLO …; not retrying`, `did not answer HELLO within …`, or `never answered HELLO` | Upstream rejection/silence; investigate server availability as well as protocol compatibility. This alone does not identify a changed key. |
+| `reset the connection N ms after HELLO …; not retrying`, `did not answer HELLO within …`, or `never answered HELLO` | Upstream rejection/silence; investigate server availability as well as protocol compatibility. This alone does not identify a changed key. |
 
 `PacketFactory` preserves unknown IDs as raw packets. Known packets whose required fields cannot be read also fall back to raw bytes; trailing unread bytes are retained. A non-quiet factory warns `Failed to parse <name> (id=<id>): …`, but the **network worker uses a quiet factory**. Do not expect a warning for every undecodable frame, or treat a quiet log as compatibility evidence. Initial HELLO must decode for routing to proceed. Transfer-only failures also warrant checking RECONNECT parsing and HELLO key restoration in `src/routing/`.
 

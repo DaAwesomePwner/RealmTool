@@ -195,3 +195,12 @@ it('uses the real host logger, defaults enabled, isolates sessions and only obse
     h.host.stop(); removeSink(); log.setConsole(true);
   }
 });
+
+it('decodes realm queue notifications', () => {
+  const f = fixture();
+  const queue = Buffer.alloc(6);
+  queue.writeInt32BE(2, 0);
+  queue.writeInt16BE(17, 4);
+  f.packet('NOTIFICATION', { typeValue: 5, textByte: 40 }, queue);
+  expect(f.lines).toEqual(['[abcdefgh] NOTIFICATION type 5/40: queue message 2, position 17 (6 bytes)']);
+});

@@ -43,6 +43,7 @@ describe('Router', () => {
     const route = router.routeHello(fromClient(helloBytes(factory, Buffer.from('token-1'))), { host: '10.0.0.77', port: 2050 });
     expect(route?.restored).toBe(true);
     expect(route?.destination).toEqual({ host: '10.0.0.9', port: 2051 });
+    expect(route?.transfer).toEqual({ gameId: 7, keyTime: 99, keyLength: 3, ageMs: 0 });
     expect((fromClient(route!.hello).data.key as Buffer).equals(realKey)).toBe(true);
   });
 

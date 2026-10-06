@@ -6,6 +6,7 @@ import { RC4Cipher } from '../protocol/RC4Cipher.ts';
 import type { Packet } from '../protocol/Packet.ts';
 import type { PacketFactory } from '../protocol/PacketFactory.ts';
 import type { Destination, Router } from '../routing/router.ts';
+import { describeHello, describeReconnect } from '../routing/describeRoute.ts';
 import type { Interest } from './interest.ts';
 import type { CloseSide, WorkerEvent } from './messages.ts';
 import type { HeldPacket, PendingDelivery, TransportState, WorkerModule, WorkerSessionContext, WorkerSessionModule, WriteKind } from './modules.ts';
@@ -85,6 +86,7 @@ export class Session {
   private helloForRetry: Buffer | null = null;
   private helloTimer: ReturnType<typeof setTimeout> | null = null;
   private helloAttempt = 0;
+  private helloSentAt = 0;
   private clientFrames = new FrameDecoder(new RC4Cipher(RC4_KEYS.clientToServer));
   private serverFrames = new FrameDecoder(new RC4Cipher(RC4_KEYS.serverToClient));
   private toClientCipher = new RC4Cipher(RC4_KEYS.serverToClient);
@@ -304,6 +306,7 @@ export class Session {
       return;
     }
     this.env.post({ type: 'routed', id: this.id, host: route.destination.host, port: route.destination.port, restored: route.restored });
+    this.env.post({ type: 'note', id: this.id, message: describeHello(hello, route) });
     if (this.env.interest.classify('HELLO', true) !== 'none') {
       // HELLO is routed by the worker; the main thread may read it (e.g. the access token) but never decide on it.
       this.env.post({ type: 'packet', id: this.id, sequence: 0, generation: this.generation, fromClient: true, observeOnly: true, data: frame });
@@ -363,7 +366,8 @@ export class Session {
       if (this.closed || this.server !== server) return;
       // A server that accepted HELLO and then reset has refused it; resending looks like a flood.
       if (error && this.serverReady && !this.serverResponded) {
-        this.fault(new Error(`${label} reset the connection after HELLO (${error.message}); not retrying`));
+        const elapsed = Math.round(this.env.now() - this.helloSentAt);
+        this.fault(new Error(`${label} reset the connection ${elapsed} ms after HELLO (${error.message}); not retrying`));
         return;
       }
       if (this.serverResponded || !this.helloForRetry || this.helloAttempt >= MAX_HELLO_RETRIES) {
@@ -389,6 +393,7 @@ export class Session {
       if (this.closed || this.server !== server || !this.helloForRetry) return;
       this.serverReady = true;
       this.writeRaw(this.helloForRetry, false);
+      this.helloSentAt = this.env.now();
       const queued = this.beforeConnect;
       this.beforeConnect = [];
       this.beforeConnectBytes = 0;
@@ -461,13 +466,15 @@ export class Session {
         }
       }
       if (toClient && name === 'RECONNECT') {
-        const rewritten = this.destination ? this.env.router.rewriteReconnect(decode(), this.destination) : null;
+        const original = decode();
+        const rewritten = this.destination ? this.env.router.rewriteReconnect(original, this.destination) : null;
         if (!rewritten) {
           this.env.post({ type: 'diagnostic', id: this.id, message: 'Dropped a malformed RECONNECT; the current route is unchanged' });
           if (observation !== null) this.notifyDropped(observation);
           return false;
         }
         out = rewritten;
+        this.env.post({ type: 'note', id: this.id, message: describeReconnect(original) });
         // Final-write subscribers must see the rewritten bytes, never the original route.
         packet = null;
       }

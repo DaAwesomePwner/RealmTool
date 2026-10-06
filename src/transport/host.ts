@@ -26,6 +26,7 @@ export interface HostEvents {
   packet: [event: PacketEvent];
   closed: [info: { id: string; by: CloseSide }];
   diagnostic: [info: { id?: string; message: string }];
+  note: [info: { id: string; message: string }];
   fault: [info: { id?: string; message: string }];
   module: [info: { moduleId: string; id?: string; message: unknown }];
 }
@@ -184,6 +185,9 @@ export class ProxyHost extends EventEmitter<HostEvents> {
         return;
       case 'diagnostic':
         this.emit('diagnostic', { id: event.id, message: event.message });
+        return;
+      case 'note':
+        this.emit('note', { id: event.id, message: event.message });
         return;
       case 'fault':
         if (!event.id && !this.listening) this.failStart(new Error(event.message));

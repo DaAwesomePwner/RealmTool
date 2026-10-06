@@ -334,6 +334,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     const onRouted = ({ id, host: server, port, restored }: { id: string; host: string; port: number; restored: boolean }) =>
       log.info('Proxy', `${id.slice(0, 8)} → ${server}:${port}${restored ? ' (transfer)' : ''}`);
     const diagnostic = ({ id, message }: { id?: string; message: string }) => log.warn('Proxy', `${id ? `${id.slice(0, 8)}: ` : ''}${message}`);
+    const note = ({ id, message }: { id: string; message: string }) => log.info('Proxy', `${id.slice(0, 8)}: ${message}`);
     const fault = ({ id, message }: { id?: string; message: string }) => log.error('Proxy', `${id ? `${id.slice(0, 8)}: ` : ''}${message}`);
     const exit = ({ code, expected }: { code: number; expected: boolean }) => {
       if (expected || this.host !== host) return;
@@ -341,10 +342,10 @@ export class AppController extends EventEmitter<ControllerEvents> {
       log.error('Proxy', error); this.failHost(host, error);
     };
     host.on('session', onSession); host.on('connected', onConnected); host.on('closed', onClosed);
-    host.on('routed', onRouted); host.on('diagnostic', diagnostic); host.on('fault', fault); host.on('exit', exit);
+    host.on('routed', onRouted); host.on('diagnostic', diagnostic); host.on('note', note); host.on('fault', fault); host.on('exit', exit);
     this.detachHost.push(() => {
       host.off('session', onSession); host.off('connected', onConnected); host.off('closed', onClosed);
-      host.off('routed', onRouted); host.off('diagnostic', diagnostic); host.off('fault', fault); host.off('exit', exit);
+      host.off('routed', onRouted); host.off('diagnostic', diagnostic); host.off('note', note); host.off('fault', fault); host.off('exit', exit);
     });
   }
   private failHost(host: ReturnType<ControllerDeps['createHost']>, error: string): void {
