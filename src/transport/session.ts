@@ -11,6 +11,7 @@ import type { Interest } from './interest.ts';
 import type { CloseSide, WorkerEvent } from './messages.ts';
 import type { HeldPacket, PendingDelivery, TransportState, WorkerModule, WorkerSessionContext, WorkerSessionModule, WriteKind } from './modules.ts';
 import { SessionAutomation } from './automation.ts';
+import { SessionTrace } from './trace.ts';
 
 export interface SessionEnv {
   factory: PacketFactory;
@@ -73,6 +74,7 @@ export class Session {
   private readonly env: SessionEnv;
   private readonly modules: ActiveModule[];
   private readonly automation = new SessionAutomation();
+  private readonly trace: SessionTrace;
   private server: net.Socket | null = null;
   private serverReady = false;
   private serverResponded = false;
@@ -106,6 +108,7 @@ export class Session {
     this.id = id;
     this.client = client;
     this.env = env;
+    this.trace = new SessionTrace(env.now());
     this.modules = [...env.modules].sort((a, b) => a.priority - b.priority).map(module => ({
       id: module.id,
       client: new Set(module.observe?.client ?? []),
@@ -117,7 +120,7 @@ export class Session {
     }));
     client.setNoDelay(true);
     client.on('data', data => this.receive(data, true, this.clientFrames));
-    client.on('error', error => this.fault(error));
+    client.on('error', error => this.fault(new Error(`Game connection error (${error.message})`)));
     client.on('close', () => this.close('game'));
     this.targetTimer = setTimeout(() => this.setTarget(null), env.targetTimeoutMs);
     env.post({ type: 'opened', id, remotePort: client.remotePort ?? 0 });
@@ -156,6 +159,7 @@ export class Session {
   close(by: CloseSide = 'proxy'): void {
     if (this.closed) return;
     this.closed = true;
+    this.env.post({ type: 'note', id: this.id, message: this.summary() });
     if (this.targetTimer) clearTimeout(this.targetTimer);
     if (this.helloTimer) clearTimeout(this.helloTimer);
     this.heldHello = null;
@@ -194,7 +198,19 @@ export class Session {
     return out;
   }
 
+  private summary(): string {
+    const now = this.env.now();
+    const held = [];
+    for (const pending of this.pending.values()) {
+      if (pending.result !== undefined) continue;
+      const { name, fromClient } = pending.observation;
+      held.push({ name, fromClient, ageMs: now - pending.receivedAt });
+    }
+    return this.trace.summary(now, held, { game: this.client.writableLength, server: this.server?.writableLength ?? 0 });
+  }
+
   private notifyDropped(observation: Observation): void {
+    this.trace.dropped(observation.fromClient);
     const now = this.env.now();
     for (const module of this.modules) {
       if ((observation.fromClient ? module.client : module.server).has(observation.name)) {
@@ -252,6 +268,8 @@ export class Session {
     if (this.closed) return;
     const direction = fromClient ? 'client' : 'server';
     const name = this.env.factory.getPacketName(frame[4], direction);
+    this.trace.received(fromClient, name, frame.length, this.env.now());
+    if (fromClient && name === 'ESCAPE') this.env.post({ type: 'note', id: this.id, message: 'Game sent ESCAPE (Nexus request)' });
     for (const module of this.modules) {
       if (this.call(module, 'suppressEntry', () => module.hooks.suppressEntry?.(name, fromClient) ?? false, false)) return;
     }
@@ -371,7 +389,7 @@ export class Session {
         return;
       }
       if (this.serverResponded || !this.helloForRetry || this.helloAttempt >= MAX_HELLO_RETRIES) {
-        this.fault(error ?? new Error(`${label} never answered HELLO`));
+        this.fault(error ? new Error(`Server connection error (${error.message})`) : new Error(`${label} never answered HELLO`));
         return;
       }
       ++this.helloAttempt;
@@ -394,6 +412,7 @@ export class Session {
       this.serverReady = true;
       this.writeRaw(this.helloForRetry, false);
       this.helloSentAt = this.env.now();
+      this.trace.helloSent(this.helloSentAt);
       const queued = this.beforeConnect;
       this.beforeConnect = [];
       this.beforeConnectBytes = 0;
@@ -478,7 +497,7 @@ export class Session {
         // Final-write subscribers must see the rewritten bytes, never the original route.
         packet = null;
       }
-      accepted = this.writeRaw(out, toClient, done);
+      accepted = this.writeRaw(out, toClient, done, kind !== 'normal');
       if (!accepted) {
         if (observation !== null) this.notifyDropped(observation);
         return false;
@@ -507,9 +526,10 @@ export class Session {
     return true;
   }
 
-  private writeRaw(data: Buffer, toClient: boolean, done?: (error?: Error | null) => void): boolean {
+  private writeRaw(data: Buffer, toClient: boolean, done?: (error?: Error | null) => void, byRealmTool = false): boolean {
     const socket = toClient ? this.client : this.server;
     if (!socket || socket.destroyed || !socket.writable) return false;
+    this.trace.sent(toClient, data.length, byRealmTool);
     const encrypted = Buffer.from(data);
     (toClient ? this.toClientCipher : this.toServerCipher).cipher(encrypted);
     socket.write(encrypted, done);

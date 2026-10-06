@@ -874,3 +874,55 @@ describe('Session', () => {
     expect(packets(h)).toHaveLength(0);
   });
 });
+
+describe('Session tracing', () => {
+  const notes = (h: Harness) => h.events.filter((e): e is Extract<WorkerEvent, { type: 'note' }> => e.type === 'note').map(e => e.message);
+  const faults = (h: Harness) => h.events.filter((e): e is Extract<WorkerEvent, { type: 'fault' }> => e.type === 'fault').map(e => e.message);
+
+  it('logs a delivery summary when the session closes', async () => {
+    const h = await harness();
+    const server = await fakeServer();
+    const { game, upstream } = await connected(h, server);
+    upstream.send(frame(id('MAPINFO')));
+    upstream.send(frame(id('NEWTICK')));
+    await until(() => game.frames.length === 2, 'server frames delivered');
+    game.destroy();
+    await until(() => h.events.some(e => e.type === 'closed'), 'closed');
+    const summary = notes(h).find(m => m.startsWith('Session summary'));
+    expect(summary).toMatch(/game→proxy 1 frames .*proxy→server 1 frames .*server→proxy 2 frames .*, first \d+ ms after HELLO/);
+    expect(summary).toContain('proxy→game 2 frames');
+    expect(summary).toContain('first server packets: MAPINFO, NEWTICK');
+    const order = h.events.map(e => e.type);
+    expect(order.lastIndexOf('note')).toBeLessThan(order.indexOf('closed'));
+  });
+
+  it('notes when the game itself asks for the Nexus', async () => {
+    const h = await harness();
+    const server = await fakeServer();
+    const { game, upstream } = await connected(h, server);
+    game.send(frame(id('ESCAPE')));
+    await until(() => upstream.frames.length === 2, 'ESCAPE forwarded');
+    expect(notes(h)).toContain('Game sent ESCAPE (Nexus request)');
+  });
+
+  it('names the game socket when the game resets the connection', async () => {
+    const h = await harness();
+    const server = await fakeServer();
+    const { game } = await connected(h, server);
+    game.reset();
+    await until(() => h.events.some(e => e.type === 'closed'), 'closed');
+    expect(faults(h)[0]).toMatch(/^Game connection error \(/);
+    expect(notes(h).some(m => m.startsWith('Session summary'))).toBe(true);
+  });
+
+  it('names the server socket when the server resets after answering', async () => {
+    const h = await harness();
+    const server = await fakeServer();
+    const { game, upstream } = await connected(h, server);
+    upstream.send(frame(id('MAPINFO')));
+    await until(() => game.frames.length === 1, 'server answered');
+    upstream.reset();
+    await until(() => h.events.some(e => e.type === 'closed'), 'closed');
+    expect(faults(h)[0]).toMatch(/^Server connection error \(/);
+  });
+});
