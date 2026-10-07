@@ -924,5 +924,17 @@ describe('Session tracing', () => {
     upstream.reset();
     await until(() => h.events.some(e => e.type === 'closed'), 'closed');
     expect(faults(h)[0]).toMatch(/^Server connection error \(/);
+    await until(() => game.closed, 'game closed');
+    expect(game.errors.map(e => (e as NodeJS.ErrnoException).code)).toContain('ECONNRESET');
+  });
+
+  it('passes a reset straight after HELLO on to the game instead of closing it cleanly', async () => {
+    const h = await harness();
+    const server = await fakeServer();
+    const { game, upstream } = await connected(h, server);
+    upstream.reset();
+    await until(() => game.closed, 'game closed');
+    expect(faults(h)[0]).toMatch(/reset the connection \d+ ms after HELLO .*not retrying$/);
+    expect(game.errors.map(e => (e as NodeJS.ErrnoException).code)).toContain('ECONNRESET');
   });
 });
