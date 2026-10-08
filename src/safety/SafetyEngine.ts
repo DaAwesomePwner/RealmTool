@@ -49,6 +49,8 @@ export class SafetyEngine {
   private safe = true;
   private lastServerAt: number | null = null;
   private lastHpAt: number | null = null;
+  // An HP-less delta proves HP unchanged only while every server HP carrier since the anchor was read.
+  private hpAnchorContinuous = false;
   private lastHp: number | null = null;
   private lastTick = -1;
   private lastReason = '';
@@ -91,7 +93,7 @@ export class SafetyEngine {
     this.predictionOccurrences.clear(); this.predictionSignatures.clear(); this.unresolvedOccurrences.clear();
     this.unresolvedSerial = 0; this.damageBasisRevision = 0; this.damageBasisAt = null;
     this.projectileConditions.clear(); this.shots.clear(); this.types.clear(); this.tiles.clear(); this.areas = [];
-    this.lastHp = null; this.lastHpAt = null; this.lastServerAt = null;
+    this.lastHp = null; this.lastHpAt = null; this.lastServerAt = null; this.hpAnchorContinuous = false;
     this.lastTick = -1; this.lastReason = '';
   }
 
@@ -122,6 +124,7 @@ export class SafetyEngine {
       return;
     }
     if (!packet.isDefined) {
+      if (!fromClient && ['NEWTICK', 'UPDATE'].includes(packet.name)) this.hpAnchorContinuous = false;
       if (!fromClient && ['NEWTICK', 'UPDATE', 'DAMAGE'].includes(packet.name)) this.uncertain(now, `unreadable ${packet.name}`);
       return;
     }
@@ -147,8 +150,8 @@ export class SafetyEngine {
       this.predictor.timing(now, d.serverLastRttMs);
       const hasOwnerHp = (d.statuses ?? []).some((status: Parameters<ServerPlayerState['applyStatus']>[0]) =>
         status.objectId === this.player.ownerObjectId && Array.isArray(status.data) && status.data.some(s => s?.id === 1));
-      // Invalid explicit HP is not evidence of unchanged HP.
-      if (this.settings.preHitPrediction && this.lastHp !== null && !hasOwnerHp) this.predictor.unchangedHp(now);
+      // Invalid explicit HP is not evidence of unchanged HP, and it breaks the anchor until a valid sample.
+      if (this.settings.preHitPrediction && this.hpAnchorContinuous && !hasOwnerHp) this.predictor.unchangedHp(now);
       for (const status of d.statuses ?? []) this.applyStatus(status, now);
       this.check(now, 'server tick');
     }
@@ -195,6 +198,7 @@ export class SafetyEngine {
       ++this.damageBasisRevision; this.damageBasisAt = now;
     }
     const hp = this.player.applyStatus(status, full);
+    if (incoming.some(s => s?.id === 1)) this.hpAnchorContinuous = hp !== null;
     if (hp !== null) {
       this.lastHp = hp; this.lastHpAt = now; this.lastServerAt = now;
       this.predictor.snapshot(hp, now);

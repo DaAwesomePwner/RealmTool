@@ -90,6 +90,20 @@ it.each([undefined, null, -1, NaN, Infinity, '865'])('does not reconcile an expl
   expect(f.engine.status()).toMatchObject({ confirmedHp: 707, healthAgeMs: 2000,
     prediction: { pendingCount: 1, pendingDamage: 100, retiredCount: 0, retirementEnabled: true } });
 });
+it.each(['NEWTICK', 'UPDATE', 'invalid HP'] as const)('a gap from %s blocks later HP-less reconciliation until a valid HP sample', gap => {
+  const f = fixture(); f.hp(); f.advance(200); f.hp(); f.advance(200); f.hp();
+  const hit = f.hit(1, 100); f.engine.reportDelivered(hit.id, f.now(), true);
+  if (gap === 'invalid HP') f.send('NEWTICK', { tickId: 4, serverLastRttMs: 80, statuses: [{ objectId: 1, data: [{ id: 1, value: -1 }] }] });
+  else { const p = createPacket(1, gap, 'server'); p.isDefined = false; f.engine.observe(p, f.now()); }
+  // The gap may have carried the real loss; later omissions cannot prove the stale anchor unchanged.
+  for (let i = 0; i < 10; ++i) { f.advance(200); f.hp(); }
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 1, pendingDamage: 100, retiredCount: 0, retirementEnabled: true });
+  f.advance(200); f.hp(707);
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 0, retiredCount: 1 });
+  const next = f.hit(2, 100); f.engine.reportDelivered(next.id, f.now(), true);
+  for (let i = 0; i < 6; ++i) { f.advance(200); f.hp(); }
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 0, retiredCount: 2, creditedDamage: 0 });
+});
 it.each(['unreadable', 'duplicate', 'old'] as const)('does not reconcile %s HP-less ticks', kind => {
   const f = fixture(); f.hp(); f.advance(200); f.hp(); f.advance(200); f.hp();
   const hit = f.hit(1, 100); f.engine.reportDelivered(hit.id, f.now(), true); f.advance(600);
