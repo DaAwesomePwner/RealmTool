@@ -32,6 +32,101 @@ function fixture(settings: SafetySettingsInput = {}, hp = 707, max = 707) {
   };
 }
 
+it.each([false, true])('retires delivered hits at full HP on healthy HP-less ticks, owner absent=%s', absent => {
+  const f = fixture({}, 865, 865);
+  f.send('UPDATE', { newObjs: [{ status: { objectId: 1, data: [{ id: 21, value: 45 }] } }] });
+  for (let bullet = 1; bullet <= 4; ++bullet) {
+    const hit = f.hit(bullet, 140); f.engine.reportDelivered(hit.id, f.now(), true);
+  }
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 4, pendingDamage: 380 });
+  const revision = f.engine.predictor.revision;
+  for (let tick = 1; tick <= 150; ++tick) {
+    f.advance(200);
+    if (absent) f.send('NEWTICK', { tickId: tick, serverLastRttMs: 80, statuses: [{ objectId: 2, data: [{ id: 1, value: 10 }] }] });
+    else f.hp();
+  }
+  expect(f.engine.status()).toMatchObject({ confirmedHp: 865, lowerHp: 865, healthAgeMs: 30000,
+    prediction: { pendingCount: 0, pendingDamage: 0, retiredCount: 4, creditedDamage: 0, retirementEnabled: true } });
+  expect(f.engine.predictor.revision).toBe(revision);
+  f.hit(5, 140); expect(f.engine.status().lowerHp).toBe(770); expect(f.escape).not.toHaveBeenCalled();
+  expect(f.engine.decisionEvidence(f.now(), 'test')).toMatchObject({ retirementEnabled: true, graceMs: 580, lastHpAgeMs: 30000 });
+});
+it('HP-less ticks wait for the full grace and supply no loss credit', () => {
+  const f = fixture(); f.hp(); f.advance(200); f.hp(); f.advance(200); f.hp();
+  const hit = f.hit(1, 100); f.engine.reportDelivered(hit.id, f.now(), true);
+  f.advance(200); f.hp(); f.advance(200); f.hp(); f.advance(179); f.hp();
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 1, pendingDamage: 100,
+    creditedDamage: 0, retiredCount: 0, graceMs: 580, retirementEnabled: true });
+  f.advance(1); f.hp();
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 0, creditedDamage: 0, retiredCount: 1 });
+});
+it.each(['backlog', 'unhealthy', 'long-rtt'] as const)('HP-less ticks retain delivered debt with %s timing', kind => {
+  const f = fixture(); f.hp(); f.advance(200); f.hp(); f.advance(200); f.hp();
+  const hit = f.hit(1, 100); f.engine.reportDelivered(hit.id, f.now(), true);
+  if (kind === 'backlog') f.engine.deliveryBacklog(true);
+  if (kind === 'unhealthy') { f.advance(1600); f.hp(); }
+  else for (let tick = 4; tick <= 24; ++tick) {
+    f.advance(200);
+    f.send('NEWTICK', { tickId: tick, serverLastRttMs: kind === 'long-rtt' ? 3000 : 80, statuses: [] });
+  }
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 1, pendingDamage: 100,
+    retiredCount: 0, creditedDamage: 0, retirementEnabled: false });
+});
+it('HP-less ticks retain held reports and age them from their eventual write', () => {
+  const f = fixture(); const hit = f.hit(1, 100);
+  for (let i = 0; i < 10; ++i) { f.advance(200); f.hp(); }
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 1, pendingDamage: 100, retiredCount: 0, retirementEnabled: true });
+  f.engine.reportDelivered(hit.id, f.now(), true);
+  f.advance(200); f.hp(); expect(f.engine.status().prediction?.pendingCount).toBe(1);
+  for (let i = 0; i < 4; ++i) { f.advance(200); f.hp(); }
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 0, retiredCount: 1 });
+});
+it.each([undefined, null, -1, NaN, Infinity, '865'])('does not reconcile an explicit invalid HP stat: %s', value => {
+  const f = fixture(); const hit = f.hit(1, 100); f.engine.reportDelivered(hit.id, f.now(), true);
+  for (let tick = 1; tick <= 10; ++tick) {
+    f.advance(200);
+    f.send('NEWTICK', { tickId: tick, serverLastRttMs: 80, statuses: [{ objectId: 1, data: [{ id: 1, value }] }] });
+  }
+  expect(f.engine.status()).toMatchObject({ confirmedHp: 707, healthAgeMs: 2000,
+    prediction: { pendingCount: 1, pendingDamage: 100, retiredCount: 0, retirementEnabled: true } });
+});
+it.each(['unreadable', 'duplicate', 'old'] as const)('does not reconcile %s HP-less ticks', kind => {
+  const f = fixture(); f.hp(); f.advance(200); f.hp(); f.advance(200); f.hp();
+  const hit = f.hit(1, 100); f.engine.reportDelivered(hit.id, f.now(), true); f.advance(600);
+  const p = createPacket(1, 'NEWTICK', 'server');
+  p.isDefined = kind !== 'unreadable'; p.data = { tickId: kind === 'old' ? 2 : kind === 'duplicate' ? 3 : 4, statuses: [] };
+  f.engine.observe(p, f.now());
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 1, pendingDamage: 100, retiredCount: 0, retirementEnabled: true });
+});
+it('HP-less ticks cannot establish an unknown HP anchor or retire its debt', () => {
+  const f = fixture({}, NaN); const hit = f.hit(1, 100); f.engine.reportDelivered(hit.id, f.now(), true);
+  for (let i = 0; i < 10; ++i) { f.advance(200); f.hp(); }
+  expect(f.engine.status()).toMatchObject({ confirmedHp: null, healthAgeMs: null,
+    prediction: { pendingCount: 1, pendingDamage: 100, retiredCount: 0, retirementEnabled: true } });
+  expect(f.engine.decisionEvidence(f.now(), 'test').lastHpAgeMs).toBeNull();
+});
+it('does not run unchanged-HP reconciliation with Collision HP off', () => {
+  const f = fixture({ preHitPrediction: false }); const reconcile = vi.spyOn(f.engine.predictor, 'unchangedHp');
+  for (let i = 0; i < 10; ++i) { f.advance(200); f.hp(); }
+  expect(reconcile).not.toHaveBeenCalled();
+  expect(f.engine.status()).toMatchObject({ confirmedHp: 707, healthAgeMs: 2000 });
+  expect(f.engine.decisionEvidence(f.now(), 'test').retirementEnabled).toBe(false);
+});
+it('HP-less ticks reconcile server-seen damage without requiring a client write', () => {
+  const f = fixture(); f.send('DAMAGE', { targetId: 1, objectId: 2, bulletId: 1, damageAmount: 100 });
+  for (let i = 0; i < 10; ++i) { f.advance(200); f.hp(); }
+  expect(f.engine.status().prediction).toMatchObject({ pendingCount: 0, retiredCount: 1, creditedDamage: 0 });
+});
+it('explicit HP loss still credits a delivered hit after unchanged-HP reconciliation', () => {
+  const f = fixture(); f.hp(); f.advance(200); f.hp(); f.advance(200); f.hp();
+  const hit = f.hit(1, 100); f.engine.reportDelivered(hit.id, f.now(), true);
+  f.advance(100); f.hp();
+  expect(f.engine.status().prediction).toMatchObject({ pendingDamage: 100, creditedDamage: 0 });
+  f.advance(100); f.hp(647);
+  expect(f.engine.status()).toMatchObject({ confirmedHp: 647, healthAgeMs: 0,
+    prediction: { pendingCount: 1, pendingDamage: 40, creditedDamage: 60, retiredCount: 0 } });
+});
+
 it('charges each distinct unknown hit at 200 without a full-HP uncertainty exit', () => {
   const f = fixture(); f.hit(1);
   expect(f.engine.status().lowerHp).toBe(507); expect(f.escape).not.toHaveBeenCalled();

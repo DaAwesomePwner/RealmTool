@@ -196,7 +196,8 @@ export function lossText(evidence: SafetyDecisionEvidence | undefined): string {
   const listed = evidence.impacts.map(i => `${i.source} ${i.amount}${i.raw === null ? '' : ` (raw ${i.raw})`} ${i.kind}`
     + `${i.kind === 'assumed' && i.reason ? ` (${i.reason})` : ''} ${Math.round(i.ageMs)} ms ago`);
   if (evidence.pendingCount > evidence.impacts.length) listed.push(`${evidence.pendingCount - evidence.impacts.length} more`);
-  return `; pending loss ${evidence.pendingDamage} from ${evidence.pendingCount} report${evidence.pendingCount === 1 ? '' : 's'}: ${listed.join(', ')}`;
+  return `; pending loss ${evidence.pendingDamage} from ${evidence.pendingCount} report${evidence.pendingCount === 1 ? '' : 's'}: ${listed.join(', ')}`
+    + `; reconciliation ${evidence.retirementEnabled ? 'on' : 'off'}, grace ${Math.round(evidence.graceMs)} ms, last HP sample ${evidence.lastHpAgeMs === null ? 'unknown' : `${Math.round(evidence.lastHpAgeMs)} ms ago`}`;
 }
 
 function modeText(mode: AutoNexusEvent['collisionHp'], catalog: SafetyCatalogState): string {

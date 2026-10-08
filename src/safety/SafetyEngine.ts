@@ -145,6 +145,10 @@ export class SafetyEngine {
       if (!Number.isInteger(d.tickId) || d.tickId <= this.lastTick) return;
       this.lastTick = d.tickId; this.lastServerAt = now;
       this.predictor.timing(now, d.serverLastRttMs);
+      const hasOwnerHp = (d.statuses ?? []).some((status: Parameters<ServerPlayerState['applyStatus']>[0]) =>
+        status.objectId === this.player.ownerObjectId && Array.isArray(status.data) && status.data.some(s => s?.id === 1));
+      // Invalid explicit HP is not evidence of unchanged HP.
+      if (this.settings.preHitPrediction && this.lastHp !== null && !hasOwnerHp) this.predictor.unchangedHp(now);
       for (const status of d.statuses ?? []) this.applyStatus(status, now);
       this.check(now, 'server tick');
     }
@@ -406,7 +410,10 @@ export class SafetyEngine {
   }
 
   decisionEvidence(now: number, trigger: string): SafetyDecisionEvidence {
+    const prediction = this.predictor.state(now);
     return { trigger, preHitPrediction: this.settings.preHitPrediction, reactionMs: this.settings.reactionMs,
+      retirementEnabled: this.settings.preHitPrediction && prediction.retirementEnabled, graceMs: prediction.graceMs,
+      lastHpAgeMs: this.lastHpAt === null ? null : now - this.lastHpAt,
       ...(this.settings.preHitPrediction ? this.predictor.evidence(now) : { pendingCount: 0, pendingDamage: 0, impacts: [] }) };
   }
   request(now: number, reason: string, manual = false, trigger = reason): void {

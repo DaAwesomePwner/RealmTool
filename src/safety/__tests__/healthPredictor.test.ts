@@ -16,7 +16,7 @@ it('healing on the next update does not acknowledge a recent written hit', () =>
   p.timing(600, 80); p.snapshot(707, 600);
   expect(p.lowerHp).toBe(657); expect(p.state(600).retiredCount).toBe(0);
 });
-it('requires explicit HP and sufficient write age; time and HP-less ticks alone never retire', () => {
+it('requires HP reconciliation and sufficient write age; time and timing() alone never retire', () => {
   const p = ledger(); p.impact('a', loss(50), 410, 'player-hit', 12000, 1); p.delivered(1, 450, 'written');
   for (let t = 600; t <= 1400; t += 200) p.timing(t, 80);
   p.expire(1400); expect(p.lowerHp).toBe(657);

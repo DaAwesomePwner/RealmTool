@@ -213,7 +213,8 @@ describe('Auto Nexus facade', () => {
     const f = fixture();
     const decision: SafetyDecision = { origin, attemptId: 1, connectionGeneration: 1, lifecycleRevision: 1, reason: 'reason', epoch: 1,
       confirmedHp: 80, lowerHp: 80, maxHp: 100, thresholdHp: 25, at: 1,
-      evidence: { trigger: 'reason', preHitPrediction: false, reactionMs: 400, pendingCount: 0, pendingDamage: 0, impacts: [] } };
+      evidence: { trigger: 'reason', preHitPrediction: false, reactionMs: 400, pendingCount: 0, pendingDamage: 0, impacts: [],
+        retirementEnabled: false, graceMs: 1000, lastHpAgeMs: 0 } };
     const send = () => f.h.workerMessage(f.client, 'auto-nexus', { type: 'decision', catalog: ready, collisionHp: 'off', decision, status: status(), writeDelayMs: 0.25 });
     send(); const label = origin === 'manual' ? 'MANUAL NEXUS' : 'AUTO NEXUS';
     expect(f.reply().name).toBe(label);
@@ -230,12 +231,19 @@ describe('Auto Nexus facade', () => {
     const decision: SafetyDecision = { origin: 'automatic', attemptId: 1, connectionGeneration: 1, lifecycleRevision: 1,
       reason: 'predicted HP crosses threshold', epoch: 1, confirmedHp: 755, lowerHp: 183, maxHp: 755, thresholdHp: 188, at: 1,
       evidence: { trigger: 'reported impact', preHitPrediction: true, reactionMs: 400, pendingCount: 3, pendingDamage: 572,
+        retirementEnabled: true, graceMs: 580, lastHpAgeMs: 31200,
         impacts: [hit(200, 'assumed', 'missing-shot', null, 140.4), hit(372, 'mitigated-estimate', 'standard projectile', 420, 0)] } };
     f.h.workerMessage(f.client, 'auto-nexus', { type: 'decision', catalog: ready, collisionHp: 'on', decision, status: status(), writeDelayMs: 0.25 });
     expect(f.reply().text).not.toContain('pending loss');
     expect(records.at(-1)?.message).toMatch(/; local write attempt 0\.250ms \(not server acceptance\); pending loss 572 from 3 reports: /);
     expect(records.at(-1)?.message).toContain('pending loss 572 from 3 reports: player-hit 200 assumed (missing-shot) 140 ms ago, '
-      + 'player-hit 372 (raw 420) mitigated-estimate 0 ms ago, 1 more');
+      + 'player-hit 372 (raw 420) mitigated-estimate 0 ms ago, 1 more; reconciliation on, grace 580 ms, last HP sample 31200 ms ago');
+    decision.evidence.retirementEnabled = false; decision.evidence.lastHpAgeMs = null;
+    f.h.workerMessage(f.client, 'auto-nexus', { type: 'decision', catalog: ready, collisionHp: 'on', decision, status: status(), writeDelayMs: 0.25 });
+    expect(records.at(-1)?.message).toContain('; reconciliation off, grace 580 ms, last HP sample unknown');
+    decision.evidence.pendingCount = 0; decision.evidence.pendingDamage = 0; decision.evidence.impacts = [];
+    f.h.workerMessage(f.client, 'auto-nexus', { type: 'decision', catalog: ready, collisionHp: 'on', decision, status: status(), writeDelayMs: 0.25 });
+    expect(records.at(-1)?.message).not.toContain('reconciliation');
   });
 
   it('cleans up subscriptions and disarms the worker on stop', () => {
