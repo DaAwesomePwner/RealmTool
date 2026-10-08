@@ -88,8 +88,15 @@ export class HealthPredictor {
   }
   snapshot(hp: number, now: number): void {
     if (!Number.isFinite(hp) || hp < 0) return;
-    let observedLoss = this.hp === null ? 0 : Math.max(0, this.hp - hp);
+    const observedLoss = this.hp === null ? 0 : Math.max(0, this.hp - hp);
     this.hp = hp; ++this.revision;
+    this.reconcile(observedLoss, now);
+  }
+  /** An advancing server delta omitted HP; preserve the explicit sample and supply no loss credit. */
+  unchangedHp(now: number): void {
+    if (this.hp !== null) this.reconcile(0, now);
+  }
+  private reconcile(observedLoss: number, now: number): void {
     this.expire(now);
     if (!this.retirementAllowed(now)) return;
     const grace = this.graceMs;
@@ -104,7 +111,7 @@ export class HealthPredictor {
         const credit = Math.min(observedLoss, Math.max(0, hit.assessment.amount - hit.credited));
         hit.credited += credit; this.credited += credit; observedLoss -= credit;
       }
-      // Receipt alone, a blocked report and an HP-less tick cannot retire a hit.
+      // Receipt alone and a blocked report cannot retire a hit.
       if (since === null || now - since < grace) continue;
       this.impacts.delete(id); this.settled.set(id, Math.max(hit.expiresAt, now + grace)); ++this.retired;
       for (const [observation, impact] of this.reports) if (impact === id) this.reports.delete(observation);

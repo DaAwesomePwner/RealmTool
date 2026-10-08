@@ -73,6 +73,9 @@ export interface SafetyDecisionEvidence {
   trigger: string;
   preHitPrediction: boolean;
   reactionMs: number;
+  retirementEnabled: boolean;
+  graceMs: number;
+  lastHpAgeMs: number | null;
   pendingCount: number;
   pendingDamage: number;
   impacts: ReturnType<HealthPredictor['evidence']>['impacts'];
