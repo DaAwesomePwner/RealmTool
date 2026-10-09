@@ -2,8 +2,14 @@ import type { ApiClient, AppState } from './api.ts';
 import { button, el, message } from './dom.ts';
 
 export class Readiness {
+  /** Game folder, launcher, game data and helper controls. */
   readonly element = el('section', undefined, 'readiness');
-  private readonly bar = el('div', undefined, 'readiness-bar');
+  /** Compact proxy/helper/session summary for the top bar. */
+  readonly status = el('div', undefined, 'readiness-bar');
+  /** Launch and proxy controls for the top bar. */
+  readonly actions = el('div', undefined, 'controls');
+  /** Proxy and request errors, shown above the tabs so they stay visible. */
+  readonly notices = el('div', undefined, 'notices');
   private readonly error = el('p', '', 'error');
   private readonly requestError = el('p', '', 'error');
   private readonly folder = el('input');
@@ -23,14 +29,14 @@ export class Readiness {
 
   constructor(api: Pick<ApiClient, 'post'>, changed: () => void) {
     this.api = api; this.changed = changed;
-    this.bar.setAttribute('aria-live', 'polite');
+    this.status.setAttribute('aria-live', 'polite');
     this.launch = button('Launch', () => void this.run('/api/game/launch'));
     this.launch.className = 'primary';
     this.proxy = button('Start proxy', () => void this.run(`/api/proxy/${this.state?.proxy.state === 'running' ? 'stop' : 'start'}`));
     this.refresh = button('Refresh game data', () => void this.run('/api/refresh-data'));
     this.dataStatus.setAttribute('aria-live', 'polite');
     this.uninstall = button('Uninstall helper', () => void this.run('/api/helper/uninstall'));
-    const controls = el('div', undefined, 'controls'); controls.append(this.launch, this.proxy, this.refresh, this.uninstall);
+    this.actions.append(this.launch, this.proxy);
     const label = el('label', 'Game folder'); this.folder.type = 'text'; this.folder.placeholder = 'Path to the RotMG Exalt game folder';
     this.candidates.id = 'game-folders'; this.folder.setAttribute('list', this.candidates.id);
     this.saveFolder = button('Save game folder', () => void this.run('/api/game/dir', { dir: this.folder.value }));
@@ -39,20 +45,26 @@ export class Readiness {
     this.saveLauncher = button('Save launcher', () => void this.run('/api/game/launcher', { path: this.launcher.value.trim() || null }));
     const launcherRow = el('div', undefined, 'path-row'); launcherRow.append(launcherLabel, this.saveLauncher);
     const options = el('details'); options.append(el('summary', 'Launcher settings'), launcherRow);
+    const data = el('div', undefined, 'setup-row'); data.append(this.refresh, this.dataStatus);
+    const helper = el('div', undefined, 'setup-row');
+    helper.append(this.uninstall, el('p', 'Closing the window while the proxy runs hides RealmTool to the tray. Use tray Quit to exit. The helper stays installed until you uninstall it.', 'help'));
     this.error.setAttribute('role', 'alert'); this.requestError.setAttribute('role', 'alert');
-    this.element.append(this.bar, this.error, controls, this.dataStatus, folderRow, options, this.requestError,
-      el('p', 'Closing the window while the proxy runs hides RealmTool to the tray. Use tray Quit to exit. The helper stays installed until you uninstall it.', 'help'));
+    this.notices.append(this.error, this.requestError);
+    this.element.append(el('h2', 'Game'), folderRow, options, el('h3', 'Game data'), data, el('h3', 'Helper'), helper);
     this.controls();
   }
 
   update(state: AppState): void {
     this.state = state;
-    this.bar.replaceChildren();
+    this.status.replaceChildren();
     for (const [label, value] of [
       ['Proxy', state.proxy.state], ['Helper', state.game.helper.state],
       ['Sessions', `${state.sessions.connected} connected / ${state.sessions.open} open`],
       ['Profile', state.profile.active], ['Operation', state.operation ?? 'Idle'],
-    ]) { const item = el('div'); item.append(el('span', label, 'muted'), el('strong', value)); this.bar.append(item); }
+    ]) {
+      const item = el('div'); item.dataset.key = label.toLowerCase(); item.dataset.value = value;
+      item.append(el('span', label, 'muted'), el('strong', value)); this.status.append(item);
+    }
     this.error.textContent = state.proxy.error ?? '';
     const data = state.data, result = data?.lastResult;
     this.dataStatus.textContent = data?.state === 'refreshing' ? 'Refreshing game data… This may take up to two minutes.'

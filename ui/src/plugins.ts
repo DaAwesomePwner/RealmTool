@@ -4,13 +4,17 @@ import { el, message, textValue } from './dom.ts';
 import { SettingsView } from './settings.ts';
 
 interface Card {
-  element: HTMLElement; toggle: HTMLInputElement; error: HTMLElement; failure: HTMLElement;
+  element: HTMLElement; link: HTMLButtonElement; state: HTMLElement; toggle: HTMLInputElement; error: HTMLElement; failure: HTMLElement;
   status: HTMLElement; settings: SettingsView; signature: string;
 }
 
+/** Plugin list beside the selected plugin's card; unselected cards stay mounted but hidden. */
 export class PluginCards {
-  readonly element = el('section', undefined, 'plugin-grid');
+  readonly element = el('section', undefined, 'plugins');
+  private readonly nav = el('nav', undefined, 'plugin-nav');
+  private readonly detail = el('div', undefined, 'plugin-detail');
   private readonly cards = new Map<string, Card>();
+  private selected?: string;
   private readonly api: Pick<ApiClient, 'get' | 'post'>;
   private readonly changed: () => void;
   private snapshots: PluginSnapshot[] = [];
@@ -19,28 +23,50 @@ export class PluginCards {
   constructor(api: Pick<ApiClient, 'get' | 'post'>, changed: () => void) {
     this.api = api; this.changed = changed;
     this.element.setAttribute('aria-label', 'Plugins');
+    this.nav.setAttribute('aria-label', 'Plugin list');
+    this.element.append(this.nav, this.detail);
   }
 
   update(snapshots: PluginSnapshot[]): void {
     this.snapshots = snapshots;
-    this.element.querySelector('.empty')?.remove();
+    this.detail.querySelector('.empty')?.remove();
     for (const [id, card] of this.cards) {
-      if (!snapshots.some(p => p.id === id)) { card.settings.dispose(); card.element.remove(); this.cards.delete(id); }
+      if (!snapshots.some(p => p.id === id)) this.remove(id, card);
     }
-    if (!snapshots.length) this.element.append(el('p', 'Start the proxy to view and edit plugin settings', 'empty'));
+    if (!snapshots.length) this.detail.append(el('p', 'Start the proxy to view and edit plugin settings', 'empty'));
+    this.nav.hidden = !snapshots.length;
     for (const plugin of snapshots) {
       const signature = JSON.stringify(plugin.settings.map(({ value: _value, ...def }) => def));
       let card = this.cards.get(plugin.id);
-      if (card && card.signature !== signature) { card.settings.dispose(); card.element.remove(); this.cards.delete(plugin.id); card = undefined; }
+      if (card && card.signature !== signature) { this.remove(plugin.id, card); card = undefined; }
       if (!card) {
         card = this.create(plugin, signature);
-        this.cards.set(plugin.id, card); this.element.append(card.element);
+        this.cards.set(plugin.id, card);
       }
+      // Re-appending keeps both lists in snapshot order; existing nodes simply move.
+      this.nav.append(card.link); this.detail.append(card.element);
       card.toggle.checked = plugin.enabled; card.toggle.disabled = !!plugin.failed;
+      card.state.textContent = plugin.failed ? 'Failed' : plugin.enabled ? 'On' : 'Off';
+      card.link.dataset.state = plugin.failed ? 'failed' : plugin.enabled ? 'on' : 'off';
       card.failure.textContent = plugin.failed ?? ''; card.failure.hidden = !plugin.failed;
       card.settings.update(plugin, snapshots);
       this.renderStatus(card.status, plugin.data);
     }
+    // An empty update (proxy stopped, profile switch) keeps the choice for when plugins return.
+    if (snapshots.length) this.select(this.selected !== undefined && this.cards.has(this.selected) ? this.selected : snapshots[0].id);
+  }
+
+  select(id: string): void {
+    this.selected = id;
+    for (const [cardId, card] of this.cards) {
+      const selected = cardId === id;
+      card.element.hidden = !selected;
+      if (selected) card.link.setAttribute('aria-current', 'true'); else card.link.removeAttribute('aria-current');
+    }
+  }
+
+  private remove(id: string, card: Card): void {
+    card.settings.dispose(); card.element.remove(); card.link.remove(); this.cards.delete(id);
   }
 
   data(pluginId: string, type: string, data: unknown): void {
@@ -83,7 +109,11 @@ export class PluginCards {
     }));
     const status = el('div', undefined, 'plugin-status');
     element.append(header, failure, error, settings.element, status);
-    return { element, toggle, error, failure, settings, status, signature };
+    const link = el('button', undefined, 'plugin-link'); link.type = 'button';
+    const state = el('span', '', 'plugin-state');
+    link.append(el('span', plugin.name, 'plugin-link-name'), state);
+    link.addEventListener('click', () => this.select(plugin.id));
+    return { element, link, state, toggle, error, failure, settings, status, signature };
   }
 
   private renderStatus(target: HTMLElement, data: Record<string, unknown>): void {

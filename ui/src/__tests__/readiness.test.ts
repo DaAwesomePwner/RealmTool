@@ -13,16 +13,18 @@ it('shows the stopped/failed recovery path and honest helper/session state', asy
   };
   const api = { post: vi.fn().mockResolvedValue(state), get: vi.fn() };
   const changed = vi.fn(); const view = new Readiness(api, changed); view.update(state);
-  expect(view.element.textContent).toContain('Select a game folder');
+  // Status, actions and notices sit in the top bar; the folder controls sit in the Setup tab.
+  const all = document.createElement('div'); all.append(view.status, view.actions, view.notices, view.element);
+  expect(view.notices.textContent).toContain('Select a game folder');
   expect(view.element.querySelector('input')!.getAttribute('aria-invalid')).toBe('true');
-  const buttons = [...view.element.querySelectorAll('button')];
+  const buttons = [...all.querySelectorAll('button')];
   const start = buttons.find(button => button.textContent === 'Start proxy')!;
   expect(start.disabled).toBe(false); start.click(); await vi.waitFor(() => expect(changed).toHaveBeenCalled());
   expect(api.post).toHaveBeenCalledWith('/api/proxy/start', {});
   view.update({ ...state, proxy: { state: 'running', port: 2050, error: null }, game: { ...state.game, dir: 'C:\\Games\\Exalt', helper: { state: 'installed', backup: true } } });
   expect(buttons.find(button => button.textContent === 'Uninstall helper')!.disabled).toBe(true);
-  expect(view.element.textContent).toContain('0 connected / 0 open');
-  expect(view.element.textContent).toContain('installed');
+  expect(view.status.textContent).toContain('0 connected / 0 open');
+  expect(view.status.textContent).toContain('installed');
   const cards = new PluginCards(api, changed); cards.update([]);
   expect(cards.element.textContent).toBe('Start the proxy to view and edit plugin settings');
 });

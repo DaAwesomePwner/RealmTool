@@ -58,6 +58,9 @@ export class LogPanel {
     if (this.follow) this.scroll(); else this.rows.scrollTop = scrollTop;
   }
 
+  /** Hidden panels have no scroll height, so re-pin to the newest record when the panel reappears. */
+  shown(): void { if (this.follow) this.scroll(); }
+
   private scroll(): void { this.rows.scrollTop = this.rows.scrollHeight; this.resume.hidden = true; }
 
   private row(record: StoredLog): HTMLElement {
