@@ -46,7 +46,7 @@ export class ProfilePicker {
       void this.run(async () => { this.update(await this.api.del<Profiles>(`/api/profiles/${encodeURIComponent(name)}`), this.connected); this.changed(); });
     });
     const manage = el('details'); manage.append(el('summary', 'Manage profiles'), newLabel, copyLabel, this.create, deleteLabel, this.remove);
-    this.error.setAttribute('role', 'alert'); this.element.append(label, manage, this.error);
+    this.error.setAttribute('role', 'alert'); this.element.append(el('h2', 'Profiles'), label, manage, this.error);
   }
 
   update(profile: Profiles, connected: number, operating = false): void {
