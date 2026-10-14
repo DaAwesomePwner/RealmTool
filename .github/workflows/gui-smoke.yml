@@ -32,6 +32,7 @@ jobs:
         run: |
           "GUI_SMOKE_STATE=$env:RUNNER_TEMP\gui-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.json" >> $env:GITHUB_ENV
           "GUI_SMOKE_SCREENSHOT=$env:RUNNER_TEMP\gui-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.png" >> $env:GITHUB_ENV
+          "GUI_SMOKE_DIAGNOSTICS=$env:RUNNER_TEMP\gui-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-diagnostics" >> $env:GITHUB_ENV
       - name: Persistent NUC caches (separate GUI target)
         if: runner.environment != 'github-hosted'
         run: |
@@ -80,6 +81,14 @@ jobs:
           }
       - name: Launch real app and inspect WebView2 over CDP
         run: npm run smoke:gui
+      - name: Collect fallback diagnostics before killing the app
+        if: always()
+        run: |
+          if ((Test-Path $env:GUI_SMOKE_STATE) -and
+              -not (Test-Path (Join-Path $env:GUI_SMOKE_DIAGNOSTICS 'complete.json'))) {
+            node tools/gui-smoke.ts --diagnose
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Always kill the job's app tree
         if: always()
         run: |
@@ -120,6 +129,8 @@ jobs:
         if: always()
         with:
           name: gui-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.GUI_SMOKE_SCREENSHOT }}
+          path: |
+            ${{ env.GUI_SMOKE_SCREENSHOT }}
+            ${{ env.GUI_SMOKE_DIAGNOSTICS }}
           if-no-files-found: warn
           retention-days: 7

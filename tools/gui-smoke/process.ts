@@ -29,10 +29,12 @@ export function launchEnvironment(root: string, port: number, inherited = proces
 
 /** Lifecycle boundary is injectable so failures exercise cleanup on non-Windows hosts. */
 export async function withApp(work: () => Promise<void>, cleanup: {
-  stop(): Promise<void>; verify?(): Promise<void>; remove(): Promise<void>;
+  diagnose?(): Promise<void>; stop(): Promise<void>; verify?(): Promise<void>; remove(): Promise<void>;
 }): Promise<void> {
   const failures: unknown[] = [];
   try { await work(); } catch (error) { failures.push(error); }
+  // Capture even on success: a later isolation/cleanup failure still needs live evidence.
+  try { await cleanup.diagnose?.(); } catch (error) { failures.push(error); }
   try { await cleanup.stop(); } catch (error) { failures.push(error); }
   finally {
     try { await cleanup.verify?.(); } catch (error) { failures.push(error); }
