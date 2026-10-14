@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { cleanupBuildProcesses } from './owned-process.ts';
+import { cleanupBuildProcesses, sameExecutablePath } from './owned-process.ts';
 
 interface ExistingProcess {
   Name: string; ProcessId: number; SessionId: number; OwnerSid: string;
@@ -41,10 +41,20 @@ $apps = @(Get-CimInstance Win32_Process -Filter "SessionId = $sessionId" -Operat
 `);
 }
 
-export async function checkExistingInstances(executable: string, cleanup = cleanupBuildProcesses, inspect = queryExistingInstances): Promise<void> {
+export async function checkExistingInstances(executable: string, cleanup = cleanupBuildProcesses, inspect = queryExistingInstances,
+  timeoutMs = 10_000): Promise<void> {
   await cleanup(executable);
-  const result = await inspect();
-  assertNoExistingInstances(result.processes, result.sessionId, result.userSid);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const result = await inspect();
+    // taskkill can return before termination completes. Never mistake our exiting app for another installation.
+    assertNoExistingInstances(result.processes.filter(process => !sameExecutablePath(process.ExecutablePath, executable)),
+      result.sessionId, result.userSid);
+    const remaining = result.processes.filter(process => sameExecutablePath(process.ExecutablePath, executable));
+    if (!remaining.length) return;
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for GUI smoke processes to exit: ${remaining.map(p => p.ProcessId).join(', ')}`);
+    await new Promise(resolve => setTimeout(resolve, Math.min(250, deadline - Date.now())));
+  }
 }
 
 /** Creation time is diagnostic metadata, never a prerequisite for cleanup. */

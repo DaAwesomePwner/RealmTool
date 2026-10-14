@@ -25,7 +25,7 @@ jobs:
     env:
       GUI_SMOKE_PORT: '9241'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Set job artifact paths
@@ -42,7 +42,7 @@ jobs:
           'CARGO_TARGET_DIR=D:\ci-cache\RealmTool\target\gui' >> $env:GITHUB_ENV
           'npm_config_cache=D:\ci-cache\RealmTool\npm' >> $env:GITHUB_ENV
           (Join-Path $env:USERPROFILE '.cargo\bin') >> $env:GITHUB_PATH
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
@@ -80,9 +80,12 @@ jobs:
             Copy-Item "dist/$name" $destination -Recurse
           }
       - name: Launch real app and inspect WebView2 over CDP
+        id: smoke
         run: npm run smoke:gui
       - name: Collect fallback diagnostics before killing the app
         if: always()
+        continue-on-error: true
+        timeout-minutes: 2
         run: |
           $failure = $null
           try {
@@ -138,10 +141,30 @@ jobs:
             Remove-Item $env:GUI_SMOKE_STATE -Force
           }
           exit 0
-      - uses: actions/upload-artifact@v4
+      - name: Require screenshot after successful smoke
+        if: always() && steps.smoke.outcome == 'success'
+        run: |
+          if (-not (Test-Path -LiteralPath $env:GUI_SMOKE_SCREENSHOT -PathType Leaf)) {
+            throw 'GUI smoke passed but its screenshot is missing'
+          }
+      - name: Upload GUI smoke evidence
+        id: upload
+        uses: actions/upload-artifact@v7
         if: always()
+        continue-on-error: true
         with:
           name: gui-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.GUI_SMOKE_SCREENSHOT }}
+            ${{ env.GUI_SMOKE_DIAGNOSTICS }}
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Retry GUI smoke evidence upload
+        uses: actions/upload-artifact@v7
+        if: always() && steps.upload.outcome == 'failure'
+        with:
+          # A partial first upload may already own its name; use a fresh one without a delete request.
+          name: gui-smoke-${{ github.run_id }}-${{ github.run_attempt }}-retry
           path: |
             ${{ env.GUI_SMOKE_SCREENSHOT }}
             ${{ env.GUI_SMOKE_DIAGNOSTICS }}

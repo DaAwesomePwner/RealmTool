@@ -5,6 +5,7 @@ param(
   [switch]$CaptureDesktop
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'profile-listing.ps1')
 New-Item -ItemType Directory -Force -Path $Directory | Out-Null
 $errors = [Collections.Generic.List[string]]::new()
 function Capture([string]$Name, [scriptblock]$Work) {
@@ -48,14 +49,7 @@ Capture 'listeners' {
     Select-Object LocalAddress, LocalPort, OwningProcess)
 }
 Capture 'temporary-profile' {
-  if (-not (Test-Path -LiteralPath $Root)) {
-    @{ root=$Root; exists=$false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Directory 'temporary-profile.json')
-    return
-  }
-  # PowerShell does not recurse through directory links without -FollowSymlink.
-  @(Get-ChildItem -LiteralPath $Root -Recurse -Force |
-    Select-Object FullName, Length, Attributes, LastWriteTimeUtc, LinkTarget) |
-    ConvertTo-Json -Depth 5 -AsArray | Set-Content -LiteralPath (Join-Path $Directory 'temporary-profile.json')
+  Write-TemporaryProfileListing -Root $Root -Path (Join-Path $Directory 'temporary-profile.json')
 }
 Capture 'application-logs' {
   $logPaths = @(
