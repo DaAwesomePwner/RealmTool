@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectPage, selectTarget, waitForTarget, type Cdp, type CdpEvent } from '../gui-smoke/cdp.ts';
 import { launchEnvironment, prepareProfile, withApp } from '../gui-smoke/process.ts';
+import { pageStatus } from '../gui-smoke/page.ts';
 
 const roots: string[] = [];
 const temp = () => { const root = mkdtempSync(join(tmpdir(), 'realmtool-gui-test-')); roots.push(root); return root; };
@@ -32,9 +33,10 @@ it('bounds startup even when discovery never resolves', async () => {
   await result;
 });
 
-function mockCdp(ready = true) {
+function mockCdp(ready = true, status = 'Connecting to backend…') {
   let listener: (event: CdpEvent) => void = () => {};
-  const send = vi.fn(async (method: string) => method === 'Runtime.evaluate'
+  const send = vi.fn(async (method: string, params?: Record<string, unknown>) => params?.expression === pageStatus
+    ? { result: { value: status } } : method === 'Runtime.evaluate'
     ? { result: { value: ready ? { ready: true, proxy: 'bound 2050' } : '#app has no rendered children' } }
     : method === 'Page.captureScreenshot' ? { data: Buffer.from('png fixture').toString('base64') } : {});
   const cdp: Cdp = { send, onEvent: callback => { listener = callback; return () => { listener = () => {}; }; }, close: vi.fn() };
@@ -51,6 +53,80 @@ it('observes a clean page for ten seconds and writes its screenshot', async () =
   expect(finished).toBe(false);
   await vi.advanceTimersByTimeAsync(1); expect(await result).toBe('bound 2050');
   expect(send.mock.calls.map(([method]) => method)).toEqual(expect.arrayContaining(['Runtime.enable', 'Log.enable', 'Page.enable']));
+  expect(readFileSync(screenshot).toString()).toBe('png fixture');
+});
+
+it('waits for backend readiness before starting the ten-second observation window', async () => {
+  vi.useFakeTimers();
+  const { cdp, send } = mockCdp(); const screenshot = join(temp(), 'connected.png');
+  const original = send.getMockImplementation()!;
+  const start = Date.now();
+  send.mockImplementation(async (method, params) => method === 'Runtime.evaluate' && Date.now() - start < 1500
+    ? { result: { value: 'Backend is not connected' } } : original(method, params));
+  const result = inspectPage(cdp, { screenshot, gameDir: 'fake' });
+  await vi.advanceTimersByTimeAsync(11_599);
+  expect(send.mock.calls.some(([method]) => method === 'Page.captureScreenshot')).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(await result).toBe('bound 2050');
+  expect(readFileSync(screenshot).toString()).toBe('png fixture');
+});
+
+it('defaults to a 30-second readiness deadline and reports the visible status with a screenshot', async () => {
+  vi.useFakeTimers();
+  const { cdp, send } = mockCdp(false); const screenshot = join(temp(), 'connecting.png');
+  const original = send.getMockImplementation()!;
+  send.mockImplementation(async (method, params) => method === 'Runtime.evaluate' && params?.expression !== pageStatus
+    ? { result: { value: 'Dashboard content is missing' } } : original(method, params));
+  const result = expect(inspectPage(cdp, { screenshot, gameDir: 'fake' }))
+    .rejects.toThrow(/Timed out.*30000ms.*Dashboard content is missing.*Connecting to backend…/);
+  await vi.advanceTimersByTimeAsync(29_999);
+  expect(send.mock.calls.some(([method]) => method === 'Page.captureScreenshot')).toBe(false);
+  await vi.advanceTimersByTimeAsync(1); await result;
+  expect(readFileSync(screenshot).toString()).toBe('png fixture');
+});
+
+it('bounds an unresponsive readiness evaluation and still reads status and captures a screenshot', async () => {
+  vi.useFakeTimers();
+  const { cdp, send } = mockCdp(); const screenshot = join(temp(), 'hung.png');
+  const original = send.getMockImplementation()!;
+  send.mockImplementation((method, params) => method === 'Runtime.evaluate' && params?.expression !== pageStatus
+    ? new Promise(() => {}) : original(method, params));
+  const result = expect(inspectPage(cdp, { screenshot, gameDir: 'fake', startupMs: 500 }))
+    .rejects.toThrow(/Timed out.*connected dashboard.*Connecting to backend…/);
+  await vi.advanceTimersByTimeAsync(500); await result;
+  expect(readFileSync(screenshot).toString()).toBe('png fixture');
+});
+
+it('fails if the UI disconnects during observation and captures its status', async () => {
+  vi.useFakeTimers();
+  const { cdp, send } = mockCdp(true, 'Connection lost. Reconnecting…'); const screenshot = join(temp(), 'lost.png');
+  const original = send.getMockImplementation()!;
+  const start = Date.now();
+  send.mockImplementation(async (method, params) => method === 'Runtime.evaluate' && params?.expression !== pageStatus && Date.now() > start
+    ? { result: { value: 'Backend is not connected' } } : original(method, params));
+  const result = expect(inspectPage(cdp, { screenshot, gameDir: 'fake' })).rejects.toThrow(/Connection lost. Reconnecting/);
+  await vi.advanceTimersByTimeAsync(10_000); await result;
+  expect(readFileSync(screenshot).toString()).toBe('png fixture');
+});
+
+it('includes readiness timeout and visible status alongside startup CSP errors', async () => {
+  vi.useFakeTimers();
+  const { cdp, emit } = mockCdp(false); const screenshot = join(temp(), 'csp.png');
+  const result = expect(inspectPage(cdp, { screenshot, gameDir: 'fake', startupMs: 500 }))
+    .rejects.toThrow(/UI errors: CSP blocked[\s\S]*Timed out[\s\S]*Connecting to backend…/);
+  emit({ method: 'Log.entryAdded', params: { entry: { level: 'error', text: 'CSP blocked' } } });
+  await vi.advanceTimersByTimeAsync(500); await result;
+  expect(readFileSync(screenshot).toString()).toBe('png fixture');
+});
+
+it('still captures a screenshot when the visible-status query hangs', async () => {
+  vi.useFakeTimers();
+  const { cdp, send } = mockCdp(false); const screenshot = join(temp(), 'no-status.png');
+  const original = send.getMockImplementation()!;
+  send.mockImplementation((method, params) => params?.expression === pageStatus ? new Promise(() => {}) : original(method, params));
+  const result = expect(inspectPage(cdp, { screenshot, gameDir: 'fake', startupMs: 500 }))
+    .rejects.toThrow(/Timed out.*visible status: \(unavailable\)/);
+  await vi.advanceTimersByTimeAsync(1500); await result;
   expect(readFileSync(screenshot).toString()).toBe('png fixture');
 });
 

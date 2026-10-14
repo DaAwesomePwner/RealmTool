@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { pageAssertion } from './page.ts';
+import { pageAssertion, pageStatus } from './page.ts';
 
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
@@ -86,17 +86,27 @@ export async function inspectPage(cdp: Cdp, options: { screenshot: string; gameD
   try {
     // Runtime.enable replays retained exceptions and console messages from startup.
     for (const domain of ['Runtime', 'Log', 'Page']) await cdp.send(`${domain}.enable`);
-    const deadline = Date.now() + (options.startupMs ?? 60_000);
-    let reason: string | null;
-    while ((reason = await assertPage()) !== null) {
-      if (errors.length) throw new Error(errors.join('\n'));
-      if (Date.now() >= deadline) throw new Error(`UI did not become ready: ${reason}`);
-      await delay(200);
+    const startupMs = options.startupMs ?? 30_000;
+    const deadline = Date.now() + startupMs;
+    let reason: string | null = 'No readiness result';
+    while (true) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error(`Timed out after ${startupMs}ms waiting for connected dashboard: ${reason}`);
+      reason = await bounded(assertPage(), remaining, `connected dashboard (${startupMs}ms): ${reason}`);
+      if (reason === null) break;
+      await delay(Math.max(0, Math.min(200, deadline - Date.now())));
     }
     await delay(10_000);
-    reason = await assertPage();
+    reason = await bounded(assertPage(), 5000, 'connected dashboard after observation');
     if (reason) throw new Error(reason);
-  } catch (error) { failure = error; }
+  } catch (error) {
+    let status = '(unavailable)';
+    try {
+      const result = await bounded(cdp.send('Runtime.evaluate', { expression: pageStatus, returnByValue: true }), 1000, 'visible UI status');
+      if (typeof result.result?.value === 'string') status = result.result.value;
+    } catch { /* Preserve the original failure even if the renderer cannot answer. */ }
+    failure = new Error(`${error instanceof Error ? error.message : String(error)}; visible status: ${status}`, { cause: error });
+  }
   try {
     const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' });
     if (typeof data !== 'string' || !data.length) throw new Error('CDP returned an empty screenshot');
@@ -105,7 +115,8 @@ export async function inspectPage(cdp: Cdp, options: { screenshot: string; gameD
   } catch (error) {
     failure = failure ? new AggregateError([failure, error], 'UI assertion and screenshot failed') : error;
   } finally { unsubscribe(); }
-  if (errors.length) throw new AggregateError(failure ? [failure, ...errors] : errors, `UI errors: ${errors.join('\n')}`);
+  if (errors.length) throw new AggregateError(failure ? [failure, ...errors] : errors,
+    `UI errors: ${errors.join('\n')}${failure instanceof Error ? `\n${failure.message}` : ''}`);
   if (failure) throw failure;
   return proxy;
 }
