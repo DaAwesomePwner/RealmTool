@@ -19,6 +19,7 @@
     "fetch:node": "node tools/fetch-node.ts",
     "build:app": "node tools/build-app.ts",
     "measure:install": "node tools/measure-install.ts",
+    "smoke:gui": "node tools/gui-smoke.ts",
     "ui:dev": "vite --config ui/vite.config.ts --configLoader native",
     "ui:build": "vite build --config ui/vite.config.ts --configLoader native"
   },
