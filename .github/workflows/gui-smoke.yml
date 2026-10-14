@@ -9,7 +9,7 @@ permissions:
 
 concurrency:
   group: gui-smoke-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   gui-smoke:
@@ -38,14 +38,19 @@ jobs:
           'CARGO_HOME=D:\ci-cache\RealmTool\cargo-home' >> $env:GITHUB_ENV
           'CARGO_TARGET_DIR=D:\ci-cache\RealmTool\target\gui' >> $env:GITHUB_ENV
           'npm_config_cache=D:\ci-cache\RealmTool\npm' >> $env:GITHUB_ENV
+          (Join-Path $env:USERPROFILE '.cargo\bin') >> $env:GITHUB_PATH
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - uses: actions/cache@v4
-        if: runner.environment == 'github-hosted'
-        with:
-          path: ~/.npm
-          key: gui-npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
+      - name: Diagnose toolchains
+        run: |
+          rustup show
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - run: npm ci
       - name: Build helper and packaged resources
         run: |
@@ -62,9 +67,6 @@ jobs:
           if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $env:GITHUB_WORKSPACE 'src-tauri/target' }
           $exe = Join-Path $env:CARGO_TARGET_DIR 'debug/realmtool-shell.exe'
           "GUI_SMOKE_EXE=$exe" >> $env:GITHUB_ENV
-          rustup toolchain install stable --profile minimal
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $env:RUSTUP_TOOLCHAIN = 'stable'
           npx tauri build --debug --no-bundle --features custom-protocol --config src-tauri/tauri.bundle.conf.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Windows resource_dir is the executable directory, also in debug builds.
@@ -81,7 +83,10 @@ jobs:
         run: |
           # Match the full GUI build path, never a global executable name or stale PID.
           if ($env:GUI_SMOKE_EXE) {
-            $apps = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $env:GUI_SMOKE_EXE }
+            $expectedExe = [IO.Path]::GetFullPath($env:GUI_SMOKE_EXE)
+            $apps = Get-CimInstance Win32_Process | Where-Object {
+              $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $expectedExe
+            }
             foreach ($app in $apps) {
               taskkill.exe /PID $app.ProcessId /T /F
               if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $app.ProcessId -ErrorAction SilentlyContinue)) {
