@@ -8,18 +8,19 @@ import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import type { AppState } from '../src/app/controller.ts';
 import type { PluginSnapshot } from '../src/plugins/snapshot.ts';
+import { parseSmokePortOptions, smokeProxyStartupError, waitForSmokePort } from './smoke-port.ts';
 
 /** Controller-run after build:app; never uses or launches the real game. */
 async function smoke(): Promise<void> {
-  const portFree = await new Promise<boolean>((resolve, reject) => {
+  const portOptions = parseSmokePortOptions(process.env);
+  const portFree = await waitForSmokePort(() => new Promise<boolean>((resolve, reject) => {
     const probe = net.createServer();
     probe.once('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') resolve(false);
       else reject(error);
     });
     probe.listen(2050, '127.0.0.1', () => probe.close(error => error ? reject(error) : resolve(true)));
-  });
-  if (!portFree) console.warn('port 2050 is in use by another program; checking the API only');
+  }), { ...portOptions, log: message => console.warn(message) });
   const repo = fileURLToPath(new URL('../', import.meta.url));
   const resources = resolve(repo, 'dist/app');
   const build = JSON.parse(readFileSync(join(resources, 'data/catalogs/safety.json'), 'utf8')).gameBuild;
@@ -83,7 +84,7 @@ async function smoke(): Promise<void> {
     const startupDeadline = Date.now() + 10_000;
     const expectedState = portFree ? 'running' : 'failed';
     while (state.proxy.state !== expectedState || state.operation !== null) {
-      if (portFree) assert.notEqual(state.proxy.state, 'failed', state.proxy.error ?? 'Proxy failed');
+      if (portFree && state.proxy.state === 'failed') throw smokeProxyStartupError(state.proxy.error);
       assert.ok(!exited, 'Sidecar exited during proxy startup');
       assert.ok(Date.now() < startupDeadline, 'Timed out waiting for proxy startup');
       await new Promise(resolve => setTimeout(resolve, 25));
