@@ -35,6 +35,8 @@ jobs:
       - name: Persistent NUC caches (separate GUI target)
         if: runner.environment != 'github-hosted'
         run: |
+          $cacheRoot = 'D:\ci-cache\RealmTool'
+          New-Item -ItemType Directory -Force -Path "$cacheRoot\npm", "$cacheRoot\cargo-home", "$cacheRoot\target\gui" | Out-Null
           'CARGO_HOME=D:\ci-cache\RealmTool\cargo-home' >> $env:GITHUB_ENV
           'CARGO_TARGET_DIR=D:\ci-cache\RealmTool\target\gui' >> $env:GITHUB_ENV
           'npm_config_cache=D:\ci-cache\RealmTool\npm' >> $env:GITHUB_ENV
