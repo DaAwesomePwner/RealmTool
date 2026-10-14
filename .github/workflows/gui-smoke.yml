@@ -84,24 +84,39 @@ jobs:
       - name: Collect fallback diagnostics before killing the app
         if: always()
         run: |
-          if ((Test-Path $env:GUI_SMOKE_STATE) -and
-              -not (Test-Path (Join-Path $env:GUI_SMOKE_DIAGNOSTICS 'complete.json'))) {
-            node tools/gui-smoke.ts --diagnose
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $failure = $null
+          try {
+            if ((Test-Path $env:GUI_SMOKE_STATE) -and
+                -not (Test-Path (Join-Path $env:GUI_SMOKE_DIAGNOSTICS 'attempted.json'))) {
+              node tools/gui-smoke.ts --diagnose
+              if ($LASTEXITCODE -ne 0) { $failure = "Fallback diagnostics exited $LASTEXITCODE" }
+            }
+          } catch { $failure = "Fallback diagnostics unavailable: $_" }
+          if ($failure) {
+            Write-Warning $failure
+            try {
+              $fallback = Join-Path $env:GUI_SMOKE_DIAGNOSTICS 'fallback'
+              New-Item -ItemType Directory -Force -Path $fallback | Out-Null
+              $failure | Set-Content -LiteralPath (Join-Path $fallback 'failure.txt')
+            } catch { Write-Warning "Could not save fallback diagnostics error: $_" }
           }
+          exit 0
       - name: Always kill the job's app tree
         if: always()
         run: |
-          # Match the full GUI build path, never a global executable name or stale PID.
-          if ($env:GUI_SMOKE_EXE) {
-            $expectedExe = [IO.Path]::GetFullPath($env:GUI_SMOKE_EXE)
-            $apps = Get-CimInstance Win32_Process | Where-Object {
-              $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $expectedExe
-            }
-            foreach ($app in $apps) {
-              taskkill.exe /PID $app.ProcessId /T /F
-              if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $app.ProcessId -ErrorAction SilentlyContinue)) {
-                throw "Could not kill GUI smoke process $($app.ProcessId)"
+          # Only kill this launch: an existing instance rejected by preflight is never ours.
+          if ($env:GUI_SMOKE_EXE -and (Test-Path $env:GUI_SMOKE_STATE)) {
+            $state = Get-Content $env:GUI_SMOKE_STATE -Raw | ConvertFrom-Json
+            if ($state.launched -and $state.pid -and $state.creationDate) {
+              $expectedExe = [IO.Path]::GetFullPath($env:GUI_SMOKE_EXE)
+              $app = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$state.pid)"
+              if ($app -and $app.ExecutablePath -and
+                  [IO.Path]::GetFullPath($app.ExecutablePath) -eq $expectedExe -and
+                  $app.CreationDate.ToUniversalTime() -eq ([DateTime]$state.creationDate).ToUniversalTime()) {
+                taskkill.exe /PID $app.ProcessId /T /F
+                if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $app.ProcessId -ErrorAction SilentlyContinue)) {
+                  throw "Could not kill GUI smoke process $($app.ProcessId)"
+                }
               }
             }
           }

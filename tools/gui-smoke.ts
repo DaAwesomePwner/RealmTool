@@ -8,13 +8,15 @@ import { inspectPage, waitForTarget } from './gui-smoke/cdp.ts';
 import { launchEnvironment, prepareProfile, withApp } from './gui-smoke/process.ts';
 import { connect } from './gui-smoke/transport.ts';
 import { snapshotKnownFolders, verifyIsolation, type KnownFolderSnapshot } from './gui-smoke/isolation.ts';
+import { assertAppRunning, checkExistingInstances, launchCreationDate } from './gui-smoke/startup.ts';
 import { captureDiagnostics, printFailureDiagnostics } from './gui-smoke/diagnostics.ts';
 
 let diagnosticsDirectory: string | undefined;
+let diagnosticsOnly = false;
 
 interface SmokeState {
   root: string; exe: string; pid: number | null; launched: boolean;
-  isolation?: KnownFolderSnapshot[]; profileVerified?: boolean;
+  creationDate?: string; isolation?: KnownFolderSnapshot[]; profileVerified?: boolean;
 }
 
 async function verifyProfile(state: SmokeState, stateFile: string): Promise<void> {
@@ -34,6 +36,7 @@ async function smoke(): Promise<void> {
     exe: { type: 'string' }, screenshot: { type: 'string' }, state: { type: 'string' }, port: { type: 'string' },
     'verify-profile': { type: 'boolean' }, diagnose: { type: 'boolean' },
   } });
+  diagnosticsOnly = values.diagnose === true;
   const exe = values.exe ?? process.env.GUI_SMOKE_EXE;
   const screenshot = values.screenshot ?? process.env.GUI_SMOKE_SCREENSHOT;
   const stateFile = values.state ?? process.env.GUI_SMOKE_STATE;
@@ -41,21 +44,17 @@ async function smoke(): Promise<void> {
   if (!exe || !screenshot || !stateFile) throw new Error('Provide --exe, --screenshot, --state (or GUI_SMOKE_* env)');
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid CDP port');
   diagnosticsDirectory = resolve(process.env.GUI_SMOKE_DIAGNOSTICS ?? `${stateFile}.diagnostics`);
+  if (diagnosticsOnly) diagnosticsDirectory = join(diagnosticsDirectory, 'fallback');
   const executable = resolve(exe);
   if (values['verify-profile'] || values.diagnose) {
     const state: SmokeState = JSON.parse(await readFile(stateFile, 'utf8'));
     if (state.exe !== executable || dirname(state.root) !== dirname(resolve(stateFile))
       || !state.root.startsWith(join(dirname(resolve(stateFile)), 'realmtool-gui-'))) throw new Error('Invalid GUI profile record');
     if (values.diagnose) {
-      await captureDiagnostics({ ...state, directory: join(diagnosticsDirectory, 'fallback'), port });
+      await captureDiagnostics({ ...state, directory: diagnosticsDirectory, port, failed: true });
     } else await verifyProfile(state, stateFile);
     return;
   }
-  // Refuse to attach to another app that already owns the CDP endpoint.
-  await new Promise<void>((resolve, reject) => {
-    const probe = createServer(); probe.once('error', reject);
-    probe.listen(port, '127.0.0.1', () => probe.close(error => error ? reject(error) : resolve()));
-  });
   const catalog = JSON.parse(await readFile(join(dirname(executable), 'app/data/catalogs/safety.json'), 'utf8'));
   if (typeof catalog.gameBuild !== 'string') throw new Error('Missing catalog gameBuild');
   await mkdir(dirname(resolve(stateFile)), { recursive: true });
@@ -67,6 +66,12 @@ async function smoke(): Promise<void> {
   await withApp(async () => {
     await record();
     const gameDir = prepareProfile(root, catalog.gameBuild);
+    await checkExistingInstances();
+    // Check instances first so an existing app's CDP port cannot hide the handoff diagnosis.
+    await new Promise<void>((resolve, reject) => {
+      const probe = createServer(); probe.once('error', reject);
+      probe.listen(port, '127.0.0.1', () => probe.close(error => error ? reject(error) : resolve()));
+    });
     state.isolation = await snapshotKnownFolders();
     state.launched = true;
     await record();
@@ -77,7 +82,11 @@ async function smoke(): Promise<void> {
     } finally { await output.close(); }
     state.pid = child.pid ?? null;
     await record();
-    const target = await waitForTarget(port);
+    const creationDate = await launchCreationDate(child.pid!);
+    assertAppRunning(child);
+    state.creationDate = creationDate;
+    await record();
+    const target = await waitForTarget(port, undefined, undefined, () => assertAppRunning(child!));
     const cdp = await connect(target.webSocketDebuggerUrl);
     try {
       const proxy = await inspectPage(cdp, { screenshot: resolve(screenshot), gameDir });
@@ -85,9 +94,9 @@ async function smoke(): Promise<void> {
       if (child.exitCode !== null || child.signalCode !== null) throw new Error('Desktop app exited during GUI smoke');
     } finally { cdp.close(); }
   }, {
-    async diagnose() {
+    async diagnose(failed) {
       await captureDiagnostics({ root, directory: diagnosticsDirectory!, exe: executable,
-        pid: state.pid, child, port, environment: launchEnvironment(root, port) });
+        pid: state.pid, creationDate: state.creationDate, child, port, failed, environment: launchEnvironment(root, port) });
     },
     async stop() {
       if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
@@ -105,7 +114,7 @@ async function smoke(): Promise<void> {
 }
 
 smoke().catch(async error => {
-  console.error(error); process.exitCode = 1;
+  console.error(error); process.exitCode = diagnosticsOnly ? 0 : 1;
   if (diagnosticsDirectory) {
     try { await printFailureDiagnostics(diagnosticsDirectory, error); }
     catch (reportError) { console.error(`Could not report diagnostics: ${reportError}`); }

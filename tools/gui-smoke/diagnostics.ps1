@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory)][string]$Root,
   [Parameter(Mandatory)][string]$Directory,
-  [int]$AppPid = 0
+  [int]$AppPid = 0,
+  [switch]$CaptureDesktop
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $Directory | Out-Null
@@ -13,7 +14,7 @@ function Capture([string]$Name, [scriptblock]$Work) {
 }
 $sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId
 # This helper inherits the runner's interactive session. Never switch sessions or change the host.
-Capture 'desktop' {
+if ($CaptureDesktop) { Capture 'desktop' {
   @{ sessionId = $sessionId; expectedSessionId = 1; userInteractive = [Environment]::UserInteractive } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Directory 'desktop-session.json')
   if ($sessionId -ne 1) { throw "Desktop capture requires session 1; collector is in session $sessionId" }
@@ -31,6 +32,7 @@ Capture 'desktop' {
     } finally { $graphics.Dispose() }
   } finally { $bitmap.Dispose() }
 }
+}
 $processes = @()
 $listeners = @()
 $rootAlive = $false
@@ -46,6 +48,10 @@ Capture 'listeners' {
     Select-Object LocalAddress, LocalPort, OwningProcess)
 }
 Capture 'temporary-profile' {
+  if (-not (Test-Path -LiteralPath $Root)) {
+    @{ root=$Root; exists=$false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Directory 'temporary-profile.json')
+    return
+  }
   # PowerShell does not recurse through directory links without -FollowSymlink.
   @(Get-ChildItem -LiteralPath $Root -Recurse -Force |
     Select-Object FullName, Length, Attributes, LastWriteTimeUtc, LinkTarget) |
@@ -60,7 +66,22 @@ Capture 'application-logs' {
     $log.exists = Test-Path -LiteralPath $log.source -PathType Leaf
     if ($log.exists) {
       # Read only: the destination is always the diagnostics folder, never a real known folder.
-      Capture $log.artifact { Copy-Item -LiteralPath $log.source -Destination (Join-Path $Directory $log.artifact) }
+      Capture $log.artifact {
+        $inputLog = [IO.File]::Open($log.source, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try {
+          $length = [int][Math]::Min($inputLog.Length, 256KB)
+          $inputLog.Seek(-$length, [IO.SeekOrigin]::End) | Out-Null
+          $bytes = [byte[]]::new($length)
+          $count = 0
+          while ($count -lt $length) {
+            $read = $inputLog.Read($bytes, $count, $length - $count)
+            if ($read -eq 0) { break }
+            $count += $read
+          }
+          if ($count -ne $length) { [Array]::Resize([ref]$bytes, $count) }
+          [IO.File]::WriteAllBytes((Join-Path $Directory $log.artifact), $bytes)
+        } finally { $inputLog.Dispose() }
+      }
     }
   }
   $logPaths | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Directory 'application-log-paths.json')
