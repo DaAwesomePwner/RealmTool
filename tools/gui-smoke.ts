@@ -10,14 +10,15 @@ import { connect } from './gui-smoke/transport.ts';
 import { snapshotKnownFolders, verifyIsolation, type KnownFolderSnapshot } from './gui-smoke/isolation.ts';
 import { assertAppRunning, checkExistingInstances, launchCreationDate } from './gui-smoke/startup.ts';
 import { stopBuildProcess } from './gui-smoke/owned-process.ts';
-import { captureDiagnostics, printFailureDiagnostics } from './gui-smoke/diagnostics.ts';
+import { captureDiagnostics, diagnosticAttempt, printFailureDiagnostics } from './gui-smoke/diagnostics.ts';
 
 let diagnosticsDirectory: string | undefined;
-let diagnosticsOnly = false;
+let diagnosticsOnly = process.argv.includes('--diagnose');
 
 interface SmokeState {
   root: string; exe: string; pid: number | null; launched: boolean;
   creationDate?: string; isolation?: KnownFolderSnapshot[]; profileVerified?: boolean;
+  diagnosticErrors?: string[];
 }
 
 async function verifyProfile(state: SmokeState, stateFile: string): Promise<void> {
@@ -60,7 +61,7 @@ async function smoke(): Promise<void> {
   if (typeof catalog.gameBuild !== 'string') throw new Error('Missing catalog gameBuild');
   await mkdir(dirname(resolve(stateFile)), { recursive: true });
   const root = await mkdtemp(join(dirname(resolve(stateFile)), 'realmtool-gui-'));
-  const state: SmokeState = { root, exe: executable, pid: null, launched: false };
+  const state: SmokeState = { root, exe: executable, pid: null, launched: false, diagnosticErrors: [] };
   let child: ChildProcess | undefined;
   // Preserve this record if cleanup fails so the workflow's always step can retry.
   const record = () => writeFile(stateFile, JSON.stringify(state));
@@ -83,10 +84,9 @@ async function smoke(): Promise<void> {
     } finally { await output.close(); }
     state.pid = child.pid ?? null;
     await record();
-    const creationDate = await launchCreationDate(child.pid!);
+    state.creationDate = await diagnosticAttempt('launch creation date', () => launchCreationDate(child!.pid!), state.diagnosticErrors!);
     assertAppRunning(child);
-    state.creationDate = creationDate;
-    await record();
+    await diagnosticAttempt('save launch metadata', record, state.diagnosticErrors!);
     const target = await waitForTarget(port, undefined, undefined, () => assertAppRunning(child!));
     const cdp = await connect(target.webSocketDebuggerUrl);
     try {
@@ -97,7 +97,8 @@ async function smoke(): Promise<void> {
   }, {
     async diagnose(failed) {
       await captureDiagnostics({ root, directory: diagnosticsDirectory!, exe: executable,
-        pid: state.pid, creationDate: state.creationDate, child, port, failed, environment: launchEnvironment(root, port) });
+        pid: state.pid, creationDate: state.creationDate, diagnosticErrors: state.diagnosticErrors,
+        child, port, failed, environment: launchEnvironment(root, port) });
     },
     async stop() {
       if (child?.pid) await stopBuildProcess(child.pid, executable);

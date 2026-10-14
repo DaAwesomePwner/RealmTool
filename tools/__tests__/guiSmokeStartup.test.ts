@@ -4,6 +4,42 @@ import { assertAppRunning, existingInstances, assertNoExistingInstances, checkEx
 import { cleanupBuildProcesses } from '../gui-smoke/owned-process.ts';
 
 afterEach(() => vi.useRealTimers());
+
+it('waits for our terminating process before launching, without killing again', async () => {
+  vi.useFakeTimers();
+  const cleanup = vi.fn(async () => {});
+  let remaining = [rows[0]];
+  const inspect = vi.fn(async () => ({ processes: remaining, sessionId: 1, userSid: 'S-1' }));
+  let finished = false;
+  const result = checkExistingInstances(rows[0].ExecutablePath, cleanup, inspect).then(() => { finished = true; });
+  await vi.advanceTimersByTimeAsync(750);
+  expect(finished).toBe(false);
+  remaining = [];
+  await vi.advanceTimersByTimeAsync(250);
+  await result;
+  expect(cleanup).toHaveBeenCalledTimes(1);
+  expect(inspect).toHaveBeenCalledTimes(5);
+});
+
+it('bounds the wait for an exact-path process that never exits', async () => {
+  vi.useFakeTimers();
+  const result = expect(checkExistingInstances(rows[0].ExecutablePath, async () => {},
+    async () => ({ processes: [rows[0]], sessionId: 1, userSid: 'S-1' })))
+    .rejects.toThrow('Timed out waiting for GUI smoke processes to exit: 10');
+  await vi.advanceTimersByTimeAsync(10_000);
+  await result;
+});
+
+it('refuses a different installation appearing while our process exits', async () => {
+  vi.useFakeTimers();
+  let remaining = [rows[0]];
+  const result = expect(checkExistingInstances(rows[0].ExecutablePath, async () => {},
+    async () => ({ processes: remaining, sessionId: 1, userSid: 'S-1' }))).rejects.toThrow(/PID 11.*installed/s);
+  await vi.advanceTimersByTimeAsync(250);
+  remaining = [...rows];
+  await vi.advanceTimersByTimeAsync(250);
+  await result;
+});
 const rows = [
   { Name: 'REALMTOOL-SHELL.EXE', ProcessId: 10, SessionId: 1, OwnerSid: 'S-1', ExecutablePath: 'D:\\gui\\app.exe', CreationDate: '2026-10-14T10:00:00Z' },
   { Name: 'RealmTool.exe', ProcessId: 11, SessionId: 1, OwnerSid: 'S-1', ExecutablePath: 'C:\\installed\\RealmTool.exe', CreationDate: '2026-10-14T09:00:00Z' },

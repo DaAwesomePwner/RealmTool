@@ -17,6 +17,17 @@ interface Options {
   root: string; directory: string; exe: string; pid: number | null; port: number;
   child?: { exitCode: number | null; signalCode: string | null };
   environment?: NodeJS.ProcessEnv; failed?: boolean; creationDate?: string;
+  diagnosticErrors?: string[];
+}
+
+/** Includes error-reporting I/O: diagnostics cannot become a smoke prerequisite. */
+export async function diagnosticAttempt<T>(label: string, work: () => Promise<T>, errors: string[]): Promise<T | undefined> {
+  try { return await work(); }
+  catch (error) {
+    const message = `${label}: ${error}`;
+    errors.push(message);
+    console.warn(`GUI diagnostics incomplete: ${message}`);
+  }
 }
 
 /** Start with the recorded PID even if it exited; surviving children still carry its parent ID. */
@@ -70,16 +81,21 @@ async function collectWindows(options: Options): Promise<Inventory> {
 }
 
 export async function captureDiagnostics(options: Options, collect = collectWindows): Promise<void> {
+  await diagnosticAttempt('capture', () => collectDiagnostics(options, collect), options.diagnosticErrors ?? []);
+}
+
+async function collectDiagnostics(options: Options, collect: typeof collectWindows): Promise<void> {
   const { directory, child } = options;
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, 'attempted.json'), JSON.stringify({ capturedAt: new Date().toISOString() }));
-  const errors: unknown[] = [];
+  const errors: unknown[] = [...(options.diagnosticErrors ?? [])];
   const attempt = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
   // Do not dump inherited secrets. Record only the launch overrides relevant to this failure.
   const environment = Object.fromEntries(Object.entries(options.environment ?? {}).filter(([key]) =>
     /^(APPDATA|LOCALAPPDATA|USERPROFILE|HOME|TEMP|TMP|TMPDIR|ROTMG_PATH|WEBVIEW2_.*)$/i.test(key)));
   await attempt(() => writeFile(join(directory, 'launch.json'), JSON.stringify({
     capturedAt: new Date().toISOString(), root: options.root, exe: options.exe, pid: options.pid,
+    creationDate: options.creationDate, diagnosticErrors: options.diagnosticErrors ?? [],
     alive: options.pid === null ? false : child ? child.exitCode === null && child.signalCode === null : null,
     exitCode: child?.exitCode ?? null, signalCode: child?.signalCode ?? null, environment,
   }, null, 2)));
