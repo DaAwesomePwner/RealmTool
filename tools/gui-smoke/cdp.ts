@@ -38,15 +38,19 @@ export async function discoverTargets(port: number, timeout: number): Promise<un
   return response.json();
 }
 
-export async function waitForTarget(port: number, discover = discoverTargets, startupMs = 60_000): Promise<Target> {
+export async function waitForTarget(port: number, discover = discoverTargets, startupMs = 60_000, checkAlive = () => {}): Promise<Target> {
   const deadline = Date.now() + startupMs;
   let last = 'no matching page';
+  checkAlive();
   while (Date.now() < deadline) {
+    checkAlive();
+    let target: Target | undefined;
     try {
       const remaining = Math.max(1, deadline - Date.now());
-      const target = selectTarget(await bounded(discover(port, Math.min(2000, remaining)), remaining, 'page target'), port);
-      if (target) return target;
+      target = selectTarget(await bounded(discover(port, Math.min(2000, remaining)), Math.min(2000, remaining), 'page target'), port);
     } catch (error) { last = String(error); }
+    checkAlive();
+    if (target) return target;
     await delay(Math.max(0, Math.min(200, deadline - Date.now())));
   }
   throw new Error(`Timed out waiting for RealmTool page target on ${port}: ${last}`);
