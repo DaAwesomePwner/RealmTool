@@ -59,7 +59,7 @@ Capture 'temporary-profile' {
 }
 Capture 'application-logs' {
   $logPaths = @(
-    @{ source = (Join-Path $Root 'roaming/RealmTool/logs/realmtool.log'); artifact = 'app-temp.log' },
+    @{ source = (Join-Path $Root 'home/AppData/Roaming/RealmTool/logs/realmtool.log'); artifact = 'app-temp.log' },
     @{ source = (Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'RealmTool/logs/realmtool.log'); artifact = 'app-real-config.log' }
   )
   foreach ($log in $logPaths) {

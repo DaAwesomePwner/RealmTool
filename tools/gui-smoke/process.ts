@@ -1,15 +1,19 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+export const ROAMING = 'home/AppData/Roaming';
+export const LOCAL = 'home/AppData/Local';
+
 export function prepareProfile(root: string, build: string): string {
   if (!build || /[\r\n]/.test(build)) throw new Error('Invalid catalog gameBuild');
   const gameDir = join(root, 'game');
-  for (const dir of ['game/RotMG Exalt_Data', 'roaming/RealmTool', 'local', 'webview', 'home']) {
+  // Tauri resolves known folders from %USERPROFILE%, so the fake home must contain them.
+  for (const dir of ['game/RotMG Exalt_Data', `${ROAMING}/RealmTool`, LOCAL, 'webview']) {
     mkdirSync(join(root, dir), { recursive: true });
   }
   writeFileSync(join(gameDir, 'RotMG Exalt.exe'), 'fixture, never execute');
   writeFileSync(join(gameDir, 'RotMG Exalt_Data/boot.config'), `build-guid=${build}\n`);
-  writeFileSync(join(root, 'roaming/RealmTool/config.json'), JSON.stringify({
+  writeFileSync(join(root, ROAMING, 'RealmTool/config.json'), JSON.stringify({
     schemaVersion: 1, gameDir, launcher: null, activeProfile: 'default',
   }));
   return gameDir;
@@ -17,7 +21,7 @@ export function prepareProfile(root: string, build: string): string {
 
 export function launchEnvironment(root: string, port: number, inherited = process.env): NodeJS.ProcessEnv {
   const overrides = {
-    APPDATA: join(root, 'roaming'), LOCALAPPDATA: join(root, 'local'), USERPROFILE: join(root, 'home'),
+    APPDATA: join(root, ROAMING), LOCALAPPDATA: join(root, LOCAL), USERPROFILE: join(root, 'home'),
     HOME: join(root, 'home'), ROTMG_PATH: join(root, 'game'),
     TEMP: root, TMP: root, TMPDIR: root,
     WEBVIEW2_USER_DATA_FOLDER: join(root, 'webview'), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,

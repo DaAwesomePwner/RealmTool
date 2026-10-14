@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectPage, selectTarget, waitForTarget, type Cdp, type CdpEvent } from '../gui-smoke/cdp.ts';
@@ -79,11 +79,14 @@ it('builds fake files and overrides inherited profile/debugging variables case-i
   const root = temp(); const gameDir = prepareProfile(root, 'build-123');
   const env = launchEnvironment(root, 9241, { AppData: 'real', localappdata: 'real', NODE_OPTIONS: '--inspect', PATH: 'keep' });
   expect(env.AppData).toBeUndefined(); expect(env.NODE_OPTIONS).toBeUndefined(); expect(env.PATH).toBe('keep');
-  expect(env.APPDATA).toBe(join(root, 'roaming')); expect(env.LOCALAPPDATA).toBe(join(root, 'local'));
+  expect(env.APPDATA).toBe(join(root, 'home/AppData/Roaming')); expect(env.LOCALAPPDATA).toBe(join(root, 'home/AppData/Local'));
   expect(env.WEBVIEW2_USER_DATA_FOLDER).toBe(join(root, 'webview'));
   expect(env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS).toBe('--remote-debugging-port=9241');
-  expect(JSON.parse(readFileSync(join(root, 'roaming/RealmTool/config.json'), 'utf8'))).toMatchObject({ gameDir, launcher: null });
+  expect(JSON.parse(readFileSync(join(root, 'home/AppData/Roaming/RealmTool/config.json'), 'utf8'))).toMatchObject({ gameDir, launcher: null });
   expect(readFileSync(join(gameDir, 'RotMG Exalt_Data/boot.config'), 'utf8')).toBe('build-guid=build-123\n');
+  // Tauri's known-folder lookup fails ("unknown path") unless these exist under the fake USERPROFILE.
+  expect(existsSync(join(env.USERPROFILE!, 'AppData/Roaming'))).toBe(true);
+  expect(existsSync(join(env.USERPROFILE!, 'AppData/Local'))).toBe(true);
 });
 
 it('kills the process tree and removes the profile when inspection fails', async () => {
