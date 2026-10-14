@@ -10,6 +10,8 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   test:
+    # Fork PRs never reach the persistent self-hosted runner or its shared caches.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, windows, nuc, build]
     timeout-minutes: 60
     defaults:
