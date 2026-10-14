@@ -14,29 +14,47 @@ function step(name: string): string {
     .split(`      - name: ${name}\n`)[1].split('      - ')[0].split('        run: |\n')[1]
     .split('\n').map(line => line.slice(10)).join('\n');
 }
-function run(script: string, env: NodeJS.ProcessEnv) {
+function run(script: string, env: NodeJS.ProcessEnv, expectedStatus = 0) {
   const result = spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8', timeout: 10_000, env: { ...process.env, ...env },
   });
-  expect(result.status, result.stderr).toBe(0);
+  expect(result.status, result.stderr).toBe(expectedStatus);
+  return result;
 }
 
-it.skipIf(!available)('fallback kill touches only the recorded launch, preserving UTC time through JSON', () => {
-  const root = fixture(); const state = join(root, 'state.json'); const killed = join(root, 'killed');
+it.skipIf(!available)('fallback kills every exact build-path match even without usable state', () => {
+  const root = fixture(); const killed = join(root, 'killed');
   const mocks = `
-function Get-CimInstance { [pscustomobject]@{ ProcessId=123; ExecutablePath=$env:GUI_SMOKE_EXE; CreationDate=[DateTime]::Parse($env:FIXTURE_CREATED) } }
-function taskkill.exe { 'killed' | Set-Content $env:FIXTURE_KILLED; $global:LASTEXITCODE=0 }
+function Get-CimInstance {
+  [pscustomobject]@{ ProcessId=123; ExecutablePath=$env:GUI_SMOKE_EXE; CreationDate=[DateTime]::Parse('2020-01-01T10:00:00Z') }
+  [pscustomobject]@{ ProcessId=124; ExecutablePath=(Join-Path (Split-Path $env:GUI_SMOKE_EXE) './realmtool-shell.exe') }
+  [pscustomobject]@{ ProcessId=125; ExecutablePath=(Join-Path (Split-Path $env:GUI_SMOKE_EXE) 'installed/realmtool-shell.exe') }
+  [pscustomobject]@{ ProcessId=126; ExecutablePath=(Join-Path (Split-Path $env:GUI_SMOKE_EXE) 'installed/RealmTool.exe') }
+}
+function taskkill.exe { ($args -join ' ') | Add-Content $env:FIXTURE_KILLED; $global:LASTEXITCODE=0 }
 `;
-  for (const [pid, created, expected] of [
-    [null, '2026-10-14T10:00:00Z', false], [123, '2026-10-14T11:00:00Z', false],
-    [123, '2026-10-14T10:00:00Z', true],
-  ] as const) {
-    writeFileSync(state, JSON.stringify({ launched: pid !== null, pid, creationDate: '2026-10-14T10:00:00Z' }));
+  const state = join(root, 'state.json');
+  for (const record of [undefined, '{broken', JSON.stringify({ launched: false, pid: 999, creationDate: '2026-10-14T10:00:00Z' })]) {
+    if (record !== undefined) writeFileSync(state, record);
     run(mocks + step("Always kill the job's app tree"), {
       GUI_SMOKE_STATE: state, GUI_SMOKE_EXE: join(root, 'realmtool-shell.exe'),
-      FIXTURE_CREATED: created, FIXTURE_KILLED: killed, TZ: 'America/Chicago',
+      FIXTURE_KILLED: killed,
     });
-    expect(existsSync(killed)).toBe(expected);
+    expect(readFileSync(killed, 'utf8').trim().split(/\r?\n/)).toEqual(['/PID 123 /T /F', '/PID 124 /T /F']);
+    unlinkSync(killed);
+  }
+});
+
+it.skipIf(!available)('fallback reports failed kills only when the process remains', () => {
+  const root = fixture();
+  const script = `
+function Get-CimInstance { [pscustomobject]@{ ProcessId=123; ExecutablePath=$env:GUI_SMOKE_EXE } }
+function taskkill.exe { $global:LASTEXITCODE=1 }
+function Get-Process { if ($env:FIXTURE_REMAINS -eq 'true') { [pscustomobject]@{ Id=123 } } }
+` + step("Always kill the job's app tree");
+  for (const remains of [false, true]) {
+    const result = run(script, { GUI_SMOKE_EXE: join(root, 'realmtool-shell.exe'), FIXTURE_REMAINS: String(remains) }, remains ? 1 : 0);
+    if (remains) expect(result.stderr).toContain('Could not kill GUI smoke process 123');
   }
 });
 

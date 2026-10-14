@@ -25,7 +25,8 @@ export function summarizeProcesses(processes: ProcessRow[], listeners: Listener[
   const dates = new Map(processes.map(process => [process.ProcessId, Date.parse(process.CreationDate ?? '')]));
   const currentRootDate = pid === null ? undefined : dates.get(pid);
   if (pid !== null && creationDate) {
-    if (currentRootDate !== undefined && currentRootDate !== Date.parse(creationDate)) ids.clear();
+    if (currentRootDate !== undefined && (!Number.isFinite(currentRootDate)
+      || Math.abs(currentRootDate - Date.parse(creationDate)) > 2000)) ids.clear();
     dates.set(pid, Date.parse(creationDate));
   }
   let previous: number;
@@ -34,7 +35,7 @@ export function summarizeProcesses(processes: ProcessRow[], listeners: Listener[
     for (const process of processes) {
       const parentDate = dates.get(process.ParentProcessId);
       if (ids.has(process.ParentProcessId) && parentDate !== undefined
-        && Date.parse(process.CreationDate ?? '') >= parentDate) ids.add(process.ProcessId);
+        && Date.parse(process.CreationDate ?? '') >= parentDate - 2000) ids.add(process.ProcessId);
     }
   } while (previous !== ids.size);
   return {

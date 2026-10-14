@@ -1,6 +1,7 @@
 import { expect, it, vi, afterEach } from 'vitest';
 import { waitForTarget } from '../gui-smoke/cdp.ts';
-import { assertAppRunning, existingInstances, assertNoExistingInstances } from '../gui-smoke/startup.ts';
+import { assertAppRunning, existingInstances, assertNoExistingInstances, checkExistingInstances } from '../gui-smoke/startup.ts';
+import { cleanupBuildProcesses } from '../gui-smoke/owned-process.ts';
 
 afterEach(() => vi.useRealTimers());
 const rows = [
@@ -15,6 +16,22 @@ it('matches both app names only for the current user and session', () => {
   expect(() => assertNoExistingInstances(rows, 1, 'S-1')).toThrow(/PID 10.*D:\\gui\\app.exe.*2026-10-14T10:00:00Z/s);
   expect(() => assertNoExistingInstances(rows, 1, 'S-1')).toThrow(/PID 11.*C:\\installed\\RealmTool.exe/s);
   expect(() => assertNoExistingInstances(rows, 2, 'S-1')).not.toThrow();
+});
+
+it.each([false, true])('cleans our leftover then continues or rejects another installation: %s', async otherInstallation => {
+  let remaining = otherInstallation ? [...rows] : [rows[0]];
+  const removed: number[] = [];
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  try {
+    const result = checkExistingInstances('D:\\gui\\app.exe',
+      exe => cleanupBuildProcesses(exe, async () => remaining, async pid => {
+        removed.push(pid); remaining = remaining.filter(process => process.ProcessId !== pid);
+      }),
+      async () => ({ processes: remaining, sessionId: 1, userSid: 'S-1' }));
+    if (otherInstallation) await expect(result).rejects.toThrow(/PID 11.*C:\\installed\\RealmTool.exe/s);
+    else await expect(result).resolves.toBeUndefined();
+    expect(removed).toEqual([10]);
+  } finally { warn.mockRestore(); }
 });
 it.each([0, 101])('fails before discovery for an already exited app (%s)', async code => {
   const discover = vi.fn();

@@ -152,3 +152,12 @@ it('does not attribute a reused root PID or its listeners to the launched app', 
   ], [{ OwningProcess: 10, LocalPort: 9241 }], 10, '2026-10-14T10:00:00Z');
   expect(report.tree).toEqual([]); expect(report.listeners).toEqual([]);
 });
+
+it('tolerates two seconds of creation-time precision differences in the process report', async () => {
+  const { summarizeProcesses } = await import('../gui-smoke/diagnostics.ts');
+  const report = summarizeProcesses([
+    { ProcessId: 10, ParentProcessId: 1, Name: 'realmtool-shell.exe', CommandLine: '', CreationDate: '2026-10-14T10:00:01.999Z' },
+    { ProcessId: 11, ParentProcessId: 10, Name: 'msedgewebview2.exe', CommandLine: '', CreationDate: '2026-10-14T09:59:58.001Z' },
+  ], [], 10, '2026-10-14T10:00:00Z');
+  expect(report.tree.map(process => process.ProcessId)).toEqual([10, 11]);
+});

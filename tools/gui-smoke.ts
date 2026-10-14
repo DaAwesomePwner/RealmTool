@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -9,6 +9,7 @@ import { launchEnvironment, prepareProfile, withApp } from './gui-smoke/process.
 import { connect } from './gui-smoke/transport.ts';
 import { snapshotKnownFolders, verifyIsolation, type KnownFolderSnapshot } from './gui-smoke/isolation.ts';
 import { assertAppRunning, checkExistingInstances, launchCreationDate } from './gui-smoke/startup.ts';
+import { stopBuildProcess } from './gui-smoke/owned-process.ts';
 import { captureDiagnostics, printFailureDiagnostics } from './gui-smoke/diagnostics.ts';
 
 let diagnosticsDirectory: string | undefined;
@@ -66,7 +67,7 @@ async function smoke(): Promise<void> {
   await withApp(async () => {
     await record();
     const gameDir = prepareProfile(root, catalog.gameBuild);
-    await checkExistingInstances();
+    await checkExistingInstances(executable);
     // Check instances first so an existing app's CDP port cannot hide the handoff diagnosis.
     await new Promise<void>((resolve, reject) => {
       const probe = createServer(); probe.once('error', reject);
@@ -99,12 +100,7 @@ async function smoke(): Promise<void> {
         pid: state.pid, creationDate: state.creationDate, child, port, failed, environment: launchEnvironment(root, port) });
     },
     async stop() {
-      if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return;
-      const result = spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { encoding: 'utf8', timeout: 15_000 });
-      if (result.error) throw result.error;
-      if (result.status !== 0 && child.exitCode === null && child.signalCode === null) {
-        throw new Error(`taskkill failed (${result.status}): ${result.stderr || result.stdout}`);
-      }
+      if (child?.pid) await stopBuildProcess(child.pid, executable);
     },
     async verify() { await verifyProfile(state, stateFile); },
     async remove() { await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }); },

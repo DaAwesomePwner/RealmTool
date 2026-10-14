@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { cleanupBuildProcesses } from './owned-process.ts';
 
 interface ExistingProcess {
   Name: string; ProcessId: number; SessionId: number; OwnerSid: string;
@@ -24,8 +25,8 @@ async function query(script: string): Promise<any> {
   return JSON.parse(stdout.replace(/^\uFEFF/, ''));
 }
 
-export async function checkExistingInstances(): Promise<void> {
-  const result = await query(`
+async function queryExistingInstances(): Promise<{ processes: ExistingProcess[]; sessionId: number; userSid: string }> {
+  return query(`
 $ErrorActionPreference = 'Stop'
 $sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId
 $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -38,10 +39,15 @@ $apps = @(Get-CimInstance Win32_Process -Filter "SessionId = $sessionId" -Operat
   })
 @{ processes=$apps; sessionId=$sessionId; userSid=$userSid } | ConvertTo-Json -Depth 4 -Compress
 `);
+}
+
+export async function checkExistingInstances(executable: string, cleanup = cleanupBuildProcesses, inspect = queryExistingInstances): Promise<void> {
+  await cleanup(executable);
+  const result = await inspect();
   assertNoExistingInstances(result.processes, result.sessionId, result.userSid);
 }
 
-/** Persist exact OS creation time so fallback cleanup cannot kill a reused PID or a pre-existing app. */
+/** Creation time is diagnostic metadata, never a prerequisite for cleanup. */
 export async function launchCreationDate(pid: number): Promise<string | undefined> {
   if (!Number.isInteger(pid) || pid <= 0) throw new Error('Invalid launched PID');
   const date = await query(`$ErrorActionPreference='Stop'; $app=Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}' -OperationTimeoutSec 8; if ($app) { $app.CreationDate.ToUniversalTime().ToString('o') | ConvertTo-Json -Compress } else { 'null' }`);
