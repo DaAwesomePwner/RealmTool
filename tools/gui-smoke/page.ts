@@ -1,11 +1,18 @@
+export const pageStatus = `document.querySelector('#app .connection')?.innerText?.trim() || '(no visible connection status)'`;
+
 /** Read-only checks: never click Launch or invoke an API that mutates the game. */
 export function pageAssertion(gameDir: string): string {
   return `(async () => {
     const root = document.querySelector('#app');
     if (!root || !root.childElementCount || !root.getBoundingClientRect().height) return '#app has no rendered children';
     if (document.querySelector('#realmtool-shell-error[open]')) return 'Shell recovery dialog is open';
-    if (root.querySelector('.connection')?.textContent !== 'Backend connected') return 'Backend is not connected';
-    if (!root.querySelector('.content')?.childElementCount) return 'Dashboard content is missing';
+    const content = root.querySelector('.content');
+    const live = root.querySelector('.topbar-live');
+    if (!content?.childElementCount) return 'Dashboard content is missing';
+    if (!content.getBoundingClientRect().height || !content.getBoundingClientRect().width) return 'Dashboard content is not visible';
+    // main.ts enables both regions only when ApiClient's backend WebSocket opens.
+    // They become inert again on disconnect or backend-exited.
+    if (content.inert !== false || live?.inert !== false) return 'Backend is not connected';
     const info = await window.__TAURI_INTERNALS__.invoke('backend_info');
     const response = await fetch('http://127.0.0.1:' + info.port + '/api/state', {
       headers: { Authorization: 'Bearer ' + info.token }, signal: AbortSignal.timeout(3000)
