@@ -1,0 +1,123 @@
+name: GUI smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gui-smoke-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  gui-smoke:
+    # Fork PR code must never execute on the persistent self-hosted runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+    runs-on: [self-hosted, windows, nuc, gui]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GUI_SMOKE_PORT: '9241'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set job artifact paths
+        run: |
+          "GUI_SMOKE_STATE=$env:RUNNER_TEMP\gui-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.json" >> $env:GITHUB_ENV
+          "GUI_SMOKE_SCREENSHOT=$env:RUNNER_TEMP\gui-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.png" >> $env:GITHUB_ENV
+      - name: Persistent NUC caches (separate GUI target)
+        if: runner.environment != 'github-hosted'
+        run: |
+          'CARGO_HOME=D:\ci-cache\RealmTool\cargo-home' >> $env:GITHUB_ENV
+          'CARGO_TARGET_DIR=D:\ci-cache\RealmTool\target\gui' >> $env:GITHUB_ENV
+          'npm_config_cache=D:\ci-cache\RealmTool\npm' >> $env:GITHUB_ENV
+          (Join-Path $env:USERPROFILE '.cargo\bin') >> $env:GITHUB_PATH
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
+      - name: Diagnose toolchains
+        run: |
+          rustup show
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - run: npm ci
+      - name: Build helper and packaged resources
+        run: |
+          npm run build:helper
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run fetch:node
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build:backend
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run ui:build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build debug desktop app with embedded frontend
+        run: |
+          if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $env:GITHUB_WORKSPACE 'src-tauri/target' }
+          $exe = Join-Path $env:CARGO_TARGET_DIR 'debug/realmtool-shell.exe'
+          "GUI_SMOKE_EXE=$exe" >> $env:GITHUB_ENV
+          npx tauri build --debug --no-bundle --features custom-protocol --config src-tauri/tauri.bundle.conf.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Windows resource_dir is the executable directory, also in debug builds.
+          $output = Split-Path $exe
+          foreach ($name in @('runtime', 'app')) {
+            $destination = Join-Path $output $name
+            if (Test-Path $destination) { Remove-Item $destination -Recurse -Force }
+            Copy-Item "dist/$name" $destination -Recurse
+          }
+      - name: Launch real app and inspect WebView2 over CDP
+        run: npm run smoke:gui
+      - name: Always kill the job's app tree
+        if: always()
+        run: |
+          # Match the full GUI build path, never a global executable name or stale PID.
+          if ($env:GUI_SMOKE_EXE) {
+            $expectedExe = [IO.Path]::GetFullPath($env:GUI_SMOKE_EXE)
+            $apps = Get-CimInstance Win32_Process | Where-Object {
+              $_.ExecutablePath -and [IO.Path]::GetFullPath($_.ExecutablePath) -eq $expectedExe
+            }
+            foreach ($app in $apps) {
+              taskkill.exe /PID $app.ProcessId /T /F
+              if ($LASTEXITCODE -ne 0 -and (Get-Process -Id $app.ProcessId -ErrorAction SilentlyContinue)) {
+                throw "Could not kill GUI smoke process $($app.ProcessId)"
+              }
+            }
+          }
+          exit 0
+      - name: Verify real known folders and temporary WebView2 data after shutdown
+        if: always()
+        run: |
+          if (Test-Path $env:GUI_SMOKE_STATE) { node tools/gui-smoke.ts --verify-profile }
+      - name: Always remove the temporary profile
+        if: always()
+        run: |
+          if (Test-Path $env:GUI_SMOKE_STATE) {
+            $state = Get-Content $env:GUI_SMOKE_STATE -Raw | ConvertFrom-Json
+            $root = [IO.Path]::GetFullPath($state.root)
+            if ((Split-Path $root) -ne [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') -or
+                (Split-Path $root -Leaf) -notlike 'realmtool-gui-*') { throw 'Unexpected smoke profile path' }
+            for ($attempt = 0; $attempt -lt 20 -and (Test-Path $root); $attempt++) {
+              try { Remove-Item $root -Recurse -Force -ErrorAction Stop }
+              catch { if ($attempt -eq 19) { throw }; Start-Sleep -Milliseconds 500 }
+            }
+            Remove-Item $env:GUI_SMOKE_STATE -Force
+          }
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.GUI_SMOKE_SCREENSHOT }}
+          if-no-files-found: warn
+          retention-days: 7
