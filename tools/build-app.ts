@@ -1,11 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url));
 export function findInstaller(root = projectRoot): string {
-  const dir = join(root, 'src-tauri/target/release/bundle/nsis');
+  // Tauri runs Cargo from src-tauri; environment paths are relative to that cwd.
+  const target = resolve(root, 'src-tauri', process.env.CARGO_TARGET_DIR ?? 'target');
+  const dir = join(target, 'release/bundle/nsis');
   const files = readdirSync(dir).filter(name => name.endsWith('-setup.exe'));
   if (files.length !== 1) throw new Error(`Expected one NSIS installer in ${dir}; found ${files.length}`);
   return join(dir, files[0]);

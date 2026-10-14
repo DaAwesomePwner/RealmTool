@@ -3,15 +3,54 @@ on:
   push:
     branches: [main]
   pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
-    runs-on: windows-latest
+    runs-on: [self-hosted, windows, nuc, build]
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
+          cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
+      - name: Configure persistent NUC caches
+        if: runner.environment == 'self-hosted'
+        run: |
+          $cacheRoot = 'D:\ci-cache\RealmTool'
+          New-Item -ItemType Directory -Force -Path "$cacheRoot\npm", "$cacheRoot\cargo-home", "$cacheRoot\target\build" | Out-Null
+          "npm_config_cache=$cacheRoot\npm" >> $env:GITHUB_ENV
+          "CARGO_HOME=$cacheRoot\cargo-home" >> $env:GITHUB_ENV
+          "CARGO_TARGET_DIR=$cacheRoot\target\build" >> $env:GITHUB_ENV
+          # rustup proxies stay in the user's original Cargo bin directory.
+          (Join-Path $env:USERPROFILE '.cargo\bin') >> $env:GITHUB_PATH
+      - name: Diagnose toolchains
+        run: |
+          rustup show
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --version
+      - name: Install npm dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Run tests
+        run: npm test
+      - name: Build native helper
+        run: npm run build:helper
+      - name: Test Rust sidecar
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Build packaged app
+        run: npm run build:app
+      - name: Smoke test packaged backend with fake game files
+        run: node tools/smoke-package.ts
