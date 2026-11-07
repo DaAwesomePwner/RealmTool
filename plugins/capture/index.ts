@@ -12,10 +12,16 @@ export function register(ctx: PluginContext): void {
   ctx.registerSetting('includeAllDamage', { label: 'Include all DAMAGE', type: 'boolean', value: false, advanced: true });
   let writer: CaptureWriter | undefined;
   let records = new Records();
-  let registered = false, disposed = false;
+  let registered = false, disposed = false, loading = true;
+  queueMicrotask(() => { loading = false; });
   let timer: ReturnType<typeof setInterval> | undefined;
   const clients = new Map<string, Correlation>();
-  const summary = () => { for (const [id, c] of clients) ctx.log(c.summary(id, performance.now())); };
+  let periodStart = performance.now();
+  const summary = (activeOnly = false) => {
+    const now = performance.now();
+    for (const [id, c] of clients) if (!activeOnly || c.lastActivity >= periodStart) ctx.log(c.summary(id, now));
+    periodStart = now;
+  };
   const stop = () => {
     if (timer) clearInterval(timer);
     timer = undefined;
@@ -23,22 +29,38 @@ export function register(ctx: PluginContext): void {
   };
   ctx.onEnabledChange(enabled => {
     if (!enabled || disposed) { stop(); return; }
+    if (loading) {
+      ctx.enabled = false;
+      ctx.log('Capture is off at startup; enable it again to record');
+      return;
+    }
     if (writer) return;
     records = new Records(); clients.clear();
-    writer = new CaptureWriter(join(appDataDir(), 'captures', `capture-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.jsonl`),
-      ctx.getSetting<number>('maxFileMB') * 1024 * 1024, s => ctx.log(s), () => { ctx.enabled = false; });
-    timer = setInterval(summary, 60_000); timer.unref();
+    const currentWriter = new CaptureWriter(join(appDataDir(), 'captures', `capture-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.jsonl`),
+      ctx.getSetting<number>('maxFileMB') * 1024 * 1024, s => ctx.log(s), () => { if (writer === currentWriter) ctx.enabled = false; });
+    writer = currentWriter; periodStart = performance.now();
+    timer = setInterval(() => summary(true), 60_000); timer.unref();
     // API has no observer unsubscribe. Register once, only after explicit enable.
     if (registered) return;
     registered = true;
     for (const name of PACKETS) ctx.observePacket(name, (client, packet) => {
       if (!ctx.enabled || !writer || disposed) return;
       const r = records.record(client, packet, ctx.getSetting<boolean>('includeAllDamage'));
+      const id = records.id(client);
+      if (id && clients.has(id)) clients.get(id)!.lastActivity = performance.now();
       if (!r) return;
       let correlation = clients.get(r.client);
       if (!correlation) { correlation = new Correlation(); clients.set(r.client, correlation); }
       correlation.add(r); writer.write(r);
     });
+  });
+  ctx.on('clientDisconnected', client => {
+    const id = records.disconnect(client);
+    if (id) {
+      const c = clients.get(id);
+      if (c) ctx.log(c.summary(id, performance.now()));
+      clients.delete(id);
+    }
   });
   ctx.registerCleanup(() => { disposed = true; stop(); });
 }

@@ -31,8 +31,8 @@ export class CaptureWriter {
         this.log(`Capture started: ${this.path}`);
       }
       await this.handle.writeFile(line);
-    }).catch(() => {
-      this.failed = true; this.log('Capture write failed; stopping'); this.stop(); void this.close();
+    }).catch((error: NodeJS.ErrnoException) => {
+      this.failed = true; this.log(`Capture write failed (${error.code ?? 'unknown'}); stopping`); this.stop(); void this.close();
     });
   }
   close(): Promise<void> {
@@ -43,7 +43,7 @@ export class CaptureWriter {
           try { await this.handle.sync(); } finally { await this.handle.close(); }
           this.log(`Capture stopped: ${this.path}`);
         }
-      }).catch(() => { this.log(`Capture close failed: ${this.path}`); });
+      }).catch((error: NodeJS.ErrnoException) => { this.log(`Capture close failed (${error.code ?? 'unknown'}): ${this.path}`); });
     }
     return this.chain;
   }

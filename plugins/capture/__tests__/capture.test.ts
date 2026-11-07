@@ -36,7 +36,7 @@ it('filters damage by own ID and retains only permitted scalar fields', () => {
   const damage = { targetId: 8, damageAmount: 10, kill: true, effects: [1, 'SECRET', { name: 'PRIVATE' }], bulletId: 2, objectId: 3, armorPierce: true };
   expect(r.record(client, packet('DAMAGE', damage), false)).toBeUndefined();
   const all = r.record(client, packet('DAMAGE', damage), true)!;
-  expect(all.effects).toEqual([1]); expect(all).not.toHaveProperty('kill');
+  expect(all.effects).toEqual([1]); expect(all).not.toHaveProperty('kill'); expect(all).not.toHaveProperty('armorPierce');
   expect(r.record(client, packet('DAMAGE', { ...damage, targetId: 7 }), false)).toBeDefined();
 });
 it('records only changed own stats and resets omitted full-update masks', () => {
@@ -69,11 +69,12 @@ it('counts ACKs, near and unknown unacked AOEs with pending separately', () => {
   const unknown = new Correlation(); unknown.add(r('AOE', 0, 0));
   expect(unknown.summary('c2', 1600)).toContain('position unknown=1');
 });
-it('defaults off with no observer interest until first enable (known host limitation after disable)', () => {
+it('defaults off with no observer interest until first enable (known host limitation after disable)', async () => {
   const f = startHost([plugin]);
   try {
     expect(f.proxy.interest.observe?.server).toEqual(expect.arrayContaining(['CREATESUCCESS', 'NEWTICK', 'UPDATE']));
     expect(f.proxy.interest.observe?.server).not.toContain('AOE');
+    await Promise.resolve();
     f.host.setEnabled('capture', true);
     expect(f.proxy.interest.observe?.server).toContain('AOE');
     f.host.setEnabled('capture', false);
@@ -86,12 +87,12 @@ it('disable and cleanup drain writes; re-enable creates a fresh file without dup
   vi.stubEnv('APPDATA', dir);
   const hooks = new Map<string, PacketHook>(); let enabledChanged = (_v: boolean) => {}; let cleanup = () => {};
   const settings = new Map<string, unknown>(); const logs: string[] = [];
-  const ctx = { enabled: false, registerSetting: (k: string, d: { value: unknown }) => settings.set(k, d.value),
+  const ctx = { enabled: false, on: vi.fn(), registerSetting: (k: string, d: { value: unknown }) => settings.set(k, d.value),
     getSetting: (k: string) => settings.get(k), observePacket: (k: string, fn: PacketHook) => { expect(hooks.has(k)).toBe(false); hooks.set(k, fn); },
     onEnabledChange: (fn: typeof enabledChanged) => { enabledChanged = fn; }, registerCleanup: (fn: typeof cleanup) => { cleanup = fn; }, log: (s: string) => logs.push(s),
   } as unknown as PluginContext;
   try {
-    plugin.register(ctx); expect(ctx.enabled).toBe(false); expect(hooks.size).toBe(0);
+    plugin.register(ctx); await Promise.resolve(); expect(ctx.enabled).toBe(false); expect(hooks.size).toBe(0);
     for (let i = 0; i < 2; i++) {
       ctx.enabled = true; enabledChanged(true);
       hooks.get('AOE')!(client, packet('AOE', { radius: 1 }));
@@ -100,6 +101,6 @@ it('disable and cleanup drain writes; re-enable creates a fresh file without dup
     }
     expect(hooks.size).toBe(PACKETS.length);
     expect(await readdir(join(dir, 'RealmTool', 'captures'))).toHaveLength(2);
-    expect(logs.filter(s => s.includes('heuristic FIFO'))).toHaveLength(2);
+    expect(logs.filter(s => s.includes('heuristic spatial-first'))).toHaveLength(2);
   } finally { cleanup(); vi.unstubAllEnvs(); await rm(dir, { recursive: true, force: true }); }
 });
