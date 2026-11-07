@@ -19,6 +19,39 @@ const decode = (h: Harness, data: Buffer | null, dir: 'client' | 'server') => h.
 const helloData = () => ({ gameId: -2, buildVersion: 'b', accessToken: 'regression-secret-token', keyTime: -1, key: Buffer.alloc(0), gameNet: 'rotmg', playPlatform: 'rotmg', platformToken: '', userToken: '', clientIdentification: '' });
 
 describe('PluginHost', () => {
+  it.each(['RECONNECT', 'DEATH', 'MAPINFO', 'ESCAPE'])('warns at registration and runs %s hooks only as isolated observers', name => {
+    quietLogs();
+    const order: string[] = [];
+    const h = startHost([plugin('critical', ctx => {
+      ctx.observePacket(name, (_c, p) => {
+        order.push('observer');
+        expect(p.send).not.toBe(false);
+        expect(p.rawBytes.readInt32BE(0)).toBe(p.rawBytes.length);
+      });
+      ctx.hookPacket(name, (_c, p) => {
+        order.push('hook');
+        p.send = false;
+        p.modified = true;
+        p.rawBytes.fill(0);
+      }, { prepend: true });
+    })]);
+    const side = h.factory.getPacketDirection(name)!;
+    expect(h.proxy.interest.verdict?.[side]).not.toContain(name);
+    expect(h.proxy.interest.observe?.[side]).toContain(name);
+    const warnings = () => records.filter(r => r.level === 'warn');
+    expect(warnings()).toHaveLength(1);
+    expect(warnings()[0].message).toBe(`${name} is safety-critical; this packet hook runs as observe-only (drop and modification requests are ignored)`);
+    const client = h.connect();
+    const data = h.factory.createByName(name).data;
+    h.packet(client, name, data, { observeOnly: true });
+    h.packet(client, name, data, { observeOnly: true });
+    expect(order).toEqual(['hook', 'observer', 'hook', 'observer']);
+    expect(h.proxy.forwards).toEqual([]);
+    expect(warnings()).toHaveLength(1); // Registration warning, never repeated per packet.
+    expect(records.filter(r => r.level === 'error')).toEqual([]);
+    h.host.stop();
+  });
+
   it.each([undefined, null, 'C:/fixture/game'])('passes gameDir through the harness without a capability (%s)', gameDir => {
     const h = startHost([plugin('p', () => {}, { capabilities: [] })], { gameDir });
     expect(h.host.context('p')!.gameDir).toBe(gameDir ?? null);
