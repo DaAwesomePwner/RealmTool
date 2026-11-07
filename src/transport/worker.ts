@@ -16,6 +16,17 @@ const port = parentPort;
 if (!port) throw new Error('src/transport/worker.ts must run as a worker thread');
 const post = (event: WorkerEvent): void => port.postMessage(event);
 
+// Report fatal errors before terminating: continuing could leave sockets/ciphers corrupt.
+function fatal(reason: unknown): never {
+  try {
+    const detail = reason instanceof Error ? (reason.stack ?? reason.message).split('\n').slice(0, 6).join('\n') : String(reason);
+    post({ type: 'fault', message: `Fatal network worker error: ${detail.slice(0, 2000)}` });
+  } finally { process.exit(1); }
+}
+process.on('uncaughtException', fatal);
+process.on('unhandledRejection', fatal);
+
+
 function configureModules(configs: Record<string, unknown>): void {
   // Preserve registry order regardless of caller key order.
   for (const module of WORKER_MODULES) {

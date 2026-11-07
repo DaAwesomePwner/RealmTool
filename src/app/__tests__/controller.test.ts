@@ -68,6 +68,84 @@ describe('AppController lifecycle', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it('automatically rebuilds after crashes with bounded backoff and a crash-loop cap', async () => {
+    vi.useFakeTimers();
+    try {
+      await controller.startProxy(); await drain();
+      for (const [index, delay] of [0, 1000, 5000].entries()) {
+        hosts.at(-1)!.emit('exit', { code: 7, expected: false }); await drain();
+        expect(controller.state().proxy).toMatchObject({ state: 'failed', error: expect.stringContaining('restart') });
+        expect(controller.state().protection?.state).toBe('unprotected');
+        if (delay) {
+          await vi.advanceTimersByTimeAsync(delay - 1);
+          expect(hosts).toHaveLength(index + 1);
+        }
+        await vi.advanceTimersByTimeAsync(delay ? 1 : 0);
+        expect(hosts).toHaveLength(index + 2);
+        expect(controller.state().proxy.state).toBe('running');
+        expect(contexts).toHaveLength(index + 2);
+      }
+      hosts.at(-1)!.emit('exit', { code: 7, expected: false }); await drain();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(hosts).toHaveLength(4);
+      expect(controller.state().proxy).toMatchObject({ state: 'failed', error: expect.stringContaining('Automatic restarts exhausted') });
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['stop', 'profile', 'shutdown', 'start'] as const)('%s cancels a pending automatic restart', async action => {
+    vi.useFakeTimers();
+    try {
+      await controller.createProfile('other');
+      await controller.startProxy(); await drain();
+      hosts[0].emit('exit', { code: 1, expected: false }); await drain();
+      await vi.advanceTimersByTimeAsync(0);
+      hosts[1].emit('exit', { code: 1, expected: false }); await drain();
+      if (action === 'stop') await controller.stopProxy();
+      if (action === 'profile') await controller.selectProfile('other');
+      if (action === 'shutdown') await controller.shutdown();
+      if (action === 'start') await controller.startProxy();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(hosts).toHaveLength(action === 'start' ? 3 : 2);
+      expect(controller.state().proxy.error ?? '').not.toContain('pending');
+    } finally { vi.useRealTimers(); }
+  });
+  it('resets the automatic restart budget after a stable minute', async () => {
+    vi.useFakeTimers();
+    try {
+      await controller.startProxy(); await drain();
+      hosts[0].emit('exit', { code: 1, expected: false }); await drain();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      hosts[1].emit('exit', { code: 1, expected: false }); await drain();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hosts).toHaveLength(3);
+      expect(controller.state().proxy.state).toBe('running');
+    } finally { vi.useRealTimers(); }
+  });
+  it.each(['expected', 'startup'] as const)('does not restart an %s exit', async kind => {
+    vi.useFakeTimers();
+    try {
+      if (kind === 'startup') {
+        deps.createHost = () => {
+          const host = new FakeHost(); hosts.push(host);
+          host.start.mockImplementation(async () => {
+            host.emit('exit', { code: 1, expected: false });
+            throw new Error('startup failed');
+          });
+          return host as unknown as ReturnType<ControllerDeps['createHost']>;
+        };
+        await controller.shutdown(); controller = make();
+        await expect(controller.startProxy()).rejects.toThrow('startup failed');
+      } else {
+        await controller.startProxy(); await drain();
+        hosts[0].stop.mockImplementation(async () => { hosts[0].emit('exit', { code: 0, expected: true }); });
+        await controller.stopProxy();
+      }
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(hosts).toHaveLength(1);
+      expect(controller.state().proxy.state).toBe(kind === 'startup' ? 'failed' : 'stopped');
+    } finally { vi.useRealTimers(); }
+  });
+
   async function protectedSession() {
     await controller.shutdown();
     deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => selection('A');
@@ -818,8 +896,9 @@ describe('AppController lifecycle', () => {
     hosts[0].emit('connected', { id: 'c', generation: 2 });
     expect(controller.state().sessions).toEqual({ open: 1, connected: 1 });
     hosts[0].emit('exit', { code: 7, expected: false });
-    await vi.waitFor(() => expect(hosts[0].stop).toHaveBeenCalledOnce());
     expect(controller.state().proxy).toMatchObject({ state: 'failed', error: expect.stringContaining('7') });
+    await vi.waitFor(() => expect(controller.state().proxy.state).toBe('running'));
+    expect(hosts[0].stop).toHaveBeenCalledOnce();
     expect(controller.state().sessions).toEqual({ open: 0, connected: 0 });
     expect(states.every((s, i) => i === 0 || s.revision > states[i - 1].revision)).toBe(true);
   });

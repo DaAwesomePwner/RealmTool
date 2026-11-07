@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { Worker } from 'node:worker_threads';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ModuleConfigEvent } from '../messages.ts';
 import { ProxyHost } from '../host.ts';
@@ -12,6 +13,32 @@ const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(); });
 
 describe('ProxyHost', () => {
+  it.each(['throw', 'reject'])('reports a fatal %s with a short stack before exiting non-zero', async kind => {
+    const schema = loadSchema();
+    const worker = new Worker(`
+      import(${JSON.stringify(new URL('../worker.ts', import.meta.url).href)}).then(() => {
+        setImmediate(() => {
+          ${kind === 'throw' ? "throw new Error('fatal fixture');" : "void Promise.reject(new Error('fatal fixture'));"}
+        });
+      });
+    `, { eval: true, workerData: {
+      host: '127.0.0.1', port: 0, definitions: schema.definitions, stats: schema.stats,
+      fallbackDestination: null, targetTimeoutMs: 2000, helloTimeoutMs: 3000,
+      maxPendingBytes: 1024, interest: {}, moduleConfig: {},
+    } });
+    cleanups.push(async () => { await worker.terminate(); });
+    const faults: string[] = [];
+    worker.on('message', event => { if (event.type === 'fault') faults.push(event.message); });
+    const code = await new Promise<number>((resolve, reject) => {
+      worker.on('error', reject); worker.on('exit', resolve);
+    });
+    expect(code).toBe(1);
+    expect(faults).toHaveLength(1);
+    expect(faults[0]).toContain('Fatal network worker error: Error: fatal fixture');
+    expect(faults[0]).toContain('at ');
+    expect(faults[0].split('\n').length).toBeLessThanOrEqual(6);
+  });
+
   it('expires verdicts on the production worker tick with no modules registered', async () => {
     const server = new FakeServer();
     await server.listen();
