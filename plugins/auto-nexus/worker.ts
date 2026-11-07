@@ -208,8 +208,19 @@ export const autoNexusModule: WorkerModule = {
           engine.request(context.now(), 'manual nexus', true);
         }
       },
-      close() {
+      close(by) {
         if (closed) return;
+        const sample = engine.status(context.now());
+        const receipt = engine.attempts.status?.writeReceipt;
+        const expectedTransfer = context.automation.latchReason === 'transfer'
+          || guard.suppresses(true, 'MOVE') || (receipt?.accepted && !receipt.failed);
+        const hp = sample.confirmedHp === null ? null : Math.min(sample.confirmedHp, sample.lowerHp ?? sample.confirmedHp);
+        if (by !== 'proxy' && by !== undefined && sample.enabled && sample.phase !== 'dead'
+          && sample.phase !== 'transition' && !expectedTransfer
+          && hp !== null && sample.maxHp > 0 && hp / sample.maxHp * 100 < 2 * current.settings.thresholdPct) {
+          context.post({ type: 'lowHpClose', serverHp: sample.confirmedHp, predictedHp: sample.lowerHp,
+            hpPct: hp / sample.maxHp * 100, thresholdPct: current.settings.thresholdPct });
+        }
         if (automaticDecisions) context.post({ type: 'latencySummary', message: runLatency.summary() });
         closed = true; sessions.delete(configure); clear(); engine.attempts.cancel(context.now()); },
     };

@@ -32,6 +32,7 @@ import type { ResourcePaths } from './resources.ts';
 
 export type ProxyState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
 export interface AppState {
+  safetyWarning?: { message: string; expiresAt: number };
   loopLag?: { worker?: LoopLag; main?: LoopLag };
   /** Always present in controller output; optional for older API state producers. */
   protection?: Protection & { since: number };
@@ -568,6 +569,17 @@ export class AppController extends EventEmitter<ControllerEvents> {
       this.current.loopLag = { ...this.current.loopLag, worker: sample };
       this.changed();
     });
+    const closeWarning = guard((event: { moduleId: string; message: unknown }) => {
+      if (event.moduleId !== 'auto-nexus' || !event.message || typeof event.message !== 'object') return;
+      const value = event.message as Record<string, unknown>;
+      if (value.type !== 'lowHpClose' || typeof value.hpPct !== 'number' || typeof value.thresholdPct !== 'number') return;
+      const text = `Connection closed at ${Math.round(value.hpPct)}% HP (threshold ${value.thresholdPct}%) — Auto Nexus could not act`;
+      log.warn('Auto Nexus', text);
+      this.current.safetyWarning = { message: text, expiresAt: Date.now() + 60_000 };
+      this.changed();
+    });
+    host.on('module', closeWarning);
+    this.detachHost.push(() => host.off('module', closeWarning));
     host.on('loopLag', loopLag);
     this.detachHost.push(() => host.off('loopLag', loopLag));
     host.on('moduleStatus', status); host.on('moduleConfig', config);

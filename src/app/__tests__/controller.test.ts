@@ -1018,6 +1018,16 @@ describe('AppController lifecycle', () => {
     expect(states.every((s, i) => i === 0 || s.revision > states[i - 1].revision)).toBe(true);
   });
 
+  it('publishes a transient low HP close warning', async () => {
+    await controller.startProxy(); await drain();
+    hosts[0].emit('module', { moduleId: 'auto-nexus', id: 's1',
+      message: { type: 'lowHpClose', hpPct: 18, thresholdPct: 25 } });
+    expect(controller.state().safetyWarning).toEqual({
+      message: 'Connection closed at 18% HP (threshold 25%) — Auto Nexus could not act',
+      expiresAt: expect.any(Number),
+    });
+  });
+
   it('emits plugin snapshots and sanitized data', async () => {
     const snapshots = vi.fn(), data = vi.fn(); controller.on('plugins', snapshots); controller.on('data', data);
     await controller.startProxy(); await drain(); controller.setPluginEnabled('fixture', false);

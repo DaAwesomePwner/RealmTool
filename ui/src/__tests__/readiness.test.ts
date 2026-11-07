@@ -80,3 +80,29 @@ it('retains the protection element, filters info reasons, and renders missing pr
   expect(item.textContent).toContain('Idle'); expect(view.notices.textContent).not.toContain('Hidden info');
   expect(view.notices.textContent).toContain('Visible warning'); expect(view.notices.textContent).toContain('Visible error');
 });
+
+it('dismisses close warnings without reviving them on updates and expires new warnings', () => {
+  vi.useFakeTimers();
+  try {
+    const state: AppState = {
+      data: { state: 'idle', gameBuild: null, catalogBuild: null, lastResult: null, error: null },
+      proxy: { state: 'running', port: 2050, error: null },
+      game: { dir: null, candidates: [], launcher: null, helper: { state: 'unknown', backup: false } },
+      sessions: { open: 0, connected: 0 }, profile: { active: 'default', available: ['default'] }, operation: null, revision: 1,
+      safetyWarning: { message: 'Connection closed at 18% HP', expiresAt: Date.now() + 60000 },
+    };
+    const view = new Readiness({ post: vi.fn() }, () => {});
+    view.update(state);
+    expect(view.notices.textContent).toContain('18% HP');
+    view.notices.querySelector('button')!.click();
+    view.update(state);
+    expect(view.notices.textContent).not.toContain('18% HP');
+    state.safetyWarning = { message: 'Connection closed at 20% HP', expiresAt: Date.now() + 60001 };
+    view.update(state);
+    expect(view.notices.textContent).toContain('20% HP');
+    vi.advanceTimersByTime(60001);
+    expect(view.notices.textContent).not.toContain('20% HP');
+    view.update(state);
+    expect(view.notices.textContent).not.toContain('20% HP');
+  } finally { vi.useRealTimers(); }
+});

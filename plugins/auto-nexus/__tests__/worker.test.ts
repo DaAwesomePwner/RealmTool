@@ -563,3 +563,42 @@ describe('Auto Nexus module lifecycle', () => {
     f.observe('NEWTICK', hpData(176, 2)); expect(f.writePriority).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('low HP disconnect warnings', () => {
+  it('warns at 18% when an escape decision could not write to the socket', async () => {
+    const h = await harness();
+    const original = SafetyEngine.prototype.status;
+    vi.spyOn(SafetyEngine.prototype, 'status').mockImplementation(function (this: SafetyEngine, now) {
+      return { ...original.call(this, now), confirmedHp: 240, lowerHp: 180, maxHp: 1000 };
+    });
+    h.context.automation.latchEscape('auto escape'); // A decision alone does not prove a write.
+    h.session.close('server');
+    expect(h.events.filter(e => e.type === 'module' && (e.message as any).type === 'lowHpClose'))
+      .toMatchObject([{ message: { hpPct: 18, serverHp: 240, predictedHp: 180, thresholdPct: 25 } }]);
+  });
+
+  it.each([
+    { hp: 180, by: 'server' as const, expected: true },
+    { hp: 180, by: 'game' as const, expected: true },
+    { hp: 500, by: 'server' as const, expected: false },
+    { hp: undefined, by: 'server' as const, expected: false },
+    { hp: 180, by: 'proxy' as const, expected: false },
+  ])('close $by with HP $hp', async ({ hp, by, expected }) => {
+    const h = await harness();
+    // Keep HP below the warning band but above the escape threshold.
+    await h.tick(hp, 1, 500);
+    h.session.close(by);
+    const warnings = h.events.filter(e => e.type === 'module' && (e.message as any).type === 'lowHpClose');
+    expect(warnings).toHaveLength(expected ? 1 : 0);
+    if (expected) expect((warnings[0] as any).message).toMatchObject({ hpPct: 36, serverHp: 180, predictedHp: 180, thresholdPct: 25 });
+  });
+  it.each(['escape', 'death', 'transfer'])('suppresses %s closes', async cause => {
+    const h = await harness();
+    await h.tick(180, 1, 500);
+    if (cause === 'escape') h.session.command('auto-nexus', { type: 'escape' });
+    else if (cause === 'death') await h.send('DEATH', {});
+    else h.context.automation.latchEscape('transfer');
+    h.session.close('server');
+    expect(h.events.filter(e => e.type === 'module' && (e.message as any).type === 'lowHpClose')).toHaveLength(0);
+  });
+});
