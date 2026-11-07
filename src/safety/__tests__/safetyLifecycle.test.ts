@@ -130,6 +130,8 @@ it('coalesced manual completion cannot bypass backpressure for the automatic ret
   f.complete(0); f.advance(8);
   expect(f.engine.attempts.status).toMatchObject({ phase: 'written', failure: null, writeId: null, lastWriteAt: null });
   f.advance(384);
+  expect(f.engine.attempts.status?.failure).toBeNull();
+  f.advance(800);
   expect(f.engine.attempts.status?.failure).toBe('backpressure');
   expect(f.writes).toHaveLength(1); expect(f.decision.mock.calls[1][1]).toBe(true);
 });
@@ -328,6 +330,8 @@ it('blocks retries and recovery on ordinary backlog after accepting the initial 
   const f = fixture(); f.io.blocked = true; f.health(200);
   expect(f.order).toEqual(['write', 'decision:automatic:true']);
   f.complete(); f.advance(400);
+  expect(f.engine.attempts.status?.failure).toBeNull();
+  f.advance(800);
   expect(f.engine.attempts.status?.failure).toBe('backpressure');
   for (let i = 0; i < 100; ++i) { f.advance(100); f.health(); }
   expect(f.writes).toHaveLength(1); expect(f.decision).toHaveBeenCalledTimes(1);
@@ -364,7 +368,7 @@ it('accepts the worker transport contract when an underlying Node write returns 
 
 it('a completed local write with continuing socket backpressure must not enqueue a retry', () => {
   const f = fixture(); f.health(200); f.complete(); f.io.blocked = true; f.advance(400);
-  expect(f.writes).toHaveLength(1); expect(f.engine.attempts.status?.failure).toBe('backpressure');
+  expect(f.writes).toHaveLength(1); expect(f.engine.attempts.status?.failure).toBeNull();
 });
 
 it.each([undefined, new Error('late error')])('a callback after timeout cannot revive the failed attempt (%s)', error => {
@@ -584,4 +588,37 @@ it.each([false, true])('keeps unreadable HP degraded through HP-less ticks until
   expect(f.writes).toHaveLength(0);
   f.health(550);
   expect(f.engine.status()).toMatchObject({ confirmedHp: 550, degraded: null, protectionState: 'monitoring' });
+});
+
+it('defers blocked retries without spending them or bursting after unblock', () => {
+  const f = fixture(); f.health(200); f.complete(); f.io.blocked = true;
+  f.advance(400); f.advance(300);
+  expect(f.engine.attempts.status).toMatchObject({ phase: 'written', failure: null });
+  expect(f.engine.attempts.recoveryState(f.now())).toBeNull();
+  f.io.blocked = false; f.advance(1); f.complete();
+  f.advance(0); f.advance(399);
+  expect(f.writes.map(w => w.at)).toEqual([1000, 1701]);
+  f.advance(1); f.complete();
+  expect(f.writes.map(w => w.at)).toEqual([1000, 1701, 2101]);
+  f.advance(800);
+  expect(f.engine.attempts.status?.failure).toBe('unconfirmed');
+});
+
+it('fails a persistently blocked retry at its bounded deadline and starts cooldown', () => {
+  const f = fixture(); f.health(200); f.complete(); f.io.blocked = true;
+  f.advance(400); f.advance(799);
+  expect(f.engine.attempts.status?.failure).toBeNull();
+  f.advance(1);
+  expect(f.engine.attempts.status?.failure).toBe('backpressure');
+  expect(f.engine.attempts.recoveryState(f.now())).toBe('cooldown');
+  expect(f.writes).toHaveLength(1);
+});
+
+it.each(['generation', 'epoch', 'revision'])('retires a deferred retry on superseded %s', kind => {
+  const f = fixture(); f.health(200); f.complete(); f.io.blocked = true; f.advance(400);
+  if (kind === 'generation') f.engine.connectionChanged(2);
+  if (kind === 'epoch') f.emit('MAPINFO', { name: 'Realm' });
+  if (kind === 'revision') f.configure({ enabled: false });
+  f.io.blocked = false; f.advance(400);
+  expect(f.writes).toHaveLength(1);
 });
