@@ -27,14 +27,21 @@ describe('game process check', () => {
       ['/FI', 'IMAGENAME eq RotMG Exalt.exe', '/FO', 'CSV', '/NH'],
       { windowsHide: true, timeout: 3000, maxBuffer: 256 * 1024 }, expect.any(Function));
   });
-  it('uses the Windows system directory fallback', async () => {
+  it.each([
+    ['D:\\Windows', 'E:\\Windows', 'D:\\Windows'],
+    [undefined, 'E:\\Windows', 'E:\\Windows'],
+    ['', 'E:\\Windows', 'E:\\Windows'],
+    [undefined, undefined, 'C:\\Windows'],
+    ['', '', 'C:\\Windows'],
+  ])('resolves SystemRoot=%s before windir=%s then the fallback', async (systemRoot, windir, expected) => {
     vi.stubGlobal('process', { ...process, platform: 'win32' });
-    vi.stubEnv('SystemRoot', undefined);
+    vi.stubEnv('SystemRoot', systemRoot);
+    vi.stubEnv('windir', windir);
     vi.mocked(execFile).mockImplementation((...args: any[]) => {
       args[3](null, ''); return {} as ReturnType<typeof execFile>;
     });
     expect(await gameProcessIds()).toEqual([]);
-    expect(vi.mocked(execFile).mock.calls[0][0]).toBe('C:\\Windows\\System32\\tasklist.exe');
+    expect(vi.mocked(execFile).mock.calls[0][0]).toBe(expected + '\\System32\\tasklist.exe');
   });
 
 });

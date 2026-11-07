@@ -114,6 +114,24 @@ describe('AppController lifecycle', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('binds fresh PIDs when a restarted game connects during enumeration', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      const enumerate = vi.fn(async () => [123]);
+      deps.gameProcessIds = enumerate;
+      controller = make(); await controller.startProxy(); await drain();
+      let finish!: (pids: number[]) => void;
+      enumerate.mockImplementationOnce(() => new Promise<number[]>(resolve => { finish = resolve; }));
+      await vi.advanceTimersByTimeAsync(10_000);
+      hosts[0].emit('session', { id: 'restarted', remotePort: 123 });
+      finish([456]); await drain();
+      enumerate.mockResolvedValue([456]);
+      hosts[0].emit('closed', { id: 'restarted', by: 'game' });
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe('routed');
+    } finally { vi.useRealTimers(); }
+  });
+
   it('prioritizes an open session over a late empty process result', async () => {
     await controller.shutdown(); vi.useFakeTimers();
     try {

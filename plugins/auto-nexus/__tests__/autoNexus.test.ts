@@ -98,6 +98,15 @@ describe('Auto Nexus UI status', () => {
     expect(loader).toHaveBeenCalledTimes(failed + 1);
     expect(h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalogState: ready });
   });
+  it('does not sync an unchanged catalog retry', () => {
+    let now = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const f = fixture(undefined, true, { ok: false, reason: 'missing' });
+    const before = f.h.proxy.configured.length;
+    sendStatus(f);
+    now = 15_000; sendStatus(f);
+    expect(f.h.proxy.configured).toHaveLength(before);
+  });
   it('publishes only the sanitized fresh status shape', () => {
     vi.spyOn(performance, 'now').mockReturnValue(1000);
     const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');

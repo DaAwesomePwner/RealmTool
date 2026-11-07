@@ -192,7 +192,11 @@ export class AppController extends EventEmitter<ControllerEvents> {
       let pids: number[] | null;
       try { pids = await this.deps.gameProcessIds(); } catch { pids = null; }
       if (this.host !== host || this.current.proxy.state !== 'running') return;
-      if (this.sessions.size) { this.recordRoutedSession(); return; }
+      if (this.sessions.size) {
+        if (pids) this.observedPids = pids;
+        this.recordRoutedSession();
+        return;
+      }
       if (pids === null) {
         // Failed enumeration cannot disprove a previously observed session.
         if (this.current.game.routing !== 'routed') this.routing('unknown', 'Game process could not be checked');

@@ -59,6 +59,17 @@ describe('Auto Drink facade through the RealmTool host', () => {
     expect(f.loader).toHaveBeenCalledTimes(failed + 1);
     expect(f.config().items).toEqual([item]);
   });
+  it('does not sync an unchanged catalog retry', () => {
+    let now = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const f = fixture({ catalog: { ok: false, reason: 'missing' } }); f.ctx.enabled = true;
+    const client = f.connect();
+    const before = f.proxy.configured.length, reads = f.loader.mock.calls.length;
+    const send = () => f.workerMessage(client, 'auto-drink', { type: 'status', generation: 1, status: workerStatus });
+    send(); now = 15_000; send();
+    expect(f.loader).toHaveBeenCalledTimes(reads + 2);
+    expect(f.proxy.configured).toHaveLength(before);
+  });
   it('starts disabled before the enable callback, publishes strict defaults and an offline status', () => {
     const timer=vi.spyOn(globalThis,'setInterval');const f=fixture();
     expect(f.ctx.name).toBe('Auto Drink');expect(f.ctx.category).toBe('automation');expect(f.ctx.enabled).toBe(false);

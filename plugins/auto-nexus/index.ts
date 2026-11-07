@@ -178,7 +178,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     if (disposed || !message || typeof message !== 'object' || !('type' in message)) return;
     if (!loaded.ok && !awaitingVerification && performance.now() - lastMessageRetry >= 15_000) {
       lastMessageRetry = performance.now();
-      try { refreshCatalog(); sync(); } catch { /* Retry transient disk failures on a later message. */ }
+      try { if (refreshCatalog()) sync(); } catch { /* Retry transient disk failures on a later message. */ }
     }
     const event = message as AutoNexusEvent;
     if (event.type === 'status') {
