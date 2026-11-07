@@ -3,6 +3,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 export interface BackendInfo { port: number; token: string }
 
 /** The backend's AppState, imported type-only so the bundle carries no backend code. */
+export type { Protection, ProtectionReason, ProtectionState } from '../../src/app/protection.ts';
 export type { AppState } from '../../src/app/controller.ts';
 
 export async function backendInfo(): Promise<BackendInfo> {

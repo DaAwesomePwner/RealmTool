@@ -10,6 +10,8 @@ import { FakeProxy } from '../../testing/pluginHarness.ts';
 import { PLUGIN_API_VERSION, type PluginContext } from '../../plugins/api.ts';
 import { inspectHelper, installHelper, HELPER_FILE, BACKUP_FILE } from '../../game/helperInstaller.ts';
 import { LogRing } from '../../util/logStore.ts';
+import autoNexus, { register as registerAutoNexus } from '../../../plugins/auto-nexus/index.ts';
+import { SafetyEngine } from '../../safety/SafetyEngine.ts';
 import { log } from '../../util/log.ts';
 
 class FakeHost extends FakeProxy {
@@ -66,6 +68,164 @@ describe('AppController lifecycle', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  async function protectedSession() {
+    await controller.shutdown();
+    deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => selection('A');
+    deps.plugins = ['auto-nexus', 'auto-drink'].map(id => ({ id, name: id, apiVersion: PLUGIN_API_VERSION,
+      capabilities: [], register(ctx: PluginContext) { contexts.push(ctx); ctx.enabled = true;
+        ctx.setData('status', { protectionState: 'monitoring', collisionHp: 'on' }); } }));
+    controller = make(); await controller.startProxy(); await drain();
+    const host = hosts.at(-1)!;
+    host.emit('session', { id: 'game', remotePort: 123 });
+    host.emit('connected', { id: 'game', generation: 1 });
+    publishStatus('game'); await drain();
+    expect(controller.state().protection?.state).toBe('protected');
+    return host;
+  }
+  function publishStatus(clientId: string, protectionState = 'monitoring') {
+    const data = { clientId, protectionState, collisionHp: 'on', degraded: 'server-hp-stale' };
+    contexts.at(-2)!.setData('status', data); contexts.at(-2)!.broadcastData('status', data);
+  }
+  it('emits only changed protection and retains since when only reasons change', async () => {
+    const host = await protectedSession();
+    const changes = vi.fn(); controller.on('state', changes);
+    host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: 1 });
+    expect(controller.state().protection?.state).toBe('unprotected');
+    const since = controller.state().protection?.since;
+    changes.mockClear(); host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: 2 });
+    expect(changes).not.toHaveBeenCalled();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    host.emit('moduleConfig', { type: 'moduleConfig', moduleId: 'auto-nexus', ok: false, error: 'bad' });
+    expect(changes).toHaveBeenCalledOnce(); expect(controller.state().protection?.since).toBe(since);
+  });
+  it('logs a throwing state listener and delivers to later and once listeners', async () => {
+    const host = await protectedSession(), errors = vi.spyOn(log, 'error');
+    const throwing = () => { throw new Error('consumer failed'); }; controller.on('state', throwing);
+    const later = vi.fn(), once = vi.fn(); controller.on('state', later); controller.once('state', once);
+    expect(() => host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: 1 })).not.toThrow();
+    expect(() => host.emit('moduleConfig', { type: 'moduleConfig', moduleId: 'auto-nexus', ok: false, error: 'bad' })).not.toThrow();
+    expect(later).toHaveBeenCalledTimes(2); expect(once).toHaveBeenCalledOnce();
+    expect(errors).toHaveBeenCalledWith('Protection', 'State listener failed', expect.any(Error));
+    controller.off('state', throwing); errors.mockRestore();
+  });
+  it('recomputes plugin enabled and monitoring changes', async () => {
+    await protectedSession(); publishStatus('game', 'monitoring-degraded');
+    expect(controller.state().protection?.state).toBe('degraded');
+    contexts[0].enabled = false; expect(controller.state().protection?.reasons.some(r => r.code === 'nexus-disabled')).toBe(true);
+  });
+  it('resets modules on exit, restart and stop and detaches old listeners', async () => {
+    const host = await protectedSession();
+    host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: 4 });
+    host.emit('exit', { code: 1, expected: false }); await drain();
+    expect(controller.state().protection?.state).toBe('unprotected');
+    expect(controller.state().protection?.reasons.some(r => r.code === 'auto-nexus-failing')).toBe(false);
+    await controller.startProxy(); await drain();
+    hosts.at(-1)!.emit('session', { id: 'new', remotePort: 124 });
+    hosts.at(-1)!.emit('connected', { id: 'new', generation: 1 }); publishStatus('new'); await drain();
+    expect(controller.state().protection?.state).toBe('protected');
+    host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: 5 });
+    expect(controller.state().protection?.state).toBe('protected');
+    await controller.stopProxy(); expect(controller.state().protection?.state).toBe('idle');
+    expect(host.listenerCount('moduleStatus')).toBe(0); expect(host.listenerCount('moduleConfig')).toBe(0);
+  });
+  it('detects a running game at startup and polls while stopped until it closes', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let pids = [123]; deps.gameProcessIds = vi.fn(async () => pids);
+      controller = make(); await drain();
+      expect(controller.state().protection?.state).toBe('unprotected');
+      expect(controller.state().protection?.reasons[0].message).toBe('Game is running but the proxy is stopped');
+      pids = []; await vi.advanceTimersByTimeAsync(30_000);
+      expect(controller.state().protection?.state).toBe('idle');
+    } finally { vi.useRealTimers(); }
+  });
+  it('checks immediately after stop and then detects game exit without restarting', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let pids = [123]; deps.gameProcessIds = vi.fn(async () => pids);
+      controller = make(); await controller.startProxy(); await drain();
+      await controller.stopProxy(); expect(controller.state().protection?.state).toBe('unprotected');
+      pids = []; await vi.advanceTimersByTimeAsync(30_000);
+      expect(controller.state().protection?.state).toBe('idle');
+    } finally { vi.useRealTimers(); }
+  });
+  it('expires status per connected client and recovers on a fresh publication', async () => {
+    vi.useFakeTimers();
+    try {
+      const host = await protectedSession();
+      host.emit('session', { id: 'other', remotePort: 124 }); host.emit('connected', { id: 'other', generation: 1 });
+      publishStatus('other'); await vi.advanceTimersByTimeAsync(4_000); publishStatus('other');
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(controller.state().protection?.reasons.some(r => r.message === 'Auto Nexus status is stale')).toBe(true);
+      publishStatus('game'); expect(controller.state().protection?.state).toBe('protected');
+      publishStatus('game', 'monitoring-degraded'); publishStatus('other');
+      expect(controller.state().protection?.state).toBe('degraded');
+      host.emit('closed', { id: 'other', by: 'game' });
+      expect(controller.state().protection?.state).toBe('degraded');
+      publishStatus('other'); // Late status for a disconnected client cannot replace the remaining client.
+      expect(controller.state().protection?.state).toBe('degraded');
+      publishStatus('game'); expect(controller.state().protection?.state).toBe('protected');
+      host.emit('connected', { id: 'game', generation: 2 });
+      expect(controller.state().protection?.state).toBe('protected');
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(controller.state().protection?.state).toBe('degraded');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(controller.state().protection?.reasons.some(r => r.code === 'nexus-status-stale')).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  async function realNexusSession() {
+    await controller.shutdown();
+    deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => selection('A');
+    deps.plugins = [{ ...autoNexus, register: ctx => registerAutoNexus(ctx, () => ({ ok: true, path: 'fixture',
+      catalog: { schemaVersion: 1, gameBuild: 'A', source: { objectsSha256: 'a'.repeat(64), tilesSha256: 'b'.repeat(64) }, projectiles: [], tiles: [] } }), () => 'A') }];
+    controller = make(); await controller.startProxy(); await drain();
+    const host = hosts.at(-1)!;
+    const connect = (id: string) => { host.emit('session', { id, remotePort: 123 }); host.emit('connected', { id, generation: 1 }); };
+    const send = (id: string, generation = 1) => host.emit('module', { id, moduleId: 'auto-nexus', message: {
+      type: 'status', generation, sampledAt: performance.now(), collisionHp: 'on',
+      catalog: { state: 'ready', gameBuild: 'A', projectiles: 0, tiles: 0 },
+      status: { ...new SafetyEngine(() => {}).status(), enabled: true, protectionState: 'monitoring' },
+    } });
+    return { host, connect, send };
+  }
+  it('keeps two clients fresh through the real plugin coalescer', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const f = await realNexusSession(); f.connect('one'); f.connect('two'); await drain();
+      f.send('one'); f.send('two');
+      const states: string[] = []; controller.on('state', state => states.push(state.protection!.state));
+      // Match worker tick batches: both clients publish back to back every 50ms.
+      for (let tick = 0; tick < 140; tick++) {
+        await vi.advanceTimersByTimeAsync(50); f.send('one'); f.send('two');
+        expect(controller.state().protection?.state).toBe('protected');
+      }
+      expect(states).not.toContain('degraded');
+      f.host.emit('closed', { id: 'two', by: 'game' });
+      expect(controller.state().protection?.state).toBe('protected');
+      // A genuinely silent remaining client still expires.
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(controller.state().protection?.reasons.some(r => r.code === 'nexus-status-stale')).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+  it('does not transition or log during a normal reconnect awaiting throttled plugin status', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const records: string[] = [], remove = log.addSink(record => { if (record.module === 'Protection') records.push(record.message); });
+    try {
+      const f = await realNexusSession(); f.connect('one'); await drain(); f.send('one');
+      expect(controller.state().protection?.state).toBe('protected');
+      const since = controller.state().protection?.since;
+      const states: string[] = []; controller.on('state', state => states.push(state.protection!.state)); records.length = 0;
+      await vi.advanceTimersByTimeAsync(50);
+      f.host.emit('connected', { id: 'one', generation: 2 }); f.send('one', 2);
+      expect(controller.state().protection?.state).toBe('protected');
+      await vi.advanceTimersByTimeAsync(250);
+      expect(controller.state().protection?.state).toBe('protected');
+      expect(controller.state().protection?.since).toBe(since);
+      expect(states.every(state => state === 'protected')).toBe(true); expect(records).toEqual([]);
+    } finally { remove(); vi.useRealTimers(); }
+  });
+
   it('re-inspects helper on polls and sessions and detects missing routing with a grace period', async () => {
     await controller.shutdown(); vi.useFakeTimers();
     try {
@@ -78,7 +238,7 @@ describe('AppController lifecycle', () => {
       rmSync(join(game, HELPER_FILE));
       await vi.advanceTimersByTimeAsync(40_000);
       expect(controller.state().game.helper.state).toBe('absent');
-      expect(deps.gameProcessIds).toHaveBeenCalledTimes(7);
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(8); // Includes startup while stopped.
       writeFileSync(join(game, HELPER_FILE), 'RealmTool-Helper/current');
       hosts[0].emit('session', { id: 'game', remotePort: 123 });
       expect(controller.state().game).toMatchObject({ routing: 'routed', helper: { state: 'installed' } });
@@ -91,7 +251,7 @@ describe('AppController lifecycle', () => {
       const count = vi.mocked(deps.gameProcessIds!).mock.calls.length;
       await vi.advanceTimersByTimeAsync(60_000);
       expect(controller.state().game.routing).toBe('unknown');
-      expect(deps.gameProcessIds).toHaveBeenCalledTimes(count);
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(count + 2); // Stopped polling every 30 seconds.
     } finally { vi.useRealTimers(); }
   });
 
@@ -103,7 +263,7 @@ describe('AppController lifecycle', () => {
       controller = make(); await controller.startProxy(); await drain();
       hosts[0].emit('session', { id: 'game', remotePort: 123 });
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(deps.gameProcessIds).toHaveBeenCalledTimes(1); // No enumeration with open sessions.
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(2); // Startup and proxy start, none with open sessions.
       hosts[0].emit('closed', { id: 'game', by: 'game' });
       await vi.advanceTimersByTimeAsync(40_000);
       expect(controller.state().game.routing).toBe('routed');
@@ -143,7 +303,7 @@ describe('AppController lifecycle', () => {
       expect(controller.state().game.routing).toBe('routed');
       await vi.advanceTimersByTimeAsync(30_000);
       expect(controller.state().game.routing).toBe('routed');
-      expect(deps.gameProcessIds).toHaveBeenCalledTimes(1);
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(2);
     } finally { vi.useRealTimers(); }
   });
 

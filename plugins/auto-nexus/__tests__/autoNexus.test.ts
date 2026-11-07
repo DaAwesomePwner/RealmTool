@@ -135,6 +135,24 @@ describe('Auto Nexus UI status', () => {
     f.h.host.stop(); const stopped = publish.mock.calls.length; vi.advanceTimersByTime(1000);
     expect(publish).toHaveBeenCalledTimes(stopped);
   });
+  it('coalesces independently for two clients and only cancels the disconnected client', () => {
+    vi.useFakeTimers(); cleanups.push(() => vi.useRealTimers());
+    let now = 1000; vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const f = fixture(), other = f.h.connect('other'), publish = vi.spyOn(f.ctx, 'broadcastData');
+    sendStatus(f, 'on'); sendStatus(f, 'on', other);
+    expect(publish).toHaveBeenCalledTimes(2);
+    now = 1100; sendStatus(f, 'off'); sendStatus(f, 'fallback', other);
+    now = 1250; vi.advanceTimersByTime(250);
+    expect(publish.mock.calls.slice(2).map(([, data]) => data)).toEqual([
+      expect.objectContaining({ clientId: f.client, collisionHp: 'off' }),
+      expect.objectContaining({ clientId: other, collisionHp: 'fallback' }),
+    ]);
+    now = 1300; sendStatus(f, 'on'); sendStatus(f, 'on', other); f.h.close(f.client);
+    publish.mockClear(); now = 1500; vi.advanceTimersByTime(250);
+    expect(publish).toHaveBeenCalledExactlyOnceWith('status', expect.objectContaining({ clientId: other }));
+    now = 1550; sendStatus(f, 'off', other); f.h.host.stop(); publish.mockClear();
+    now = 2000; vi.advanceTimersByTime(1000); expect(publish).not.toHaveBeenCalled();
+  });
   it('does not publish stale, future, or older-generation samples', () => {
     let now = 4000; vi.spyOn(performance, 'now').mockImplementation(() => now);
     const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');

@@ -10,6 +10,9 @@ export class Readiness {
   readonly actions = el('div', undefined, 'controls');
   /** Proxy and request errors, shown above the tabs so they stay visible. */
   readonly notices = el('div', undefined, 'notices');
+  private readonly protectionItem = el('div', undefined, 'protection');
+  private readonly protectionValue = el('strong');
+  private readonly protectionReasons = el('ul', undefined, 'protection-reasons');
   private readonly error = el('p', '', 'error');
   private readonly requestError = el('p', '', 'error');
   private readonly folder = el('input');
@@ -30,6 +33,9 @@ export class Readiness {
   constructor(api: Pick<ApiClient, 'post'>, changed: () => void) {
     this.api = api; this.changed = changed;
     this.status.setAttribute('aria-live', 'polite');
+    this.protectionItem.dataset.key = 'protection';
+    this.protectionItem.append(el('span', 'Protection'), this.protectionValue);
+    this.status.append(this.protectionItem);
     this.launch = button('Launch', () => void this.run('/api/game/launch'));
     this.launch.className = 'primary';
     this.proxy = button('Start proxy', () => void this.run(`/api/proxy/${this.state?.proxy.state === 'running' ? 'stop' : 'start'}`));
@@ -49,14 +55,21 @@ export class Readiness {
     const helper = el('div', undefined, 'setup-row');
     helper.append(this.uninstall, el('p', 'Closing the window while the proxy runs hides RealmTool to the tray. Use tray Quit to exit. The helper stays installed until you uninstall it.', 'help'));
     this.error.setAttribute('role', 'alert'); this.requestError.setAttribute('role', 'alert');
-    this.notices.append(this.error, this.requestError);
+    this.notices.append(this.error, this.requestError, this.protectionReasons);
     this.element.append(el('h2', 'Game'), folderRow, options, el('h3', 'Game data'), data, el('h3', 'Helper'), helper);
     this.controls();
   }
 
   update(state: AppState): void {
     this.state = state;
-    this.status.replaceChildren();
+    for (const child of [...this.status.children]) if (child !== this.protectionItem) child.remove();
+    const protection = state.protection;
+    this.protectionItem.dataset.value = protection?.state ?? 'unknown';
+    const labels = { idle: 'Idle', protected: 'Protected', degraded: 'Degraded', unprotected: 'Not protected' };
+    const value = protection ? labels[protection.state] : 'Unknown';
+    if (this.protectionValue.textContent !== value) this.protectionValue.textContent = value;
+    this.protectionReasons.replaceChildren(...(protection?.reasons ?? []).filter(r => r.severity !== 'info').map(reason => el('li', reason.message)));
+
     for (const [label, value] of [
       ['Proxy', state.proxy.state], ['Helper', state.game.helper.state],
       ['Sessions', `${state.sessions.connected} connected / ${state.sessions.open} open`],
