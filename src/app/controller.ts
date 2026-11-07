@@ -1,3 +1,4 @@
+import { isGameRunning } from '../game/gameProcess.ts';
 import { readGameFileStamps, readCatalogSourceSync, sameGameFiles, type CatalogSource } from '../data/catalogSource.ts';
 import { readGameBuildAsync } from '../game/gameBuild.ts';
 import { loadConsumables } from '../data/consumables.ts';
@@ -30,6 +31,12 @@ export interface AppState {
   data: DataState;
   proxy: { state: ProxyState; port: number | null; error: string | null };
   game: { dir: string | null; candidates: string[]; launcher: string | null;
+    /** Observed proxy participation, not a protection guarantee. Always emitted by the controller; optional for older state producers. */
+    routing?: 'unknown' | 'routed' | 'not-routed';
+    /** Explanation of the current routing observation. */
+    routingReason?: string;
+    /** Unix milliseconds when routing state/reason last changed. */
+    routingUpdatedAt?: number;
     helper: { state: HelperState | 'unknown'; backup: boolean } };
   /** Sessions with an upstream connection; never implies the helper DLL is loaded. */
   sessions: { open: number; connected: number };
@@ -45,6 +52,7 @@ interface CatalogSelection {
   source?: CatalogSource | null;
 }
 export interface ControllerDeps {
+  isGameRunning(): Promise<boolean | null>;
   readGameBuild: typeof readGameBuildAsync;
   catalogBuilds(gameBuild: string): CatalogSelection;
   readGameFileStamps: typeof readGameFileStamps;
@@ -85,6 +93,9 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private dataAbort: AbortController | null = null;
   private dataFlight: Promise<RefreshResult | null> | null = null;
   private dataTimer: ReturnType<typeof setInterval> | null = null;
+  private routingTimer: ReturnType<typeof setInterval> | null = null;
+  private routingFlight: Promise<void> | null = null;
+  private unroutedSince: number | null = null;
   private catalogBuilds: CatalogSelection | null = null;
   private catalogsInvalidated = false;
   private waitingBuilds = new Set<string>();
@@ -94,7 +105,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     super();
     this.config = options.config; this.resources = options.resources; this.fallback = options.fallback;
     this.deps = {
-      readGameBuild: readGameBuildAsync, readGameFileStamps, refreshCatalogs,
+      isGameRunning, readGameBuild: readGameBuildAsync, readGameFileStamps, refreshCatalogs,
       catalogBuilds: gameBuild => {
         const options = { appDataDir: this.config.dir, gameBuild };
         const consumables = loadConsumables({ ...options, bundledPath: join(this.resources.dataDir, 'catalogs/consumables.json') });
@@ -123,7 +134,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.current = {
       data: { state: 'idle', gameBuild: null, catalogBuild: null, lastResult: null, error: null },
       proxy: { state: 'stopped', port: null, error: null },
-      game: { dir: config.gameDir ?? candidates[0] ?? null, candidates, launcher: config.launcher, helper: { state: 'unknown', backup: false } },
+      game: { dir: config.gameDir ?? candidates[0] ?? null, candidates, launcher: config.launcher, routing: 'unknown', routingReason: 'Proxy is stopped', routingUpdatedAt: Date.now(), helper: { state: 'unknown', backup: false } },
       sessions: { open: 0, connected: 0 }, profile: { active: config.activeProfile, available: listProfiles(this.config.dir) },
       operation: null, revision: 0,
     };
@@ -137,6 +148,32 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private refreshHelper(): void {
     try { this.current.game.helper = this.current.game.dir ? this.deps.inspectHelper(this.current.game.dir, this.resources.helperDll) : { state: 'unknown', backup: false }; }
     catch { this.current.game.helper = { state: 'unknown', backup: false }; }
+  }
+  private routing(state: NonNullable<AppState['game']['routing']>, reason: string): void {
+    if (this.current.game.routing === state && this.current.game.routingReason === reason) return;
+    Object.assign(this.current.game, { routing: state, routingReason: reason, routingUpdatedAt: Date.now() });
+    this.changed();
+  }
+  private checkRouting(): void {
+    if (this.routingFlight || this.current.proxy.state !== 'running') return;
+    const host = this.host;
+    this.routingFlight = (async () => {
+      let running: boolean | null;
+      try { running = await this.deps.isGameRunning(); } catch { running = null; }
+      if (this.host !== host || this.current.proxy.state !== 'running') return;
+      if (running === false || (running === null && !this.sessions.size)) {
+        this.unroutedSince = null;
+        this.routing('unknown', running === false ? 'Game is not running' : 'Game process could not be checked');
+      } else if (this.sessions.size) {
+        this.unroutedSince = null;
+        this.routing('routed', 'Game session observed through the proxy');
+      } else {
+        this.unroutedSince ??= Date.now();
+        if (Date.now() - this.unroutedSince > 15_000) {
+          this.routing('not-routed', 'Game is running without a proxy session; restart the game to load the helper');
+        } else this.routing('unknown', 'Waiting for a game session');
+      }
+    })().finally(() => { this.routingFlight = null; });
   }
   private refreshProfiles(): void {
     this.current.profile = { active: this.config.get().activeProfile, available: listProfiles(this.config.dir) };
@@ -290,7 +327,6 @@ export class AppController extends EventEmitter<ControllerEvents> {
       const stale = removeStaleTargetFiles();
       if (stale) log.info('Helper', `Removed ${stale} stale target file(s)`);
       this.catalogBuilds = null;
-      await this.automaticDataCheck();
       if (this.shuttingDown) return;
       stage = 'Proxy';
       const schema = loadSchema(pathToFileURL(this.resources.dataDir + sep));
@@ -311,7 +347,11 @@ export class AppController extends EventEmitter<ControllerEvents> {
       log.info('Proxy', `Listening on 127.0.0.1:${port}`);
       stage = 'Helper'; this.install(gameDir);
       this.current.proxy = { state: 'running', port, error: null }; this.changed();
-      this.dataTimer = setInterval(() => { void this.automaticDataCheck(); }, 60_000);
+      void this.automaticDataCheck();
+      this.checkRouting();
+      this.routingTimer = setInterval(() => this.checkRouting(), 10_000);
+      this.routingTimer.unref();
+      this.dataTimer = setInterval(() => { this.refreshHelper(); this.changed(); void this.automaticDataCheck(); }, 60_000);
       this.dataTimer.unref();
     } catch (error) {
       log.error(stage, message(error));
@@ -324,6 +364,9 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private watchHost(host: ReturnType<ControllerDeps['createHost']>): void {
     // Retain exact listener references so an old worker cannot affect a subsequent start.
     const onSession = ({ id, remotePort }: { id: string; remotePort: number }) => {
+      this.refreshHelper();
+      this.unroutedSince = null;
+      this.routing('routed', 'Game session observed through the proxy');
       void this.automaticDataCheck();
       this.sessions.add(id); this.sessionState(); log.info('Proxy', `Game connected (${id.slice(0, 8)}, port ${remotePort})`);
     };
@@ -363,6 +406,10 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.current.sessions = { open: this.sessions.size, connected: this.connected.size }; this.changed();
   }
   private async cleanup(): Promise<void> {
+    if (this.routingTimer) clearInterval(this.routingTimer);
+    this.routingTimer = null;
+    this.unroutedSince = null;
+    this.routing('unknown', 'Proxy is stopped');
     this.dataAbort?.abort(new Error('Game data refresh cancelled'));
     await this.dataFlight?.catch(() => {});
     if (this.dataTimer) clearInterval(this.dataTimer);

@@ -13,6 +13,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   ctx.category = 'automation';
   ctx.enabled = false;
   let disposed = false;
+  let awaitingVerification = false;
   function readCatalog() {
     let gameBuild: string | undefined, buildError: unknown;
     try { if (ctx.gameDir) gameBuild = buildReader(ctx.gameDir); } catch (error) { buildError = error; }
@@ -51,7 +52,11 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   }
   publish(displayed, null);
   function refreshCatalog(): boolean {
-    const next = catalogForInstalledBuild(catalog, ctx.gameDir, buildReader);
+    if (awaitingVerification) return false;
+    // A failed reload must not pin the invalidation placeholder for this lifetime.
+    const retry = !loaded.ok ? readCatalog() : null;
+    if (retry) catalog = retry.catalog;
+    const next = retry?.loaded ?? catalogForInstalledBuild(catalog, ctx.gameDir, buildReader);
     if (next.ok === loaded.ok && (next.ok || (!loaded.ok && next.reason === loaded.reason))) return false;
     loaded = next;
     logCatalog();
@@ -59,6 +64,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     return true;
   }
   ctx.onDataInvalidated(reason => {
+    awaitingVerification = true;
     if (disposed || (!catalog.ok && catalog.reason === reason)) return;
     catalog = loaded = { ok: false, reason };
     sync();
@@ -66,6 +72,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   });
   ctx.onDataRefreshed(() => {
     if (disposed) return;
+    awaitingVerification = false;
     const { catalog: candidate, loaded: next } = readCatalog();
     if (!next.ok) throw new Error(next.reason);
     const previous = catalog, previousLoaded = loaded;

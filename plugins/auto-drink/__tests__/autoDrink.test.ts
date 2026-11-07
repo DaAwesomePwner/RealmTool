@@ -29,6 +29,16 @@ describe('Auto Drink facade through the RealmTool host', () => {
     f.loader.mockImplementation(() => { throw new Error('fixture reload failure'); }); f.host.notifyDataRefreshed();
     expect(f.config()).toBe(before);
   });
+  it('retries a thrown reload on the next session', () => {
+    const f = fixture(); f.ctx.enabled = true;
+    f.host.notifyDataInvalidated('stale');
+    f.loader.mockReturnValue({ ok: false, reason: 'transient failure' });
+    f.host.notifyDataRefreshed();
+    expect(records.some(r => r.message.includes('Catalog reload failed'))).toBe(true);
+    expect(f.config().items).toEqual([]);
+    f.loader.mockReturnValue(catalog); f.connect();
+    expect(f.config().items).toEqual([item]);
+  });
   it('starts disabled before the enable callback, publishes strict defaults and an offline status', () => {
     const timer=vi.spyOn(globalThis,'setInterval');const f=fixture();
     expect(f.ctx.name).toBe('Auto Drink');expect(f.ctx.category).toBe('automation');expect(f.ctx.enabled).toBe(false);
@@ -127,7 +137,8 @@ describe('Auto Drink facade through the RealmTool host', () => {
     expect(f.config().items).toEqual([item]);
     expect(f.data().reason).toBe(workerStatus.reason);
     expect(records.at(-1)?.message).toBe('Loaded 1 verified restorative consumables (game build test-build).');
-    expect(f.loader).toHaveBeenCalledTimes(1);
+    // Fallback connections now re-read disk so transient reload failures can recover.
+    expect(f.loader).toHaveBeenCalledTimes(3);
   });
   it('rechecks on enable after a connection arrived while the host gated disabled plugin events', () => {
     let build = 'test-build';

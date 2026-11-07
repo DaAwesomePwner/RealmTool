@@ -57,6 +57,21 @@ describe('Auto Nexus UI status', () => {
     loaded = { ok: false, reason: 'invalid replacement' }; h.host.notifyDataRefreshed();
     expect(h.proxy.configured).toHaveLength(count);
   });
+  it('retries a thrown reload on the next session', () => {
+    let loaded: SafetyCatalogLoad = catalog;
+    const dir = mkdtempSync(join(tmpdir(), 'realmtool-retry-'));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const h = startHost([{ ...plugin, register: ctx => register(ctx, () => loaded, () => 'A') }],
+      { profileDir: dir, gameDir: 'fixture' });
+    cleanups.push(() => h.host.stop());
+    h.host.notifyDataInvalidated('stale');
+    loaded = { ok: false, reason: 'transient failure' };
+    h.host.notifyDataRefreshed();
+    expect(records.some(r => r.message.includes('Catalog reload failed'))).toBe(true);
+    expect(h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalog: null });
+    loaded = catalog; h.connect();
+    expect(h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalogState: ready });
+  });
   it('publishes only the sanitized fresh status shape', () => {
     vi.spyOn(performance, 'now').mockReturnValue(1000);
     const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');
