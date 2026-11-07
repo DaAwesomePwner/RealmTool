@@ -7,8 +7,8 @@ import type { Packet } from '../protocol/Packet.ts';
 import type { PacketFactory } from '../protocol/PacketFactory.ts';
 import type { Destination, Router } from '../routing/router.ts';
 import { describeHello, describeReconnect } from '../routing/describeRoute.ts';
-import type { Interest } from './interest.ts';
-import type { CloseSide, WorkerEvent } from './messages.ts';
+import { isCriticalPacket, type Interest } from './interest.ts';
+import { VERDICT_DEADLINE_MS, type CloseSide, type WorkerEvent } from './messages.ts';
 import type { HeldPacket, PendingDelivery, TransportState, WorkerModule, WorkerSessionContext, WorkerSessionModule, WriteKind } from './modules.ts';
 import { SessionAutomation } from './automation.ts';
 import { SessionTrace } from './trace.ts';
@@ -27,6 +27,8 @@ export interface SessionEnv {
   helloTimeoutMs: number;
   /** Limit for verdicts, pre-connect traffic, and each socket's output queue before faulting. */
   maxPendingBytes: number;
+  /** Maximum main-thread verdict wait; defaults to VERDICT_DEADLINE_MS. */
+  verdictDeadlineMs?: number;
   onClosed(id: string): void;
 }
 
@@ -43,6 +45,8 @@ interface Pending {
   receivedAt: number;
   generation: number;
   bytes: number;
+  original: Buffer;
+  deadline: number;
   /** undefined = awaiting a verdict; null = drop; Buffer = write these bytes. */
   result?: Buffer | null;
 }
@@ -100,6 +104,8 @@ export class Session {
   private observations = 0;
   private writeTokens = 0;
   private pendingBytes = 0;
+  private expiredVerdicts = 0;
+  private lastExpiryDiagnostic = -Infinity;
   private beforeConnect: Queued[] = [];
   private beforeConnectBytes = 0;
   private closed = false;
@@ -138,6 +144,8 @@ export class Session {
   forward(sequence: number, generation: number, data: Buffer | null): void {
     const pending = this.pending.get(sequence);
     if (!pending || pending.generation !== generation || pending.result !== undefined) return;
+    if (this.env.now() >= pending.deadline) this.expireVerdicts(this.env.now());
+    if (pending.result !== undefined) return;
     pending.result = data;
     this.flush(pending.observation.fromClient);
   }
@@ -154,6 +162,7 @@ export class Session {
   tick(now: number): void {
     if (this.closed) return;
     for (const module of this.modules) this.call(module, 'tick', () => module.hooks.tick?.(now), undefined);
+    if (!this.closed) this.expireVerdicts(now);
   }
 
   close(by: CloseSide = 'proxy'): void {
@@ -300,9 +309,19 @@ export class Session {
       }
       if (this.closed) return;
     }
+    if (isCriticalPacket(name, fromClient)) {
+      for (const pending of this.pending.values()) {
+        if (pending.observation.fromClient === fromClient && pending.result === undefined) {
+          pending.result = pending.original;
+        }
+      }
+      this.flush(fromClient);
+      if (this.closed) return;
+    }
     const kind = this.env.interest.classify(name, fromClient);
     const sequence = ++this.sequence;
     this.pending.set(sequence, { observation: { id: observationId, name, fromClient }, receivedAt: now, generation: this.generation,
+      original: frame, deadline: now + (this.env.verdictDeadlineMs ?? VERDICT_DEADLINE_MS),
       bytes: frame.length, result: kind === 'verdict' ? undefined : frame });
     (fromClient ? this.clientOrder : this.serverOrder).push(sequence);
     this.pendingBytes += frame.length;
@@ -314,6 +333,26 @@ export class Session {
       this.env.post({ type: 'packet', id: this.id, sequence, generation: this.generation, fromClient, observeOnly: kind === 'observe', data: frame });
     }
     if (kind !== 'verdict') this.flush(fromClient);
+  }
+
+  private expireVerdicts(now: number): void {
+    let client = false;
+    let server = false;
+    for (const pending of this.pending.values()) {
+      if (pending.result !== undefined || now < pending.deadline) continue;
+      pending.result = pending.original;
+      ++this.expiredVerdicts;
+      if (pending.observation.fromClient) client = true;
+      else server = true;
+    }
+    if (client) this.flush(true);
+    if (server) this.flush(false);
+    if (this.expiredVerdicts > 0 && now - this.lastExpiryDiagnostic >= 5000) {
+      this.env.post({ type: 'diagnostic', id: this.id,
+        message: `Plugin verdict deadlines expired: ${this.expiredVerdicts}; released original packets` });
+      this.expiredVerdicts = 0;
+      this.lastExpiryDiagnostic = now;
+    }
   }
 
   private routeHello(frame: Buffer): void {

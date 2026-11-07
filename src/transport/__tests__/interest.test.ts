@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { Interest } from '../interest.ts';
 
 describe('Interest', () => {
+  it.each([['RECONNECT', false], ['DEATH', false], ['MAPINFO', false], ['ESCAPE', true]] as const)(
+    'downgrades critical %s verdict interest to observe', (name, fromClient) => {
+      const interest = new Interest();
+      expect(interest.classify(name, fromClient)).toBe('none');
+      interest.set({ verdict: { [fromClient ? 'client' : 'server']: [name] } });
+      expect(interest.classify(name, fromClient)).toBe('observe');
+    });
+
   it('classifies per direction, with verdict winning over observe', () => {
     const interest = new Interest({
       verdict: { server: ['TEXT'], client: ['ENEMYHIT'] },
