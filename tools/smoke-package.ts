@@ -91,13 +91,13 @@ async function smoke(): Promise<void> {
     }
     const plugins = await request<PluginSnapshot[]>('/api/plugins');
     assert.equal(state.game.helper.state, 'installed');
-    assert.equal(plugins.length, 6);
+    assert.equal(plugins.length, 7);
     assert.ok(plugins.every(plugin => plugin.failed === null), 'A built-in failed to load');
     assert.deepEqual(await request('/api/shutdown', true), { ok: true });
     await waitFor(() => exited, 'sidecar exit');
     assert.equal(await exit, 0);
     assert.equal(output.trim().split(/\r?\n/).length, 1, 'Unexpected stdout beyond READY');
-    console.log('package smoke ok: fake game, running proxy, six built-ins, clean shutdown');
+    console.log('package smoke ok: fake game, running proxy, seven built-ins, clean shutdown');
   } finally {
     if (!exited) {
       child.stdin.end();

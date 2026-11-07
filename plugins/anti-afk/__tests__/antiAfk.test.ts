@@ -144,5 +144,5 @@ it('validates the sole setting and registers last', () => {
   expect([0, 99, 4.7].map(v => validate('idleMinutes', v))).toEqual([1, 15, 4]);
   for (const v of ['5', null, NaN, Infinity, {}]) expect(() => validate('idleMinutes', v)).toThrow(TypeError);
   expect(() => validate('method', 5)).toThrow('Invalid Anti-AFK method');
-  expect(BUILTIN_PLUGINS).toHaveLength(6); expect(BUILTIN_PLUGINS.at(-1)?.id).toBe('anti-afk');
+  expect(BUILTIN_PLUGINS).toHaveLength(7); expect(BUILTIN_PLUGINS.at(-1)?.id).toBe('anti-afk');
 });
