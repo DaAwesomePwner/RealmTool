@@ -8,7 +8,7 @@ import { Interest } from './interest.ts';
 import type { WorkerCommand, WorkerEvent, WorkerInit } from './messages.ts';
 import { Session, type SessionEnv } from './session.ts';
 import { WORKER_MODULES } from './workerModules.ts';
-import { configureWorkerModule, guardWorkerCall, tickSessions } from './workerGuard.ts';
+import { ModuleDiagnosticLimiter, configureWorkerModule, guardWorkerCall, tickSessions } from './workerGuard.ts';
 
 const TICK_MS = 8;
 const init = workerData as WorkerInit;
@@ -32,11 +32,13 @@ if (init.host !== '127.0.0.1') {
   configureModules(init.moduleConfig);
 
   const sessions = new Map<string, Session>();
+  const moduleDiagnostics = new ModuleDiagnosticLimiter(post);
   const env: SessionEnv = {
     factory: new PacketFactory(init.definitions, init.stats, true),
     router: new Router({ loopbackPort: init.port }),
     interest: new Interest(init.interest),
     modules: WORKER_MODULES,
+    moduleDiagnostics,
     post,
     now: () => performance.now(),
     fallbackDestination: init.fallbackDestination,
@@ -64,6 +66,7 @@ if (init.host !== '127.0.0.1') {
   const timer = setInterval(() => {
     const now = performance.now();
     tickSessions(sessions.values(), now, post);
+    moduleDiagnostics.flush(now);
   }, TICK_MS);
 
   port.on('message', (command: WorkerCommand) => guardWorkerCall(post, `Worker command ${command.type}`, () => {

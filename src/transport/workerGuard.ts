@@ -28,6 +28,52 @@ export function configureWorkerModule(module: WorkerModule | undefined, moduleId
   post({ type: 'moduleConfig', moduleId, ok: true });
 }
 
+interface DiagnosticEntry {
+  moduleId: string;
+  hook: ModuleHealthEvent['hook'];
+  failures: number;
+  lastError: string;
+  reportedAt: number;
+}
+
+/** Shared by every session in a worker; reconnects cannot reset the log budget. */
+export class ModuleDiagnosticLimiter {
+  private readonly post: (event: WorkerEvent) => void;
+  private readonly entries = new Map<string, Map<ModuleHealthEvent['hook'], DiagnosticEntry>>();
+  private pending = 0;
+
+  constructor(post: (event: WorkerEvent) => void) { this.post = post; }
+
+  record(report: ModuleHealthEvent, now: number, immediate: boolean): void {
+    let hooks = this.entries.get(report.moduleId);
+    if (!hooks) { hooks = new Map(); this.entries.set(report.moduleId, hooks); }
+    let entry = hooks.get(report.hook);
+    if (!entry) {
+      entry = { moduleId: report.moduleId, hook: report.hook, failures: 0, lastError: '', reportedAt: -Infinity };
+      hooks.set(report.hook, entry);
+    }
+    if (!entry.failures) this.pending++;
+    entry.failures += report.failures;
+    entry.lastError = report.lastError;
+    if (immediate && now - entry.reportedAt >= MODULE_FAILURE_REPORT_MS) this.report(entry, now);
+  }
+
+  flush(now: number): void {
+    if (!this.pending) return;
+    for (const hooks of this.entries.values()) for (const entry of hooks.values()) {
+      if (entry.failures && now - entry.reportedAt >= MODULE_FAILURE_REPORT_MS) this.report(entry, now);
+    }
+  }
+
+  private report(entry: DiagnosticEntry, now: number): void {
+    this.post({ type: 'diagnostic',
+      message: `Worker module ${entry.moduleId}.${entry.hook} failed: ${entry.lastError} (${entry.failures} ${entry.failures === 1 ? 'failure' : 'failures'})` });
+    entry.failures = 0;
+    entry.reportedAt = now;
+    this.pending--;
+  }
+}
+
 /** One tracker per session. Successful hooks never touch or allocate failure state. */
 export class ModuleFailures {
   private readonly id: string;
@@ -36,9 +82,15 @@ export class ModuleFailures {
     report: ModuleHealthEvent; reportedAt: number;
   }>>();
 
-  constructor(id: string, post: (event: WorkerEvent) => void) {
+  private pending = 0;
+  private readonly diagnostics: ModuleDiagnosticLimiter;
+  private readonly ownsDiagnostics: boolean;
+
+  constructor(id: string, post: (event: WorkerEvent) => void, diagnostics?: ModuleDiagnosticLimiter) {
     this.id = id;
     this.post = post;
+    this.diagnostics = diagnostics ?? new ModuleDiagnosticLimiter(post);
+    this.ownsDiagnostics = !diagnostics;
   }
 
   record(moduleId: string, hook: ModuleHealthEvent['hook'], error: unknown, now: number): void {
@@ -51,7 +103,7 @@ export class ModuleFailures {
       hooks.set(hook, entry);
     }
     const report = entry.report;
-    if (!report.failures) report.since = now;
+    if (!report.failures) { report.since = now; this.pending++; }
     report.failures++;
     report.lastError = describeError(error);
     report.at = now;
@@ -60,6 +112,8 @@ export class ModuleFailures {
 
   /** Flush trailing counts on ticks; closing flushes health only, preserving the diagnostic limit. */
   flush(now: number, closing = false): void {
+    if (this.ownsDiagnostics && !closing) this.diagnostics.flush(now);
+    if (!this.pending) return;
     for (const hooks of this.entries.values()) for (const entry of hooks.values()) {
       if (entry.report.failures && (closing || now - entry.reportedAt >= MODULE_FAILURE_REPORT_MS)) {
         this.report(entry, now, !closing);
@@ -70,8 +124,8 @@ export class ModuleFailures {
   private report(entry: { report: ModuleHealthEvent; reportedAt: number }, now: number, diagnostic: boolean): void {
     const report = entry.report;
     this.post({ ...report });
-    if (diagnostic) this.post({ type: 'diagnostic', id: this.id,
-      message: `Worker module ${report.moduleId}.${report.hook} failed: ${report.lastError} (${report.failures} failures)` });
+    this.diagnostics.record(report, now, diagnostic);
+    this.pending--;
     report.failures = 0;
     entry.reportedAt = now;
   }

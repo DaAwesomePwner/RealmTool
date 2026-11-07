@@ -1,5 +1,5 @@
 import net from 'node:net';
-import { ModuleFailures } from './workerGuard.ts';
+import { ModuleFailures, type ModuleDiagnosticLimiter } from './workerGuard.ts';
 import { RC4_KEYS } from '../protocol/constants.ts';
 import { FrameDecoder, isWholeFrame } from '../protocol/frames.ts';
 import { RC4Cipher } from '../protocol/RC4Cipher.ts';
@@ -18,6 +18,8 @@ export interface SessionEnv {
   router: Router;
   interest: Interest;
   modules: readonly WorkerModule[];
+  /** Worker-wide diagnostic budget shared across all sessions. */
+  moduleDiagnostics?: ModuleDiagnosticLimiter;
   post(event: WorkerEvent): void;
   now(): number;
   fallbackDestination: Destination | null;
@@ -116,7 +118,7 @@ export class Session {
     this.id = id;
     this.client = client;
     this.env = env;
-    this.failures = new ModuleFailures(id, event => env.post(event));
+    this.failures = new ModuleFailures(id, event => env.post(event), env.moduleDiagnostics);
     this.trace = new SessionTrace(env.now());
     this.modules = [...env.modules].sort((a, b) => a.priority - b.priority).map(module => ({
       id: module.id,

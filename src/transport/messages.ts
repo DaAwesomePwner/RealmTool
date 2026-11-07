@@ -8,7 +8,7 @@ export const VERDICT_DEADLINE_MS = 250;
 export const MODULE_FAILURE_REPORT_MS = 5000;
 export const MODULE_HEALTH_QUIET_MS = 30_000;
 
-/** Incremental failure report. Timestamps use the process-wide performance.now() clock. */
+/** Incremental failure report. Timestamps use the worker's performance.now() clock. */
 export interface ModuleHealthEvent {
   type: 'moduleHealth';
   id: string;

@@ -115,6 +115,19 @@ describe('ProxyHost', () => {
     expect(host.getModuleConfigState('a')).toEqual({ status: 'accepted' });
   });
 
+  it.each(['init', 'single', 'batch'] as const)('nacks an unknown module in %s configuration', async mode => {
+    const { host, diagnostics } = moduleHost(mode === 'init' ? { missing: {} } : {});
+    const events: ModuleConfigEvent[] = [];
+    host.on('moduleConfig', event => events.push(event));
+    await host.start();
+    if (mode === 'single') host.configureModule('missing', {});
+    if (mode === 'batch') host.configureModules({ missing: {} });
+    await until(() => diagnostics.length === 1, 'unknown module rejection');
+    expect(events).toEqual([{ type: 'moduleConfig', moduleId: 'missing', ok: false, error: 'Unknown worker module' }]);
+    expect(diagnostics).toEqual(['module missing rejected its configuration: Unknown worker module']);
+    expect(host.getModuleConfigState('missing')).toEqual({ status: 'rejected', error: 'Unknown worker module' });
+  });
+
   it('runs sessions in the worker thread and supplies helper targets from the main thread', async () => {
     const server = new FakeServer();
     await server.listen();
