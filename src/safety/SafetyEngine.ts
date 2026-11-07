@@ -12,6 +12,8 @@ import {
   type SafetyDecisionEvidence, type ProtectionState, type EscapeWriteReceipt,
 } from './SafetyTypes.ts';
 
+export const SERVER_HP_STALE_MS = 3000;
+
 interface Shot {
   id: string; at: number; expires: number; raw: number; def?: SafetyProjectileDef; ambiguous: boolean;
   owner: number; ownerType?: number; bulletType: number;
@@ -46,7 +48,10 @@ export class SafetyEngine {
   epoch = 0;
   private terminal: 'dead' | 'transition' | null = null;
   map = '';
-  private safe = true;
+  private safe = false;
+  private mapUnreadable = false;
+  private hpStreamUnreadable = false;
+  private streamStartedAt = 0;
   private lastServerAt: number | null = null;
   private lastHpAt: number | null = null;
   // An HP-less delta proves HP unchanged only while every server HP carrier since the anchor was read.
@@ -85,10 +90,12 @@ export class SafetyEngine {
     this.tileDamage = new Map(catalog.tiles);
   }
 
-  reset(map = this.map): void {
+  reset(map = this.map, mapUnreadable = this.mapUnreadable): void {
     this.attempts.reset(++this.epoch); // Invalidate ownership BEFORE processing map/state.
     this.map = typeof map === 'string' ? map : '';
-    this.safe = !this.map.trim() || SAFE_MAPS.has(this.map.trim().toLowerCase());
+    this.safe = !!this.map.trim() && SAFE_MAPS.has(this.map.trim().toLowerCase());
+    this.mapUnreadable = mapUnreadable;
+    this.hpStreamUnreadable = false; this.streamStartedAt = this.latestNow;
     this.player = new ServerPlayerState(); this.predictor.reset();
     this.predictionOccurrences.clear(); this.predictionSignatures.clear(); this.unresolvedOccurrences.clear();
     this.unresolvedSerial = 0; this.damageBasisRevision = 0; this.damageBasisAt = null;
@@ -98,7 +105,7 @@ export class SafetyEngine {
   }
 
   connectionChanged(generation: number): void {
-    this.attempts.replaceConnection(generation); this.terminal = null; this.reset('');
+    this.attempts.replaceConnection(generation); this.terminal = null; this.reset('', false);
   }
   confirmTransition(now: number): void {
     if (this.terminal === 'dead') return;
@@ -111,7 +118,8 @@ export class SafetyEngine {
     const fromClient = packet.direction === 'client';
     // Even unreadable map/character packets retire the old lifecycle.
     if (!fromClient && packet.name === 'MAPINFO') {
-      this.reset(packet.isDefined ? packet.data.name ?? '' : ''); return;
+      this.reset(packet.isDefined ? packet.data.name ?? '' : '',
+        !packet.isDefined || typeof packet.data.name !== 'string' || !packet.data.name.trim()); return;
     }
     if (!fromClient && packet.name === 'CREATESUCCESS') {
       this.reset();
@@ -124,7 +132,9 @@ export class SafetyEngine {
       return;
     }
     if (!packet.isDefined) {
-      if (!fromClient && ['NEWTICK', 'UPDATE'].includes(packet.name)) this.hpAnchorContinuous = false;
+      if (!fromClient && ['NEWTICK', 'UPDATE'].includes(packet.name)) {
+        this.hpAnchorContinuous = false; this.hpStreamUnreadable = true;
+      }
       if (!fromClient && ['NEWTICK', 'UPDATE', 'DAMAGE'].includes(packet.name)) this.uncertain(now, `unreadable ${packet.name}`);
       return;
     }
@@ -140,13 +150,16 @@ export class SafetyEngine {
       for (const entity of d.newObjs ?? []) {
         if (!entity.status) continue;
         this.types.set(entity.status.objectId, entity.objectType);
+        if (this.player.ownerObjectId !== 0 && entity.status.objectId === this.player.ownerObjectId) {
+          this.lastServerAt = now; this.hpStreamUnreadable = false;
+        }
         this.applyStatus(entity.status, now, true);
       }
       for (const id of d.drops ?? []) this.types.delete(id);
     }
     if (packet.name === 'NEWTICK') {
       if (!Number.isInteger(d.tickId) || d.tickId <= this.lastTick) return;
-      this.lastTick = d.tickId; this.lastServerAt = now;
+      this.lastTick = d.tickId; this.lastServerAt = now; this.hpStreamUnreadable = false;
       this.predictor.timing(now, d.serverLastRttMs);
       const hasOwnerHp = (d.statuses ?? []).some((status: Parameters<ServerPlayerState['applyStatus']>[0]) =>
         status.objectId === this.player.ownerObjectId && Array.isArray(status.data) && status.data.some(s => s?.id === 1));
@@ -363,11 +376,19 @@ export class SafetyEngine {
   get phase(): EscapePhase {
     return this.terminal ?? this.attempts.status?.phase ?? (this.map.trim().toLowerCase() === 'nexus' ? 'nexus' : 'armed');
   }
+  get degraded(): SafetyStatus['degraded'] {
+    if (!this.monitoringReady) return null;
+    if (this.mapUnreadable) return 'map-unreadable';
+    if (this.hpStreamUnreadable) return 'hp-stream-unreadable';
+    return this.latestNow - (this.lastServerAt ?? this.streamStartedAt) > SERVER_HP_STALE_MS
+      ? 'server-hp-stale' : null;
+  }
   private get protectionState(): ProtectionState {
     if (this.terminal) return this.terminal;
     if (!this.settings.enabled) return 'disabled';
     if (this.safe && this.map.trim()) return 'safe';
     if (!this.monitoringReady) return 'waiting';
+    if (this.degraded) return 'degraded';
     if (this.automaticEligible) return 'monitoring';
     return this.attempts.recoveryState(this.latestNow) ?? 'escaping';
   }
@@ -445,6 +466,7 @@ export class SafetyEngine {
       lowerHp: this.settings.preHitPrediction ? this.predictor.lowerHp : this.lastHp,
       prediction: this.settings.preHitPrediction ? this.predictor.state(now) : null,
       projectileDefinitions: this.definitions.size, conditionsKnown: this.player.conditionsKnown,
+      mapUnreadable: this.mapUnreadable, degraded: this.degraded,
       enabled: this.settings.enabled, protectionState: this.protectionState, automaticEligible: this.automaticEligible,
       attemptOrigin: attempt?.origin ?? null, attemptPhase: attempt?.phase ?? null,
       epoch: this.epoch, objectId: this.player.ownerObjectId, map: this.map, phase: this.phase,

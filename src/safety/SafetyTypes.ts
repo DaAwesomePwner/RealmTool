@@ -95,6 +95,8 @@ export interface SafetyDecision {
   evidence: SafetyDecisionEvidence;
 }
 export interface SafetyStatus {
+  mapUnreadable: boolean;
+  degraded: null | 'server-hp-stale' | 'hp-stream-unreadable' | 'map-unreadable';
   preHitPrediction: boolean;
   lowerHp: number | null;
   prediction: PredictionState | null;

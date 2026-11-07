@@ -69,6 +69,7 @@ export const autoNexusModule: WorkerModule = {
     let closed = false;
     let guard = new AutoEscapeReportGuard(context.generation());
     let lastStatusAt = -Infinity;
+    let lastDegraded: ReturnType<SafetyEngine['status']>['degraded'] = null;
     let current = config;
     const stalledLosses = new Map<number, number>();
     const unpreparedReports = new Set<number>();
@@ -97,7 +98,9 @@ export const autoNexusModule: WorkerModule = {
     sessions.add(configure);
     const status = (now: number) => {
       lastStatusAt = now;
-      post({ type: 'status', status: engine.status(now), sampledAt: now, generation: context.generation(),
+      const sample = engine.status(now);
+      lastDegraded = sample.degraded;
+      post({ type: 'status', status: sample, sampledAt: now, generation: context.generation(),
         catalog: current.catalogState, collisionHp: current.collisionHp });
     };
     const backlog = (now: number, pending: readonly PendingDelivery[]) => engine.deliveryBacklog(
@@ -109,6 +112,7 @@ export const autoNexusModule: WorkerModule = {
         backlog(now, context.pendingDelivery());
         if (fromClient && reports.includes(packet.name)) unpreparedReports.add(observationId);
         engine.observe(packet, now, observationId);
+        if (engine.degraded !== lastDegraded) status(now);
         if (!fromClient && dangers.includes(packet.name)) stalledLosses.set(observationId, engine.stalledDanger(packet, now));
       },
       prepareWrite({ token, packet, now, observationId }) {
@@ -152,7 +156,7 @@ export const autoNexusModule: WorkerModule = {
         }
         if (stalled) engine.deliveryStalled(now, stalledLoss);
         engine.advance(now);
-        if (now - lastStatusAt >= 200) status(now);
+        if (engine.degraded !== lastDegraded || now - lastStatusAt >= 200) status(now);
       },
       connectionChanged(generation) {
         if (closed) return;

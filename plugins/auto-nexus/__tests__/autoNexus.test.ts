@@ -62,7 +62,7 @@ describe('Auto Nexus UI status', () => {
     const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');
     sendStatus(f, 'on');
     const expected = { clientId: f.client, collisionHp: 'on', catalog: ready,
-      protectionState: status().protectionState, automaticEligible: false,
+      protectionState: status().protectionState, degraded: null, automaticEligible: false,
       confirmedHp: status().confirmedHp, maxHp: status().maxHp, lowerHp: status().lowerHp,
       pendingDamage: 230, pendingCount: 2, attemptPhase: status().attemptPhase, sampledAgeMs: 0 };
     expect(f.h.host.data('auto-nexus')!.get('status')).toEqual(expected);
@@ -342,4 +342,26 @@ describe('Collision HP facade', () => {
     expect(f.reply().text).toContain('Server HP 80/100; estimated HP 20');
     expect(f.reply().text).toContain('Collision HP on');
   });
+});
+
+it('publishes degraded reasons and warns only on transitions, rate limited per reason and client', () => {
+  let now = 1000; vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const f = fixture();
+  const send = (degraded: string | null, client = f.client) => f.h.workerMessage(client, 'auto-nexus', {
+    type: 'status', generation: 1, sampledAt: now,
+    status: { ...status(), objectId: 1, enabled: true, protectionState: degraded ? 'degraded' : 'monitoring', degraded },
+    collisionHp: 'on', catalog: ready,
+  });
+  send('server-hp-stale');
+  expect(f.h.host.data('auto-nexus')!.get('status')).toMatchObject({ degraded: 'server-hp-stale', protectionState: 'degraded' });
+  expect(f.reply().text).toContain('server-hp-stale');
+  const count = f.h.proxy.injected.length;
+  send('server-hp-stale'); send(null); send('server-hp-stale');
+  expect(f.h.proxy.injected).toHaveLength(count);
+  send('hp-stream-unreadable'); expect(f.h.proxy.injected).toHaveLength(count + 1);
+  const other = f.h.connect('other'); send('server-hp-stale', other);
+  expect(f.h.proxy.injected).toHaveLength(count + 2);
+  now += 30000; send('server-hp-stale');
+  expect(f.h.proxy.injected).toHaveLength(count + 3);
+  expect(records.filter(r => r.message.includes('degraded'))).toHaveLength(5);
 });
