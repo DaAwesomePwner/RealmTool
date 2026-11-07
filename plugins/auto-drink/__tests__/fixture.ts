@@ -5,6 +5,7 @@ import { log, type LogRecord } from '../../../src/util/log.ts';
 import { createAutoDrinkPlugin } from '../index.ts';
 import type { CatalogLoad } from '../../../src/data/consumables.ts';
 import type { PluginDefinition } from '../../../src/plugins/api.ts';
+import type { AutoDrinkStatus } from '../../../src/auto-drink/AutoDrinkTypes.ts';
 import type { AutoDrinkConfig } from '../messages.ts';
 
 export const item = { type: 42, name: 'Mana', hp: 0, mp: 60, healingDurationMs: 0, quickslot: true };
@@ -33,7 +34,7 @@ export function fixture(options: { profile?: Profile; catalog?: CatalogLoad; oth
   const clients = new Set<string>();
   return { ...h, ctx, loader, buildReader,
     config: () => h.proxy.configured.at(-1)?.['auto-drink'] as AutoDrinkConfig,
-    status: (status = workerStatus, id = 'connection-a', generation = 1) => {
+    status: (status: AutoDrinkStatus = workerStatus, id = 'connection-a', generation = 1) => {
       if (!clients.has(id)) { h.connect(id); clients.add(id); }
       h.workerMessage(id, 'auto-drink', { type: 'status', status, generation });
     },

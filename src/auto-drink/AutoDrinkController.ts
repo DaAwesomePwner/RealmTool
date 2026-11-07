@@ -1,7 +1,7 @@
 // Ported from realm-engine-client client/src/auto-drink/AutoDrinkController.ts @ 88a66b2 (MIT, see NOTICE).
 import { SAFE_MAPS } from '../safety/safeMaps.ts';
 import { ClientGameClock } from './ClientGameClock.ts';
-import { autoDrinkCatalog, autoDrinkSettings, type AutoDrinkItem, type AutoDrinkSettings, type AutoDrinkStatus } from './AutoDrinkTypes.ts';
+import { autoDrinkCatalog, autoDrinkSettings, type AutoDrinkExhaustion, type AutoDrinkItem, type AutoDrinkSettings, type AutoDrinkStatus } from './AutoDrinkTypes.ts';
 
 interface ObservedPacket { name: string; isDefined: boolean; data: Record<string, any> }
 export interface AutoDrinkUse {
@@ -25,6 +25,7 @@ export interface AutoDrinkGate {
   consumptionBlockReason?: string;
 }
 interface Stock { type: number; qty: number; revision: number }
+interface Retry { after: number; rejected: boolean; exhaustion?: AutoDrinkExhaustion }
 interface Reservation extends Stock { slotId: number; at: number; epoch: number; tainted: boolean }
 const QUICK = 1_000_000;
 const STALE_MS = 1500;
@@ -58,7 +59,8 @@ export class AutoDrinkController {
   // Ambiguous operations wait for stock; unconfirmed automatic uses get one delayed retry.
   private waiting = new Map<number, number>();
   // A finite deadline permits one retry; Infinity means that retry also failed.
-  private retryAfter = new Map<number, number>();
+  private retryAfter = new Map<number, Retry>();
+  private exhaustionEpisode = 0;
   private lastTick = -1;
   private lastServerAt: number | null = null;
   private readonly clientClock = new ClientGameClock();
@@ -260,11 +262,11 @@ export class AutoDrinkController {
     const block = this.blockReason(gate, now, time);
     if (block) { this.setState(this.settings.enabled ? 'blocked' : 'disabled', block); return; }
     if (this.pending) { this.setState('pending', 'awaiting stock decrease'); return; }
-    const warning = [...this.retryAfter.values()].includes(Infinity) ? 'drink not confirmed by server' : '';
+    const warning = this.exhaustedSlots().map(slot => slot.reason).join('; ');
     if (now < Math.max(this.nextUseAt, this.backoffUntil)) { this.setState('cooldown', warning || 'shared consume cooldown'); return; }
     if (time! < this.nextUseTime) { this.setState('cooldown', warning || 'shared consume protocol cooldown'); return; }
-    for (const [slotId, retryAt] of this.retryAfter) {
-      if (now >= retryAt) this.waiting.delete(slotId);
+    for (const [slotId, retry] of this.retryAfter) {
+      if (now >= retry.after) this.waiting.delete(slotId);
     }
     const hpNeeded = this.settings.enableHp && this.settings.hpThresholdPct > 0 && this.hp! <= this.maxHp! * this.settings.hpThresholdPct / 100;
     const mpNeeded = this.settings.enableMp && this.settings.mpThresholdPct > 0 && this.mp !== null && this.maxMp !== null
@@ -290,7 +292,7 @@ export class AutoDrinkController {
         this.lastAttemptAt = this.boundary.wallNow(); this.lastSlot = slotId; this.lastItem = item.type;
         if (!this.boundary.send(use)) {
           this.pending = null; this.waiting.set(slotId, stock.revision); this.backoffUntil = now + BACKOFF_MS;
-          this.scheduleRetry(slotId, now);
+          this.scheduleRetry(slotId, now, true);
           this.setState('blocked', 'write rejected'); return;
         }
         // Anchor the deadline AFTER synchronous socket acceptance, never at an
@@ -307,8 +309,18 @@ export class AutoDrinkController {
     this.setState('waiting', warning || (this.waiting.size ? 'awaiting fresh stock' : 'no eligible stock'));
   }
 
-  private scheduleRetry(slotId: number, now: number): void {
-    this.retryAfter.set(slotId, this.retryAfter.has(slotId) ? Infinity : now + RETRY_DELAY_MS);
+  private scheduleRetry(slotId: number, now: number, rejected = false): void {
+    const previous = this.retryAfter.get(slotId);
+    const slot = slotId >= QUICK ? `quickslot ${slotId - QUICK + 1}` : `inventory slot ${slotId}`;
+    const failure = rejected ? previous?.rejected ? 'drink write rejected twice' : 'drink retry write rejected'
+      : 'drink not confirmed by server';
+    this.retryAfter.set(slotId, previous
+      ? { after: Infinity, rejected, exhaustion: { slotId, episode: ++this.exhaustionEpisode, reason: `${slot}: ${failure}` } }
+      : { after: now + RETRY_DELAY_MS, rejected });
+  }
+
+  private exhaustedSlots(): AutoDrinkExhaustion[] {
+    return [...this.retryAfter.values()].flatMap(retry => retry.exhaustion ? [{ ...retry.exhaustion }] : []);
   }
 
   private blockReason(gate: AutoDrinkGate, now: number, time: number | null): string {
@@ -340,6 +352,6 @@ export class AutoDrinkController {
       slotId: this.pending?.slotId ?? this.lastSlot, itemType: this.pending?.type ?? this.lastItem,
       lastAttemptAt: this.lastAttemptAt, cooldownRemainingMs: finite(now)
         ? Math.max(0, Math.ceil(Math.max(this.nextUseAt, this.backoffUntil) - now), time === null ? 0 : this.nextUseTime - time) : 0,
-      pending: this.pending !== null, epoch: this.epoch };
+      pending: this.pending !== null, epoch: this.epoch, exhaustedSlots: this.exhaustedSlots() };
   }
 }

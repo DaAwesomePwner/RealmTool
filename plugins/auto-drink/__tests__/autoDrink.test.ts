@@ -276,12 +276,16 @@ describe('Auto Drink facade through the RealmTool host', () => {
   });
 });
 
-it('logs an unconfirmed-drink warning once per attempt even with diagnostics disabled', () => {
+it('logs once per exhausted slot episode, independent of the last drink attempt', () => {
   const f = fixture(); f.ctx.enabled = true;
-  const status = { ...workerStatus, state: 'waiting', reason: 'drink not confirmed by server', lastAttemptAt: 123 };
+  const exhausted = { slotId: 1_000_000, episode: 1, reason: 'quickslot 1: drink not confirmed by server' };
+  const status = { ...workerStatus, state: 'waiting', reason: exhausted.reason, exhaustedSlots: [exhausted], lastAttemptAt: 123 };
+  const warnings = () => records.filter(r => r.message.includes('Warning:'));
   f.status(status); f.status(status);
   f.status({ ...status, reason: 'packet backlog' }); f.status(status);
-  expect(records.filter(r => r.message.includes('Warning: drink not confirmed by server'))).toHaveLength(1);
-  f.status({ ...status, lastAttemptAt: 456 });
-  expect(records.filter(r => r.message.includes('Warning: drink not confirmed by server'))).toHaveLength(2);
+  f.status({ ...status, slotId: 1_000_001, lastAttemptAt: 456 });
+  expect(warnings()).toHaveLength(1);
+  expect(warnings()[0].message).toContain('quickslot 1: drink not confirmed by server');
+  f.status({ ...status, exhaustedSlots: [{ ...exhausted, episode: 2 }] });
+  expect(warnings()).toHaveLength(2);
 });

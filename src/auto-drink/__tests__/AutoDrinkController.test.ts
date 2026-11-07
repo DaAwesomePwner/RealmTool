@@ -112,7 +112,7 @@ it('retries only once across toggles and catalog reloads', () => {
     f.at(t); f.clock(); f.stats([s(116, 10, 3)]); f.controller.configure({ enabled: false });
     f.controller.configure({ enabled: true }); f.controller.setCatalog([hpItem]); f.evaluate();
   }
-  expect(f.sent).toHaveLength(2); expect(f.controller.status().reason).toBe('drink not confirmed by server');
+  expect(f.sent).toHaveLength(2); expect(f.controller.status().reason).toBe('quickslot 1: drink not confirmed by server');
 });
 
 it('retains same-connection cooldown across MAPINFO, CREATESUCCESS, toggles and catalog reload', () => {
@@ -465,10 +465,10 @@ it('retries after four seconds, confirms the retry and resumes normal consumptio
 it('waits after two unconfirmed attempts and releases on a new stock revision', () => {
   const f = fixture(); f.evaluate(); advance(f, 1500); advance(f, 5500);
   advance(f, 7000);
-  expect(f.controller.status().reason).toBe('drink not confirmed by server');
+  expect(f.controller.status().reason).toBe('quickslot 1: drink not confirmed by server');
   advance(f, 12000);
   expect(f.sent).toHaveLength(2);
-  expect(f.controller.status().reason).toBe('drink not confirmed by server');
+  expect(f.controller.status().reason).toBe('quickslot 1: drink not confirmed by server');
   f.stats([s(116, 10, 4)]); f.evaluate(); expect(f.sent).toHaveLength(3);
   advance(f, 13500); advance(f, 17500); expect(f.sent).toHaveLength(4);
 });
@@ -510,7 +510,7 @@ it('rejected writes get one delayed retry, then wait for stock', () => {
   advance(f, 3999); expect(f.sent).toHaveLength(1);
   advance(f, 4000); expect(f.sent).toHaveLength(2);
   advance(f, 10000); expect(f.sent).toHaveLength(2);
-  expect(f.controller.status().reason).toBe('drink not confirmed by server');
+  expect(f.controller.status().reason).toBe('quickslot 1: drink write rejected twice');
 });
 
 it.each(['excluded', 'quickslot', 'healing', 'hot duration', 'sick', 'protocol'])('retry still honors %s eligibility', rule => {
@@ -538,4 +538,16 @@ it('escape retires an outstanding retry reservation immediately', () => {
   expect(f.controller.status().pending).toBe(true);
   f.controller.escape(); expect(f.controller.status().pending).toBe(false);
   advance(f, 12000); expect(f.sent).toHaveLength(2);
+});
+
+it('escape alone clears an exhausted episode and keeps consumption latched off', () => {
+  const f = fixture(); f.reject(); f.evaluate(); advance(f, 4000);
+  expect(f.controller.status().exhaustedSlots).toHaveLength(1);
+  f.controller.escape();
+  expect(f.controller.status().exhaustedSlots).toEqual([]);
+  expect(f.controller.status().pending).toBe(false);
+  advance(f, 12000);
+  expect(f.controller.status().exhaustedSlots).toEqual([]);
+  expect(f.controller.status().reason).toBe('escape lifecycle');
+  expect(f.sent).toHaveLength(2);
 });
