@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <string>
 
 #include "MinHook.h"
 #include "connect_hook.h"
@@ -28,15 +29,44 @@ connect_t g_realConnect = nullptr;
 void* g_connectTarget = nullptr;
 bool  g_installed = false;
 
+// Independent of the MAX_PATH recording buffer: even path construction failures
+// must attempt to remove an older record. Deletion is best effort (e.g. permissions).
+void DeleteOriginalTargets() {
+    wchar_t filename[64];
+    _snwprintf_s(filename, 64, _TRUNCATE,
+                 L"realmtool_target_%lu.txt", GetCurrentProcessId());
+    wchar_t dir[32768];
+    const wchar_t* variables[] = {L"TMP", L"TEMP", L"USERPROFILE"};
+    const auto removeInDir = [&](DWORD length) {
+        if (length == 0 || length >= 32768) return;
+        std::wstring path(dir, length);
+        if (path.back() != L'\\' && path.back() != L'/') path += L'\\';
+        path += filename;
+        DeleteFileW(path.c_str());
+    };
+    for (const wchar_t* variable : variables) {
+        removeInDir(GetEnvironmentVariableW(variable, dir, 32768));
+    }
+    removeInDir(GetTempPathW(32768, dir));
+    removeInDir(GetWindowsDirectoryW(dir, 32768));
+}
+
 bool WriteWholeFile(const wchar_t* path, const char* text) {
     HANDLE h = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
+    if (h == INVALID_HANDLE_VALUE) {
+        DeleteFileW(path);
+        return false;
+    }
     DWORD written = 0;
     const DWORD length = static_cast<DWORD>(std::strlen(text));
     const BOOL success = WriteFile(h, text, length, &written, nullptr);
     CloseHandle(h);
-    return success && written == length;
+    if (!success || written != length) {
+        DeleteFileW(path);
+        return false;
+    }
+    return true;
 }
 
 // %TEMP%\realmtool_target_<pid>.txt - read and deleted by src/routing/targetResolver.ts.
@@ -61,6 +91,7 @@ int WSAAPI HookedConnect(SOCKET s, const sockaddr* name, int namelen) {
             char ip[INET_ADDRSTRLEN] = {0};
             if (inet_ntop(AF_INET, &in4->sin_addr, ip, sizeof(ip)) == nullptr ||
                 !RecordOriginalTarget(ip)) {
+                DeleteOriginalTargets();
                 OutputDebugStringA("[RealmTool helper] could not record target; redirecting to proxy\n");
             }
             sockaddr_in redirected = *in4;

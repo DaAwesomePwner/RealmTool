@@ -64,13 +64,41 @@ describe('target resolver', () => {
     ]);
   });
 
-  it('uses the first file found in candidate order', () => {
+  it.each([1, 2, 3, 0])('uses GetTempPathW order from candidate %i and clears other PID records', first => {
     const dirs = candidateDirs();
-    writeFileSync(targetFilePath(777, dirs[1]!), '18.144.30.153');
-    writeFileSync(targetFilePath(777, dirs[2]!), '1.2.3.4');
-    expect(createTargetResolver({ identify: () => identity })(50123))
-      .toEqual({ host: '18.144.30.153', port: 2050 });
-    expect(readdirSync(dirs[2]!)).toEqual(['realmtool_target_777.txt']);
+    const order = [1, 2, 3, 0];
+    for (const index of order.slice(order.indexOf(first))) {
+      writeFileSync(targetFilePath(777, dirs[index]!), index === first ? '18.144.30.153' : '1.2.3.4');
+    }
+    writeFileSync(targetFilePath(778, dirs[0]!), '1.2.3.4');
+    const resolve = createTargetResolver({ identify: () => identity });
+    expect(resolve(50123)).toEqual({ host: '18.144.30.153', port: 2050 });
+    expect(resolve(50123)).toBeNull();
+    expect(readdirSync(dirs[0]!)).toEqual(['realmtool_target_778.txt']);
+    for (const index of [1, 2, 3]) expect(readdirSync(dirs[index]!)).toEqual([]);
+  });
+
+  it('sweeps stale targets in every candidate directory without removing unrelated files', () => {
+    const dirs = candidateDirs();
+    for (const dir of dirs) {
+      writeFileSync(targetFilePath(777, dir), '18.144.30.153');
+      writeFileSync(join(dir, 'unrelated.txt'), 'keep');
+    }
+    expect(removeStaleTargetFiles()).toBe(4);
+    for (const dir of dirs) expect(readdirSync(dir)).toEqual(['unrelated.txt']);
+    expect(createTargetResolver({ identify: () => identity })(50123)).toBeNull();
+  });
+
+  it('de-duplicates sweep directories and skips missing directories', () => {
+    const dirs = candidateDirs();
+    vi.stubEnv('TMP', relative(process.cwd(), dirs[0]!));
+    vi.stubEnv('TEMP', join(dirs[0]!, 'missing'));
+    writeFileSync(targetFilePath(777, dirs[3]!), '18.144.30.153');
+    const read = vi.spyOn(fs, 'readdirSync');
+    expect(removeStaleTargetFiles()).toBe(1);
+    expect(read.mock.calls.map(call => call[0])).toEqual([
+      dirs[0], join(dirs[0]!, 'missing'), dirs[3],
+    ]);
   });
 
   it.each(['127.0.0.1', '127.5.6.7', '256.1.1.1', '01.2.3.4', 'example.com', ''])
@@ -80,7 +108,7 @@ describe('target resolver', () => {
       writeFileSync(targetFilePath(777, dirs[2]!), '1.2.3.4');
       expect(createTargetResolver({ identify: () => identity })(50123)).toBeNull();
       expect(readdirSync(dirs[1]!)).toEqual([]);
-      expect(readdirSync(dirs[2]!)).toEqual(['realmtool_target_777.txt']);
+      expect(readdirSync(dirs[2]!)).toEqual([]);
     });
 
   it('accepts only non-loopback IPv4 dotted quads', () => {

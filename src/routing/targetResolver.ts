@@ -28,15 +28,19 @@ export interface TargetResolverOptions {
   identify?: (remotePort: number) => ProcessIdentity | null;
 }
 
-/** Maps a new loopback game socket to the server the game originally tried to reach. */
-export function createTargetResolver(options: TargetResolverOptions = {}): (remotePort: number) => Destination | null {
-  // GetTempPathW prefers TMP over TEMP; Node's Windows tmpdir() does the reverse.
-  const candidates = options.tempDir !== undefined
-    ? [options.tempDir]
-    : [tmpdir(), process.env.TMP, process.env.TEMP, process.env.USERPROFILE];
-  const dirs = [...new Set(candidates
+/** Shared by lookup and startup cleanup so neither can leave an alternate target behind. */
+function targetDirectories(tempDir?: string): string[] {
+  const candidates = tempDir !== undefined
+    ? [tempDir]
+    : [process.env.TMP, process.env.TEMP, process.env.USERPROFILE, tmpdir()];
+  return [...new Set(candidates
     .filter((dir): dir is string => Boolean(dir))
     .map(dir => resolve(dir)))];
+}
+
+/** Maps a new loopback game socket to the server the game originally tried to reach. */
+export function createTargetResolver(options: TargetResolverOptions = {}): (remotePort: number) => Destination | null {
+  const dirs = targetDirectories(options.tempDir);
   const proxyPort = options.proxyPort ?? GAME_PORT;
   const identify = options.identify ?? ((remotePort: number) => readTcpProcessIdentity(remotePort, proxyPort));
   return remotePort => {
@@ -50,8 +54,13 @@ export function createTargetResolver(options: TargetResolverOptions = {}): (remo
       } catch {
         continue;
       }
-      try { unlinkSync(path); } catch (error) {
-        log.warn('Routing', `Failed to remove target file ${path}: ${(error as Error).message}`);
+      for (const candidate of dirs) {
+        const stalePath = targetFilePath(identity.pid, candidate);
+        try { unlinkSync(stalePath); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            log.warn('Routing', `Failed to remove target file ${stalePath}: ${(error as Error).message}`);
+          }
+        }
       }
       const host = parseTargetFile(text);
       return host ? { host, port: GAME_PORT } : null;
@@ -60,13 +69,15 @@ export function createTargetResolver(options: TargetResolverOptions = {}): (remo
   };
 }
 
-export function removeStaleTargetFiles(dir: string = tmpdir()): number {
+export function removeStaleTargetFiles(dir?: string): number {
   let removed = 0;
-  let names: string[];
-  try { names = readdirSync(dir); } catch { return 0; }
-  for (const name of names) {
-    if (!/^realmtool_target_\d+\.txt$/.test(name)) continue;
-    try { unlinkSync(join(dir, name)); removed++; } catch { /* in use or already gone */ }
+  for (const candidate of targetDirectories(dir)) {
+    let names: string[];
+    try { names = readdirSync(candidate); } catch { continue; }
+    for (const name of names) {
+      if (!/^realmtool_target_\d+\.txt$/.test(name)) continue;
+      try { unlinkSync(join(candidate, name)); removed++; } catch { /* in use or already gone */ }
+    }
   }
   return removed;
 }
