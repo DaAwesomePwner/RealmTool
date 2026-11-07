@@ -5,6 +5,27 @@ import type { InterestSpec } from './interest.ts';
 export type CloseSide = 'game' | 'server' | 'fault' | 'proxy';
 
 export const VERDICT_DEADLINE_MS = 250;
+export const MODULE_FAILURE_REPORT_MS = 5000;
+export const MODULE_HEALTH_QUIET_MS = 30_000;
+
+/** Incremental failure report. Timestamps use the process-wide performance.now() clock. */
+export interface ModuleHealthEvent {
+  type: 'moduleHealth';
+  id: string;
+  moduleId: string;
+  hook: keyof import('./modules.ts').WorkerSessionModule;
+  /** Failures since the preceding report, not a cumulative total. */
+  failures: number;
+  /** First failure in this report. */
+  since: number;
+  lastError: string;
+  /** Most recent failure, rather than report delivery time. */
+  at: number;
+}
+
+export type ModuleConfigEvent =
+  | { type: 'moduleConfig'; moduleId: string; ok: true }
+  | { type: 'moduleConfig'; moduleId: string; ok: false; error: string };
 
 export const DEFAULTS = Object.freeze({
   targetTimeoutMs: 2000,
@@ -26,6 +47,8 @@ export interface WorkerInit {
 }
 
 export type WorkerEvent =
+  | ModuleHealthEvent
+  | ModuleConfigEvent
   | { type: 'listening'; port: number }
   | { type: 'opened'; id: string; remotePort: number }
   | { type: 'routed'; id: string; host: string; port: number; restored: boolean }

@@ -1,11 +1,12 @@
 import { resourcePaths } from '../app/resources.ts';
+import { performance } from 'node:perf_hooks';
 import { EventEmitter } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { GAME_PORT } from '../protocol/constants.ts';
 import type { ProtocolSchema } from '../protocol/schema.ts';
 import type { Destination } from '../routing/router.ts';
 import type { InterestSpec } from './interest.ts';
-import { DEFAULTS, type CloseSide, type WorkerCommand, type WorkerEvent, type WorkerInit } from './messages.ts';
+import { DEFAULTS, MODULE_HEALTH_QUIET_MS, type ModuleHealthEvent, type ModuleConfigEvent, type CloseSide, type WorkerCommand, type WorkerEvent, type WorkerInit } from './messages.ts';
 
 export interface PacketEvent {
   id: string;
@@ -17,7 +18,22 @@ export interface PacketEvent {
   data: Buffer;
 }
 
+export interface ModuleHealthSnapshot {
+  status: 'healthy' | 'failing';
+  /** Start of the current episode on performance.now(); null after recovery. */
+  failingSince: number | null;
+  lastError: string;
+  lastFailureAt: number;
+  totalFailures: number;
+}
+
+export type ModuleConfigState = { status: 'accepted' } | { status: 'rejected'; error: string };
+
 export interface HostEvents {
+  /** Incremental reports; query getModuleHealth() for aggregate health and quiet-period recovery. */
+  moduleHealth: [event: ModuleHealthEvent];
+  /** Result of each initial or live configure; rejection retains the previous worker config. */
+  moduleConfig: [event: ModuleConfigEvent];
   listening: [port: number];
   exit: [info: { code: number; expected: boolean }];
   session: [info: { id: string; remotePort: number }];
@@ -51,6 +67,27 @@ export class ProxyHost extends EventEmitter<HostEvents> {
   private worker: Worker | null = null;
   private readonly expectedExits = new WeakSet<Worker>();
   private listening = false;
+  private readonly health = new Map<string, ModuleHealthSnapshot>();
+  private readonly configs = new Map<string, ModuleConfigState>();
+
+  /** Snapshot across sessions/hooks in this worker run. Recovery is evaluated at query time after
+   * MODULE_HEALTH_QUIET_MS without failures; totals/errors remain available after recovery.
+   * Reports may lag by MODULE_FAILURE_REPORT_MS. Undefined means no failures have been reported.
+   */
+  getModuleHealth(moduleId: string): ModuleHealthSnapshot | undefined {
+    const state = this.health.get(moduleId);
+    if (!state) return undefined;
+    const healthy = performance.now() - state.lastFailureAt >= MODULE_HEALTH_QUIET_MS;
+    return { ...state, status: healthy ? 'healthy' : 'failing', failingSince: healthy ? null : state.failingSince };
+  }
+
+  /** Last acknowledged configuration attempt in this worker run; undefined until an ack/nack.
+   * This is not the requested toggle value, nor proof that a rejected config took effect.
+   */
+  getModuleConfigState(moduleId: string): ModuleConfigState | undefined {
+    const state = this.configs.get(moduleId);
+    return state ? { ...state } : undefined;
+  }
   private starting: { resolve(port: number): void; reject(error: Error): void } | null = null;
 
   constructor(options: ProxyHostOptions) {
@@ -80,6 +117,8 @@ export class ProxyHost extends EventEmitter<HostEvents> {
       this.worker = null;
       return Promise.reject(error);
     }
+    this.health.clear();
+    this.configs.clear();
     this.worker = worker;
     const started = new Promise<number>((resolve, reject) => { this.starting = { resolve, reject }; });
     worker.on('message', (event: WorkerEvent) => this.handle(event));
@@ -146,6 +185,23 @@ export class ProxyHost extends EventEmitter<HostEvents> {
 
   private handle(event: WorkerEvent): void {
     switch (event.type) {
+      case 'moduleHealth': {
+        const previous = this.health.get(event.moduleId);
+        const continuing = previous && event.since - previous.lastFailureAt < MODULE_HEALTH_QUIET_MS;
+        this.health.set(event.moduleId, {
+          status: 'failing',
+          failingSince: continuing ? Math.min(previous.failingSince ?? event.since, event.since) : event.since,
+          lastError: !previous || event.at >= previous.lastFailureAt ? event.lastError : previous.lastError,
+          lastFailureAt: Math.max(previous?.lastFailureAt ?? -Infinity, event.at),
+          totalFailures: (previous?.totalFailures ?? 0) + event.failures,
+        });
+        this.emit('moduleHealth', event);
+        return;
+      }
+      case 'moduleConfig':
+        this.configs.set(event.moduleId, event.ok ? { status: 'accepted' } : { status: 'rejected', error: event.error });
+        this.emit('moduleConfig', event);
+        return;
       case 'listening':
         this.listening = true;
         this.starting?.resolve(event.port);
