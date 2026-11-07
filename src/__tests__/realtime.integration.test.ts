@@ -58,14 +58,23 @@ async function fixture(options: { drink?: boolean; profile?: Profile; plugins?: 
   cleanups.push(async () => { await server.terminate(); });
   const received: { bytes: Buffer; at: bigint }[] = [];
   const faults: string[] = [];
+  const diagnostics: string[] = [];
   let serverPort = 0;
+  let serverOnline = false;
+  let serverExit: number | null = null;
+  server.once('online', () => { serverOnline = true; });
+  server.once('exit', code => { serverExit = code; });
   server.on('error', error => faults.push(error.message));
   server.on('message', message => {
     if (message.type === 'listening') serverPort = message.port;
     else if (message.type === 'frame') received.push({ bytes: Buffer.from(message.bytes), at: message.at });
     else if (message.type === 'fault') faults.push(message.message);
   });
-  await until(() => serverPort !== 0 || faults.length > 0, 'fake server listening');
+  // The first native-TS worker cold-start can exceed 5 s under Windows CI load.
+  // Only startup gets extra time; packet, escape and watchdog deadlines stay unchanged.
+  await until(() => serverPort !== 0 || faults.length > 0 || serverExit !== null, 'fake server listening', 10_000)
+    .catch(error => { throw new Error(`${error.message} (worker online=${serverOnline}, exit=${serverExit})`); });
+  expect(serverExit, 'fake server exited before listening').toBeNull();
   expect(faults).toEqual([]);
   const proxy = new ProxyHost({ schema: loadSchema(), listenPort: 0,
     resolveTarget: () => ({ host: '127.0.0.1', port: serverPort }),
@@ -73,7 +82,7 @@ async function fixture(options: { drink?: boolean; profile?: Profile; plugins?: 
   });
   cleanups.push(() => proxy.stop());
   proxy.on('fault', event => faults.push(event.message));
-  proxy.on('diagnostic', event => faults.push(event.message));
+  proxy.on('diagnostic', event => diagnostics.push(event.message));
   let snapshot: unknown;
   proxy.on('module', event => { if (event.moduleId === 'startup-snapshot') snapshot = event.message; });
   const batches = vi.spyOn(proxy, 'configureModules');
@@ -122,23 +131,45 @@ async function fixture(options: { drink?: boolean; profile?: Profile; plugins?: 
     }
     expect(notifications()).toEqual(expect.arrayContaining([expect.stringContaining(expected)]));
   };
-  const healthy = (expectStaleStream = false) => {
+  const healthy = (expectStaleStream = false, expected: { expired?: number; criticalHook?: boolean } = {}) => {
+    expect(diagnostics).toEqual(expected.expired ? [`Plugin verdict deadlines expired: ${expected.expired}; released original packets`] : []);
     expect(faults).toEqual([]);
     expect(game.errors).toEqual([]);
     const warnings = records.filter(record => record.level === 'error' || record.level === 'warn');
     if (options.missingSafety) {
       expect(warnings).toHaveLength(1);
       expect(warnings[0].message).toContain('Collision HP FALLBACK: server HP only (safety catalog not found)');
-    } else expect(warnings).toEqual(expectStaleStream ? [{
+    } else expect(warnings).toEqual([...(expected.criticalHook ? [{
+      at: expect.any(Number), level: 'warn', module: 'Reconnect verdict',
+      message: 'RECONNECT is safety-critical; this packet hook runs as observe-only (drop and modification requests are ignored)',
+    }] : []), ...(expectStaleStream ? [{
       at: expect.any(Number), level: 'warn', module: 'auto-nexus',
       message: 'Auto Nexus degraded: server-hp-stale; protection may be incomplete.',
-    }] : []);
+    }] : [])]);
   };
-  return { proxy, plugins, server, game, item, escapeTimes, send, tick, wire, status, healthy, batches, singles,
+  return { proxy, plugins, server, game, item, escapeTimes, send, tick, wire, status, healthy, batches, singles, diagnostics,
     snapshot: () => snapshot, catalog: loaded.catalog, hitCounts, notifications, setHp, assertNexusText };
 }
 
 describe('realtime plugins through the encrypted ProxyHost worker', () => {
+  it('releases a 250 ms TEXT hold without degrading the server HP watchdog', async () => {
+    const f = await fixture({ plugins: [definePlugin({ id: 'hold-text', name: 'Hold TEXT', apiVersion: 1,
+      capabilities: ['packets'], register(ctx) { ctx.hookPacket('TEXT', () => {}); } })] });
+    const forward = f.proxy.forward.bind(f.proxy);
+    vi.spyOn(f.proxy, 'forward').mockImplementation((id, sequence, generation, data) => {
+      if (data?.[4] !== factory.getPacketId('TEXT')) forward(id, sequence, generation, data);
+    });
+    const heldText = packet('TEXT', { name: 'server', objectId: -1, numStars: -1, bubbleTime: 0, recipient: '',
+      text: 'hold', cleanText: 'hold', isSupporter: false, starBg: 0 });
+    const freshHp = f.tick(800);
+    f.send(heldText, freshHp);
+    await until(() => f.diagnostics.length === 1, 'TEXT expiry');
+    await until(() => f.game.frames.some(b => b.equals(freshHp)), 'HP packet behind TEXT released');
+    expect(f.game.frames.filter(b => b.equals(heldText))).toHaveLength(1);
+    expect(f.wire('ESCAPE')).toHaveLength(0);
+    f.healthy(false, { expired: 1 }); // In particular, no server-hp-stale warning.
+  });
+
   it('writes ESCAPE and its first retry while a TEXT plugin hook busy-waits 500 ms', async () => {
     let f: Awaited<ReturnType<typeof fixture>>;
     let started = 0n, returned = 0n, firstDuringHook = 0n, retryDuringHook = 0n;
@@ -162,7 +193,8 @@ describe('realtime plugins through the encrypted ProxyHost worker', () => {
     expect(firstDuringHook).toBeLessThan(returned);
     expect(retryDuringHook).toBeGreaterThan(firstDuringHook);
     expect(retryDuringHook).toBeLessThan(returned);
-    f.healthy();
+    await until(() => f.diagnostics.length === 1, 'verdict expiry diagnostic');
+    f.healthy(false, { expired: 1 });
   });
 
   it('sends the default five ESCAPEs 400 ms apart (±100 ms), then none for 2 s', async () => {
@@ -181,7 +213,7 @@ describe('realtime plugins through the encrypted ProxyHost worker', () => {
     f.healthy(true);
   });
 
-  it.each([false, true])('only a written RECONNECT stops retries (plugin drops = %s)', async drop => {
+  it.each([false, true])('written RECONNECT stops retries despite an observe-only hook (plugin drops = %s)', async drop => {
     let verdicts = 0;
     const verdict = definePlugin({ id: 'reconnect-verdict', name: 'Reconnect verdict', apiVersion: 1, capabilities: ['packets'],
       register(ctx) { ctx.hookPacket('RECONNECT', (_client, packet) => { verdicts++; if (drop) packet.send = false; }); } });
@@ -189,16 +221,12 @@ describe('realtime plugins through the encrypted ProxyHost worker', () => {
     f.send(f.tick(200));
     await until(() => f.wire('ESCAPE').length === 1, 'initial escape');
     f.send(reconnectBytes(factory, { host: '127.0.0.1', port: 2050, key: Buffer.from([1, 2, 3]) }));
-    await until(() => verdicts === 1, 'RECONNECT verdict');
-    if (drop) {
-      await until(() => f.wire('ESCAPE').length === 5, 'retries survive dropped transfer');
-      expect(f.game.frames.filter(bytes => bytes[4] === factory.getPacketId('RECONNECT'))).toHaveLength(0);
-    } else {
-      await until(() => f.game.frames.some(bytes => bytes[4] === factory.getPacketId('RECONNECT')), 'accepted transfer written to game');
-      await pause(3200);
-      expect(f.wire('ESCAPE')).toHaveLength(1);
-    }
-    f.healthy();
+    await until(() => verdicts === 1, 'RECONNECT observer');
+    // Critical hooks cannot block a transfer, even if they request a drop.
+    await until(() => f.game.frames.some(bytes => bytes[4] === factory.getPacketId('RECONNECT')), 'accepted transfer written to game');
+    await pause(3200);
+    expect(f.wire('ESCAPE')).toHaveLength(1);
+    f.healthy(false, { criticalHook: true });
   });
 
   it('prioritizes Auto Nexus below both thresholds and disarms Auto Drink for the generation', async () => {
@@ -291,7 +319,8 @@ describe('Collision HP through the encrypted worker', () => {
     await pause(100);
     expect(hooks).toBe(1);
     expect(f.wire('PLAYERHIT')).toHaveLength(0);
-    f.healthy();
+    await until(() => f.diagnostics.length === 1, 'verdict expiry diagnostic');
+    f.healthy(false, { expired: 1 });
   });
 
   it.each([true, false])('charges DAMAGE once when server damage arrives first = %s', async first => {
@@ -344,8 +373,15 @@ describe('Collision HP through the encrypted worker', () => {
       expect(delay).toBeLessThan(250);
     }
     expect(f.game.frames.some(b => b[4] === factory.getPacketId('ENEMYSHOOT'))).toBe(false);
-    release!();
-    f.healthy();
+    await until(() => f.diagnostics.length === 1, 'TEXT deadline expires');
+    await until(() => f.game.frames.some(b => b.equals(text())), 'original TEXT forwarded');
+    release!(); // The obsolete verdict must not duplicate TEXT or change the shot outcome.
+    const marker = packet('PING', { serial: 987 });
+    f.send(marker);
+    await until(() => f.game.frames.some(b => b.equals(marker)), 'traffic after late verdict');
+    expect(f.game.frames.filter(b => b.equals(text()))).toHaveLength(1);
+    expect(f.game.frames.filter(b => b[4] === factory.getPacketId('ENEMYSHOOT'))).toHaveLength(drop ? 0 : 1);
+    f.healthy(false, { expired: 1 });
   });
 
   it('respects explicit OFF and retains server-HP escape behavior', async () => {

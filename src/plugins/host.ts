@@ -6,7 +6,7 @@ import type { ProcessIdentity } from '../routing/tcpProcessIdentity.ts';
 import type { Packet } from '../protocol/Packet.ts';
 import type { PacketFactory } from '../protocol/PacketFactory.ts';
 import type { PacketEvent, ProxyHost } from '../transport/host.ts';
-import type { InterestSpec } from '../transport/interest.ts';
+import { isCriticalPacket, type InterestSpec } from '../transport/interest.ts';
 import { log } from '../util/log.ts';
 import { describeError } from '../util/describeError.ts';
 import {
@@ -353,10 +353,13 @@ export class PluginHost {
 
   addHook(plugin: Plugin, name: string, fn: PacketHook, prepend: boolean): void {
     if (plugin.failed) return;
-    this.direction(name);
-    const list = this.hooks.get(name) ?? [];
+    const direction = this.direction(name);
+    const critical = isCriticalPacket(name, direction === 'client');
+    if (critical) log.warn(plugin.name, `${name} is safety-critical; this packet hook runs as observe-only (drop and modification requests are ignored)`);
+    const registrations = critical ? this.observers : this.hooks;
+    const list = registrations.get(name) ?? [];
     if (prepend) list.unshift({ plugin, fn }); else list.push({ plugin, fn });
-    this.hooks.set(name, list);
+    registrations.set(name, list);
     this.refreshInterest();
   }
 

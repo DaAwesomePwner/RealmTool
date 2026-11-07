@@ -89,6 +89,12 @@ export interface PluginContext {
   getSetting<T = any>(key: string): T;
   /** Validates, stores and notifies (even if unchanged). Buttons just notify with `true`. False if rejected. */
   updateSetting(key: string, value: unknown): boolean;
+  /**
+   * Verdicts have a 250 ms deadline; expiry forwards the original unchanged and ignores late answers.
+   * RECONNECT/DEATH/MAPINFO/ESCAPE hooks run observe-only; mutations and drops are ignored.
+   * PLAYERTEXT has the same deadline: a longer main-thread stall can send a typed command as server chat.
+   * Dropping expired command text instead is tracked as backlog work.
+   */
   hookPacket(name: string, fn: PacketHook, options?: { prepend?: boolean }): void;
   /** Read-only observer; mutations are ignored. */
   observePacket(name: string, fn: PacketHook): void;

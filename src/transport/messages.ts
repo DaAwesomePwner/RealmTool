@@ -4,6 +4,8 @@ import type { InterestSpec } from './interest.ts';
 
 export type CloseSide = 'game' | 'server' | 'fault' | 'proxy';
 
+export const VERDICT_DEADLINE_MS = 250;
+
 export const DEFAULTS = Object.freeze({
   targetTimeoutMs: 2000,
   helloTimeoutMs: 3000,

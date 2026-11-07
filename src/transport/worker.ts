@@ -66,16 +66,15 @@ if (init.host !== '127.0.0.1') {
     post({ type: 'listening', port: bound });
   });
 
-  const timer = WORKER_MODULES.length > 0
-    ? setInterval(() => {
-      const now = performance.now();
-      tickSessions(sessions.values(), now, post);
-    }, TICK_MS)
-    : null;
+  // Transport verdict deadlines must advance even without realtime modules.
+  const timer = setInterval(() => {
+    const now = performance.now();
+    tickSessions(sessions.values(), now, post);
+  }, TICK_MS);
 
   port.on('message', (command: WorkerCommand) => guardWorkerCall(post, `Worker command ${command.type}`, () => {
     if (command.type === 'stop') {
-      if (timer) clearInterval(timer);
+      clearInterval(timer);
       for (const session of [...sessions.values()]) guardWorkerCall(post, 'Session close', () => session.close('proxy'), session.id);
       listener.close(() => port.close());
       return;

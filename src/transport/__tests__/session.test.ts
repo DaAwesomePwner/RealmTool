@@ -68,6 +68,143 @@ async function connected(h: Harness, server: FakeServer): Promise<{ game: Peer; 
 const packets = (h: Harness) => h.events.filter((e): e is Extract<WorkerEvent, { type: 'packet' }> => e.type === 'packet');
 
 describe('Session', () => {
+  it('expires each verdict at its own deadline and preserves mixed ordering and RC4', async () => {
+    let now = 0;
+    const h = await harness({ now: () => now, interest: new Interest({ verdict: { server: ['TEXT'] }, observe: { server: ['*'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    const first = frame(id('TEXT'), Buffer.from('first'));
+    const middle = frame(UNKNOWN, Buffer.from('observe'));
+    const last = frame(id('TEXT'), Buffer.from('last'));
+    upstream.send(first);
+    await until(() => packets(h).length === 1, 'first held');
+    now = 100;
+    upstream.send(middle); upstream.send(last);
+    await until(() => packets(h).length === 3, 'mixed queue');
+    now = 249; session.tick(now);
+    expect(session['pending'].size).toBe(3);
+    now = 250; session.tick(now);
+    await until(() => game.frames.length === 2, 'first expires');
+    expect(game.frames).toEqual([first, middle]);
+    const [a, , b] = packets(h);
+    session.forward(a.sequence, a.generation, null); // Late drop cannot retract the original.
+    session.forward(b.sequence, b.generation + 1, null); // Wrong generation cannot release it.
+    expect(session['pending'].size).toBe(1);
+    now = 350; session.tick(now);
+    session.forward(b.sequence, b.generation, frame(id('TEXT'), Buffer.from('late replacement')));
+    upstream.send(middle);
+    await until(() => game.frames.length === 4, 'remaining original and following frame');
+    expect(game.frames).toEqual([first, middle, last, middle]);
+  });
+
+  it.each(['RECONNECT', 'DEATH', 'MAPINFO', 'ESCAPE'])('releases queued originals immediately before %s, which is observe-only', async name => {
+    const fromClient = name === 'ESCAPE';
+    const heldName = fromClient ? 'PLAYERTEXT' : 'TEXT';
+    const side = fromClient ? 'client' : 'server';
+    const h = await harness({ now: () => 0,
+      interest: new Interest({ verdict: { [side]: [heldName, name] }, observe: { [side]: ['*'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    const sender = fromClient ? game : upstream;
+    const receiver = fromClient ? upstream : game;
+    const offset = receiver.frames.length;
+    const original = frame(id(heldName), Buffer.from('original'));
+    const middle = frame(UNKNOWN, Buffer.from('middle'));
+    sender.send(original); sender.send(middle); sender.send(original);
+    await until(() => packets(h).filter(p => p.sequence !== 0).length === 3, 'held queue');
+    const critical = name === 'RECONNECT'
+      ? reconnectBytes(factory, { host: '127.0.0.1', port: server.port, key: Buffer.alloc(0) })
+      : frame(id(name));
+    sender.send(critical);
+    await until(() => receiver.frames.length === offset + 4, 'critical forwarded without tick or verdict');
+    expect(receiver.frames.slice(offset, offset + 3)).toEqual([original, middle, original]);
+    expect(receiver.frames[offset + 3][4]).toBe(id(name));
+    expect(packets(h).at(-1)?.observeOnly).toBe(true);
+    expect(session['pending'].size).toBe(0);
+    for (const p of packets(h)) session.forward(p.sequence, p.generation, null);
+    sender.send(middle);
+    await until(() => receiver.frames.length === offset + 5, 'cipher remains aligned');
+    expect(receiver.frames.at(-1)).toEqual(middle);
+  });
+
+  it.each(['close', 'tick'] as const)('retains rate-limited expiry and critical override counts until %s', async finish => {
+    let now = 0;
+    const h = await harness({ now: () => now, interest: new Interest({ verdict: { server: ['TEXT'] } }) });
+    const server = await fakeServer();
+    const { upstream, game, session } = await connected(h, server);
+    const text = frame(id('TEXT'));
+    const critical = frame(id('MAPINFO'));
+    const diagnostics = () => h.events.filter(e => e.type === 'diagnostic');
+    upstream.send(text); upstream.send(critical);
+    await until(() => game.frames.length === 2, 'first critical override');
+    expect(diagnostics()).toEqual([expect.objectContaining({
+      message: 'Critical-packet verdict overrides: 1; released original packets',
+    })]);
+    upstream.send(text); upstream.send(text);
+    await until(() => packets(h).length === 3, 'two expiry holds');
+    now = 250; session.tick(now);
+    await until(() => game.frames.length === 4, 'expired originals');
+    upstream.send(text); upstream.send(text); upstream.send(critical);
+    await until(() => game.frames.length === 7, 'two more overrides');
+    now = 4999; session.tick(now);
+    expect(diagnostics()).toHaveLength(1); // Both paths share one per-session limiter.
+    if (finish === 'tick') {
+      now = 5000; session.tick(now);
+      expect(diagnostics()).toHaveLength(2);
+      expect(diagnostics()[1]).toMatchObject({ message:
+        'Plugin verdict deadlines expired: 2; Critical-packet verdict overrides: 2; released original packets' });
+    }
+    session.close();
+    const summary = h.events.find(e => e.type === 'note' && e.message.startsWith('Session summary'));
+    expect(summary).toBeDefined();
+    if (finish === 'close') expect(summary).toMatchObject({ message: expect.stringContaining(
+      'unreported verdict releases: 2 expired, 2 overridden') });
+    else expect(summary).toMatchObject({ message: expect.not.stringContaining('unreported verdict releases') });
+    expect(diagnostics()).toHaveLength(finish === 'close' ? 1 : 2);
+  });
+
+  it('uses the configured deadline and aggregates diagnostics at most once per five seconds', async () => {
+    let now = 0;
+    const h = await harness({ now: () => now, verdictDeadlineMs: 10,
+      interest: new Interest({ verdict: { server: ['TEXT'] } }) });
+    const server = await fakeServer();
+    const { upstream, session } = await connected(h, server);
+    const diagnostics = () => h.events.filter(e => e.type === 'diagnostic');
+    upstream.send(frame(id('TEXT')));
+    await until(() => packets(h).length === 1, 'first hold');
+    now = 9; session.tick(now); expect(diagnostics()).toHaveLength(0);
+    now = 10; session.tick(now);
+    expect(diagnostics()).toEqual([expect.objectContaining({ message: expect.stringContaining('expired: 1;') })]);
+    upstream.send(frame(id('TEXT'))); upstream.send(frame(id('TEXT')));
+    await until(() => packets(h).length === 3, 'next holds');
+    now = 20; session.tick(now);
+    now = 5009; session.tick(now); expect(diagnostics()).toHaveLength(1);
+    now = 5010; session.tick(now);
+    expect(diagnostics()).toHaveLength(2);
+    expect(diagnostics()[1]).toMatchObject({ message: expect.stringContaining('expired: 2;') });
+    now = 10010; session.tick(now); expect(diagnostics()).toHaveLength(2);
+  });
+
+  it('expires retained client frames after a generation change but discards old server holds', async () => {
+    let now = 0;
+    const h = await harness({ now: () => now, interest: new Interest({ verdict: { client: ['PLAYERTEXT'], server: ['TEXT'] } }) });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    const original = frame(id('PLAYERTEXT'), Buffer.from('retained'));
+    game.send(original); upstream.send(frame(id('TEXT')));
+    await until(() => packets(h).length === 2, 'both held');
+    const old = packets(h).find(p => !p.fromClient)!;
+    const next = await fakeServer();
+    session['connect']({ host: '127.0.0.1', port: next.port }, helloBytes(factory, Buffer.alloc(0)));
+    await until(() => next.peers[0]?.frames.length === 1, 'next generation');
+    session.forward(old.sequence, old.generation, Buffer.from(old.data));
+    now = 250; session.tick(now);
+    await until(() => next.peers[0].frames.length === 2, 'retained client expires');
+    expect(next.peers[0].frames[1]).toEqual(original);
+    expect(game.frames).toEqual([]);
+    expect(session['pending'].size).toBe(0);
+  });
+
   it('drops a newly guarded observation before posting it, then suppresses the next at entry', async () => {
     let armed = false;
     const observe = vi.fn(() => { armed = true; });
@@ -334,18 +471,19 @@ describe('Session', () => {
   });
 
   it('confirms only accepted server writes with the rewritten RECONNECT', async () => {
+    let allow = true;
     const written: Packet[] = [];
     const module: WorkerModule = {
       id: 'transfer', priority: 0, writtenServer: ['RECONNECT'],
-      createSession: () => ({ writtenServer: packet => { written.push(packet); } }),
+      createSession: () => ({ allowWrite: () => allow, writtenServer: packet => { written.push(packet); } }),
     };
     const h = await harness({ modules: [module], interest: new Interest({ verdict: { server: ['RECONNECT'] } }) });
     const server = await fakeServer();
     const { game, upstream, session } = await connected(h, server);
     const reconnect = reconnectBytes(factory, { host: 'localhost', port: server.port, key: Buffer.from('real-key') });
     upstream.send(reconnect);
-    await until(() => packets(h).length === 1, 'held RECONNECT');
-    expect(written).toEqual([]);
+    await until(() => packets(h).length === 1, 'observed RECONNECT');
+    expect(packets(h)[0].observeOnly).toBe(true);
     const held = packets(h)[0];
     session.forward(held.sequence, held.generation, Buffer.from(held.data));
     await until(() => game.frames.length === 1, 'accepted RECONNECT');
@@ -353,8 +491,10 @@ describe('Session', () => {
     expect(written[0].data).toMatchObject({ host: '127.0.0.1', port: h.port });
     expect(written[0].rawBytes.equals(game.frames[0])).toBe(true);
 
+    allow = false;
     upstream.send(reconnect);
-    await until(() => packets(h).length === 2, 'dropped RECONNECT');
+    await until(() => packets(h).length === 2, 'worker-vetoed RECONNECT');
+    allow = true;
     const dropped = packets(h)[1];
     session.forward(dropped.sequence, dropped.generation, null);
     // A complete frame with an invalid route must not confirm a transfer either.
@@ -424,11 +564,11 @@ describe('Session', () => {
   it('reports upstream backpressure separately from held verdicts', async () => {
     let context!: WorkerSessionContext;
     const module: WorkerModule = { id: 'pressure', priority: 0, createSession: ctx => { context = ctx; return {}; } };
-    const h = await harness({ modules: [module], interest: new Interest({ verdict: { client: ['ESCAPE'] } }) });
+    const h = await harness({ modules: [module], interest: new Interest({ verdict: { client: ['PLAYERTEXT'] } }) });
     const server = await fakeServer();
     const { game, upstream, session } = await connected(h, server);
     expect(context.transport()).toMatchObject({ available: true, upstreamBackpressure: false });
-    game.send(frame(id('ESCAPE')));
+    game.send(frame(id('PLAYERTEXT')));
     await until(() => packets(h).length === 1, 'held verdict');
     expect(context.transport()).toMatchObject({ backlog: true, upstreamBackpressure: false });
     upstream['socket'].pause();
