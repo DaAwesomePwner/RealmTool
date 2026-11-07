@@ -91,7 +91,7 @@ describe('AppController lifecycle', () => {
       expect(controller.state().proxy).toMatchObject({ state: 'failed', error: expect.stringContaining('Automatic restarts exhausted') });
     } finally { vi.useRealTimers(); }
   });
-  it.each(['stop', 'profile', 'shutdown', 'start'] as const)('%s cancels a pending automatic restart', async action => {
+  it.each(['stop', 'profile', 'shutdown', 'start', 'uninstall', 'install', 'game-dir'] as const)('%s cancels a pending automatic restart', async action => {
     vi.useFakeTimers();
     try {
       await controller.createProfile('other');
@@ -103,10 +103,79 @@ describe('AppController lifecycle', () => {
       if (action === 'profile') await controller.selectProfile('other');
       if (action === 'shutdown') await controller.shutdown();
       if (action === 'start') await controller.startProxy();
+      if (action === 'uninstall') await controller.uninstallHelper();
+      if (action === 'install') await controller.installHelper();
+      if (action === 'game-dir') await controller.setGameDir(game);
+      const installs = vi.mocked(deps.installHelper!).mock.calls.length;
       await vi.advanceTimersByTimeAsync(10_000);
       expect(hosts).toHaveLength(action === 'start' ? 3 : 2);
       expect(controller.state().proxy.error ?? '').not.toContain('pending');
+      expect(deps.installHelper).toHaveBeenCalledTimes(installs);
+      if (action === 'uninstall') {
+        expect(inspectHelper(game, helper).state).toBe('absent');
+        expect(controller.state().proxy.state).toBe('failed');
+      }
     } finally { vi.useRealTimers(); }
+  });
+  it.each(['cleanup', 'restart'] as const)('honors Stop while crash %s holds the operation lock', async phase => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    try {
+      await controller.startProxy(); await drain();
+      if (phase === 'cleanup') hosts[0].stop.mockImplementation(() => new Promise(resolve => { release = resolve; }));
+      else {
+        const create = deps.createHost!;
+        // The dependency object is copied by the controller; configure the next host through the existing mock.
+        vi.mocked(create).mockImplementationOnce(() => {
+          const host = new FakeHost(); hosts.push(host);
+          host.start.mockImplementation(() => new Promise(resolve => { release = () => resolve(2050); }));
+          return host as unknown as ReturnType<ControllerDeps['createHost']>;
+        });
+      }
+      hosts[0].emit('exit', { code: 1, expected: false }); await drain();
+      if (phase === 'restart') await vi.advanceTimersByTimeAsync(0);
+      expect(release).toBeTypeOf('function');
+      const states: AppState[] = []; controller.on('state', state => states.push(state));
+      const stopping = controller.stopProxy();
+      if (phase === 'cleanup') expect(states.some(s => s.proxy.error?.includes('cancelled'))).toBe(true);
+      release(); await stopping;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(controller.state().proxy.state).toBe('stopped');
+      expect(hosts).toHaveLength(phase === 'cleanup' ? 1 : 2);
+    } finally { release?.(); vi.useRealTimers(); }
+  });
+  it('chains crash cleanup after an unrelated operation, then restarts', async () => {
+    vi.useFakeTimers();
+    try {
+      await controller.startProxy(); await drain();
+      const creating = controller.createProfile('other');
+      expect(controller.state().operation).toBe('creating profile');
+      hosts[0].emit('exit', { code: 1, expected: false });
+      expect(hosts[0].stop).not.toHaveBeenCalled();
+      await creating; await drain();
+      expect(hosts[0].stop).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hosts).toHaveLength(2);
+      expect(controller.state().proxy.state).toBe('running');
+    } finally { vi.useRealTimers(); }
+  });
+  it('logs a failed automatic start and leaves it failed without looping', async () => {
+    vi.useFakeTimers();
+    const errors = vi.spyOn(log, 'error');
+    try {
+      await controller.startProxy(); await drain();
+      vi.mocked(deps.createHost!).mockImplementationOnce(() => {
+        const host = new FakeHost(); hosts.push(host);
+        host.start.mockRejectedValue(new Error('restart listen failed'));
+        return host as unknown as ReturnType<ControllerDeps['createHost']>;
+      });
+      hosts[0].emit('exit', { code: 1, expected: false }); await drain();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.state().proxy).toMatchObject({ state: 'failed', error: 'restart listen failed' });
+      expect(errors).toHaveBeenCalledWith('Proxy', 'Automatic restart failed: restart listen failed');
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(hosts).toHaveLength(2);
+    } finally { errors.mockRestore(); vi.useRealTimers(); }
   });
   it('resets the automatic restart budget after a stable minute', async () => {
     vi.useFakeTimers();
@@ -118,6 +187,25 @@ describe('AppController lifecycle', () => {
       hosts[1].emit('exit', { code: 1, expected: false }); await drain();
       await vi.advanceTimersByTimeAsync(0);
       expect(hosts).toHaveLength(3);
+      expect(controller.state().proxy.state).toBe('running');
+    } finally { vi.useRealTimers(); }
+  });
+  it('expires only old restart attempts at the rolling window boundary', async () => {
+    vi.useFakeTimers();
+    try {
+      await controller.startProxy(); await drain();
+      hosts[0].emit('exit', { code: 1, expected: false }); await drain();
+      await vi.advanceTimersByTimeAsync(0); // First attempt at t=0.
+      await vi.advanceTimersByTimeAsync(1000);
+      hosts[1].emit('exit', { code: 1, expected: false }); await drain();
+      await vi.advanceTimersByTimeAsync(1000); // Second attempt at t=2000.
+      await vi.advanceTimersByTimeAsync(58_000);
+      hosts[2].emit('exit', { code: 1, expected: false }); await drain();
+      // At t=60000 only the first attempt expires: the next delay is 1s, not 0 or 5s.
+      await vi.advanceTimersByTimeAsync(999);
+      expect(hosts).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(hosts).toHaveLength(4);
       expect(controller.state().proxy.state).toBe('running');
     } finally { vi.useRealTimers(); }
   });
@@ -816,7 +904,7 @@ describe('AppController lifecycle', () => {
     expect(config.get().helperDirs).toEqual([game]);
   });
 
-  it('installs only after listen and rejects concurrent operations', async () => {
+  it('installs only after listen, rejects other concurrent operations and queues Stop', async () => {
     let listen!: (port: number) => void;
     deps.createHost = () => {
       const host = new FakeHost(); hosts.push(host);
@@ -825,12 +913,13 @@ describe('AppController lifecycle', () => {
     };
     await controller.shutdown(); controller = make();
     const starting = controller.startProxy();
-    await expect(controller.stopProxy()).rejects.toBeInstanceOf(OperationBusyError);
+    await expect(controller.installHelper()).rejects.toBeInstanceOf(OperationBusyError);
+    const stopping = controller.stopProxy();
     expect(deps.installHelper).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(listen).toBeTypeOf('function'));
-    listen(2050); await starting;
+    listen(2050); await starting; await stopping;
     expect(deps.installHelper).toHaveBeenCalledOnce();
-    expect(controller.state().proxy.state).toBe('running');
+    expect(controller.state().proxy.state).toBe('stopped');
   });
 
   it('disables modules, flushes settings before worker stop, and starts a fresh plugin host', async () => {
