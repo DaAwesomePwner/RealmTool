@@ -33,7 +33,7 @@ const hpData = (hp: number | undefined, tickId: number, maxHp = 707) => ({ tickI
   statuses: [{ objectId: 1, pos: { x: 0, y: 0 }, data: [{ id: 0, value: maxHp }, ...(hp === undefined ? [] : [{ id: 1, value: hp }])] }] });
 
 /** Same encrypted Session/fake game/server harness as src/transport/__tests__/session.test.ts. */
-async function harness(over = {}, options: { catalog?: SafetyCatalogFile | null; clientVerdict?: string[]; serverVerdict?: string[] } = {}) {
+async function harness(over = {}, options: { catalog?: SafetyCatalogFile | null; clientVerdict?: string[]; serverVerdict?: string[]; verdictDeadlineMs?: number } = {}) {
   autoNexusModule.configure!(config(over, options.catalog));
   let now = 1000;
   const events: WorkerEvent[] = [];
@@ -44,7 +44,7 @@ async function harness(over = {}, options: { catalog?: SafetyCatalogFile | null;
   } };
   const env: SessionEnv = { factory, router: new Router(), interest: new Interest({ observe: { server: ['NEWTICK'], client: ['PLAYERHIT', 'AOEACK', 'GROUNDDAMAGE', 'MOVE', 'PLAYERTEXT'] }, verdict: { server: ['RECONNECT', ...options.serverVerdict ?? []], client: options.clientVerdict ?? [] } }),
     modules: [autoNexusModule, tap], post: event => { events.push(event); if (event.type === 'packet') order.push(`packet:${factory.getPacketName(event.data[4], event.fromClient ? 'client' : 'server')}`); },
-    now: () => now, fallbackDestination: null, targetTimeoutMs: 1000, helloTimeoutMs: DEFAULTS.helloTimeoutMs, maxPendingBytes: DEFAULTS.maxPendingBytes, onClosed: () => {} };
+    verdictDeadlineMs: options.verdictDeadlineMs, now: () => now, fallbackDestination: null, targetTimeoutMs: 1000, helloTimeoutMs: DEFAULTS.helloTimeoutMs, maxPendingBytes: DEFAULTS.maxPendingBytes, onClosed: () => {} };
   const sessions: Session[] = [];
   const listener = net.createServer(socket => sessions.push(new Session(`s${sessions.length}`, socket, env)));
   await new Promise<void>((resolve, reject) => { listener.once('error', reject); listener.listen(0, '127.0.0.1', resolve); });
@@ -99,11 +99,15 @@ describe('Auto Nexus session adapter', () => {
     h.advance(10000); h.advance(10000); expect(h.order.filter(s => s === 'write:auto-nexus')).toHaveLength(5);
   });
 
-  it('held, dropped and malformed RECONNECT do not stop retries; accepted rewritten RECONNECT does', async () => {
+  it('writer-rejected and malformed RECONNECT do not stop retries; accepted rewritten RECONNECT does', async () => {
     const h = await harness(); await h.tick(100); await until(() => h.escapes().length === 1, 'initial');
     const reconnect = reconnectBytes(factory, { host: 'localhost', port: h.server.port, key: Buffer.alloc(0) });
-    h.upstream.send(reconnect); await until(() => h.held().length === 1, 'held transfer');
-    h.advance(400); await until(() => h.escapes().length === 2, 'held retry');
+    // Critical packets cannot be held by plugins; exercise rejection at the final writer instead.
+    const writable = vi.spyOn(h.session['client'], 'writable', 'get').mockReturnValue(false);
+    h.upstream.send(reconnect); await until(() => h.held().length === 1, 'rejected transfer');
+    writable.mockRestore();
+    expect(h.held()[0].observeOnly).toBe(true);
+    h.advance(400); await until(() => h.escapes().length === 2, 'writer-rejected retry');
     const first = h.held()[0]; h.session.forward(first.sequence, first.generation, null);
     expect(h.session.inject(reconnectBytes(factory, { host: 'bad host', port: h.server.port, key: Buffer.alloc(0) }), true)).toBe(false);
     h.advance(400); await until(() => h.escapes().length === 3, 'dropped retry');
@@ -202,7 +206,8 @@ describe('Collision HP worker wiring', () => {
 
   it.each(['release', 'drop'] as const)('charges a held report once and retains its loss on %s until eligible reconciliation', async action => {
     const delivered = vi.spyOn(SafetyEngine.prototype, 'reportDelivered');
-    const h = await harness({}, { clientVerdict: ['PLAYERHIT'] }); await h.tick(1000, 1, 1000);
+    // Isolate reconciliation after a long hold using the supported test deadline override.
+    const h = await harness({}, { clientVerdict: ['PLAYERHIT'], verdictDeadlineMs: 5000 }); await h.tick(1000, 1, 1000);
     h.game.send(hit()); await until(() => h.packets('PLAYERHIT').length === 1, 'held hit');
     for (let i = 2; i <= 7; ++i) { h.advance(200); await h.tick(1000, i, 1000); }
     expect(h.sample().status.prediction.pendingDamage).toBe(200);
@@ -361,7 +366,8 @@ describe('Collision HP worker wiring', () => {
 
   it('clears prediction on reconnect and assesses a surviving held report afresh in the new epoch', async () => {
     const delivered = vi.spyOn(SafetyEngine.prototype, 'reportDelivered');
-    const h = await harness({}, { clientVerdict: ['PLAYERHIT'], serverVerdict: ['ENEMYSHOOT'] }); await h.tick(1000, 1, 1000);
+    // Keep the report held across sampled clock advances to isolate generation reassessment.
+    const h = await harness({}, { clientVerdict: ['PLAYERHIT'], serverVerdict: ['ENEMYSHOOT'], verdictDeadlineMs: 5000 }); await h.tick(1000, 1, 1000);
     h.game.send(hit()); await until(() => h.packets('PLAYERHIT').length === 1, 'surviving hit');
     expect(h.sample().status.prediction.pendingDamage).toBe(200);
     h.upstream.send(shoot()); await until(() => h.packets('ENEMYSHOOT').length === 1, 'old danger');

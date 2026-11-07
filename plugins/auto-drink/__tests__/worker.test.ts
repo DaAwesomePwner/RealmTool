@@ -231,21 +231,22 @@ it('uses original server health and quantity only, ignoring injected state and p
   f.inject(f.tickPacket([stat(116,10,2)]),true);await f.advance(450);expect(f.uses()).toHaveLength(1);expect(f.status()?.status).toMatchObject({hp:400,pending:true});
   f.env.interest=new Interest();await f.stats([stat(116,10,2)]);await f.advance();expect(f.uses()).toHaveLength(2);
 });
-it.each(['dropped', 'malformed', 'held', 'accepted'] as const)('only disarms on an accepted written RECONNECT: %s', async outcome => {
+it.each(['dropped', 'malformed', 'held', 'accepted'] as const)('disarms on written critical RECONNECT regardless of main-thread verdict: %s', async outcome => {
   const f = await fixture();
   f.env.interest = new Interest({ verdict: { server: ['RECONNECT'] } });
   f.upstream.send(reconnectBytes(factory, { host: outcome === 'malformed' ? 'invalid/host' : '127.0.0.1', port: 2050, key: Buffer.from([1]) }));
-  await until(() => f.events.some(e => e.type === 'packet' && !e.fromClient), 'held RECONNECT verdict');
+  await until(() => f.events.some(e => e.type === 'packet' && !e.fromClient), 'observed RECONNECT');
   const held = f.events.find(e => e.type === 'packet' && !e.fromClient) as Extract<WorkerEvent, { type: 'packet' }>;
+  expect(held.observeOnly).toBe(true);
   if (outcome === 'held') {
     f.session.tick(f.now());
-    expect(f.uses()).toHaveLength(0); // Backlog blocks drinking until the verdict resolves.
-    expect(f.status()?.status.reason).not.toBe('escape lifecycle');
+    expect(f.uses()).toHaveLength(0); // Transfer is already written; no main-thread verdict is needed.
+    expect(f.status()?.status.reason).toBe('escape lifecycle');
   }
   f.session.forward(held.sequence, held.generation,
     outcome === 'dropped' || outcome === 'held' ? null : Buffer.from(held.data));
   await f.advance();
-  if (outcome === 'accepted') {
+  if (outcome !== 'malformed') {
     expect(f.uses()).toHaveLength(0);
     expect(f.status()?.status.reason).toBe('escape lifecycle');
     expect(f.game.frames.some(bytes => bytes[4] === factory.getPacketId('RECONNECT'))).toBe(true);
