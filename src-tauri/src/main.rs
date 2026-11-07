@@ -292,12 +292,12 @@ fn recovery_script(log_path: &str) -> String {
 /// Debug builds only: the GUI smoke sets `REALMTOOL_GUI_SMOKE_CDP_PORT` to open the WebView2
 /// DevTools protocol. wry passes explicit browser arguments, which current WebView2 runtimes
 /// prefer over `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, so the port goes in here. Explicit
-/// arguments replace wry's defaults, so its disabled features are repeated.
+/// arguments replace wry's defaults, so its disabled features and autoplay policy are repeated.
 #[cfg(debug_assertions)]
 fn smoke_browser_args(port: Option<String>) -> Option<String> {
     let port = port?.parse::<u16>().ok().filter(|port| *port != 0)?;
     Some(format!(
-        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port={port}"
     ))
 }
 
@@ -396,7 +396,7 @@ mod smoke_args_tests {
     fn opens_the_requested_debugging_port_and_keeps_wry_defaults() {
         assert_eq!(
             smoke_browser_args(Some("9241".into())).as_deref(),
-            Some("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9241")
+            Some("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --remote-debugging-port=9241")
         );
     }
 

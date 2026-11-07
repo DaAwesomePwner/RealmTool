@@ -92,7 +92,7 @@ async function collectDiagnostics(options: Options, collect: typeof collectWindo
   const attempt = async (work: () => Promise<unknown>) => { try { await work(); } catch (error) { errors.push(error); } };
   // Do not dump inherited secrets. Record only the launch overrides relevant to this failure.
   const environment = Object.fromEntries(Object.entries(options.environment ?? {}).filter(([key]) =>
-    /^(APPDATA|LOCALAPPDATA|USERPROFILE|HOME|TEMP|TMP|TMPDIR|ROTMG_PATH|WEBVIEW2_.*|REALMTOOL_GUI_SMOKE_.*)$/i.test(key)));
+    /^(APPDATA|LOCALAPPDATA|USERPROFILE|HOME|TEMP|TMP|TMPDIR|ROTMG_PATH|WEBVIEW2_.*|REALMTOOL_GUI_SMOKE_CDP_PORT)$/i.test(key)));
   await attempt(() => writeFile(join(directory, 'launch.json'), JSON.stringify({
     capturedAt: new Date().toISOString(), root: options.root, exe: options.exe, pid: options.pid,
     creationDate: options.creationDate, diagnosticErrors: options.diagnosticErrors ?? [],

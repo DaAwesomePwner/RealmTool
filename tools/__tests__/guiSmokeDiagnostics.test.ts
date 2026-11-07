@@ -81,12 +81,15 @@ it('keeps evidence outside the disposable profile and excludes inherited secrets
   const { mkdir } = await import('node:fs/promises'); await mkdir(root);
   await writeFile(join(root, 'app-output.log'), 'app output');
   await captureDiagnostics({ root, directory, exe: 'app.exe', pid: 10, port: 9241,
-    child: { exitCode: 0, signalCode: null }, environment: { APPDATA: 'temp', GITHUB_TOKEN: 'secret' },
+    child: { exitCode: 0, signalCode: null }, environment: { APPDATA: 'temp', GITHUB_TOKEN: 'secret',
+      REALMTOOL_GUI_SMOKE_CDP_PORT: '9241', REALMTOOL_GUI_SMOKE_TOKEN: 'secret' },
   }, async () => ({ processes: [], listeners: [], errors: [], sessionId: 1, rootAlive: false, exitCode: null }));
   await rm(root, { recursive: true });
   const launch = JSON.parse(await readFile(join(directory, 'launch.json'), 'utf8'));
   expect(launch).toMatchObject({ alive: false, exitCode: 0, environment: { APPDATA: 'temp' } });
   expect(launch.environment.GITHUB_TOKEN).toBeUndefined();
+  expect(launch.environment.REALMTOOL_GUI_SMOKE_CDP_PORT).toBe('9241');
+  expect(launch.environment.REALMTOOL_GUI_SMOKE_TOKEN).toBeUndefined();
   expect(await readFile(join(directory, 'app-output.log'), 'utf8')).toBe('app output');
   expect(JSON.parse(await readFile(join(directory, 'complete.json'), 'utf8')).capturedAt).toEqual(expect.any(String));
 });
