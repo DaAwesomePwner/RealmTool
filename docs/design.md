@@ -178,3 +178,5 @@ Each phase ends with working, tested software. **Release gate:** Phases 1, 2, 3a
 3. **One game client at a time** in v1. The worker already supports many sessions; the native bridge and session identity are built PID-aware so multi-client can be enabled later.
 4. **RealmTool and Realm Engine can't run against the same game install at the same time.** Both side-load `winhttp.dll`. The installer backs up a foreign `winhttp.dll` and restores it on uninstall.
 5. **Port with provenance, not git-fork.** RealmTool is a fresh repo; ported files carry a header comment naming their source path, and `NOTICE` keeps the MIT attribution.
+
+An unexpected network worker exit after startup automatically rebuilds the proxy and plugins, with delays of 0, 1 and 5 seconds and a cap of three automatic restarts within 60 seconds. Protection remains unprotected during recovery; Stop, profile changes and shutdown cancel pending restarts, and a stable minute resets the restart budget.

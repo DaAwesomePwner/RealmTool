@@ -110,6 +110,9 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private sessions = new Set<string>();
   private connected = new Set<string>();
   private pending: Promise<void> | null = null;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private restartEpoch = 0;
+  private restartAttempts: number[] = [];
   private shutdownPromise: Promise<void> | null = null;
   private shuttingDown = false;
   private dataAbort: AbortController | null = null;
@@ -423,7 +426,45 @@ export class AppController extends EventEmitter<ControllerEvents> {
     try { await this.checkData(); } catch { /* Retained in state and rate-limited above. */ }
   }
 
-  startProxy(): Promise<void> { return this.operation('starting proxy', () => this.start()); }
+  startProxy(): Promise<void> {
+    return this.operation('starting proxy', () => { this.cancelRestart(); this.restartAttempts = []; return this.start(); });
+  }
+  private cancelRestart(): void {
+    this.restartEpoch++;
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = null;
+    if (this.current.proxy.error?.includes('Automatic restart')) {
+      const error = this.current.proxy.error.replace(/pending in \d+ ms\./, 'cancelled.');
+      if (error !== this.current.proxy.error) { this.current.proxy.error = error; this.changed(); }
+    }
+  }
+  private restartHost(host: ReturnType<ControllerDeps['createHost']>, error: string): void {
+    const epoch = this.restartEpoch;
+    const now = Date.now();
+    // A stable minute naturally expires every attempt; no separate reset clock is needed.
+    this.restartAttempts = this.restartAttempts.filter(at => now - at < 60_000);
+    const delay = [0, 1000, 5000][this.restartAttempts.length];
+    const detail = delay === undefined ? `${error}. Automatic restarts exhausted (3 within 60 seconds); press Start to retry.`
+      : `${error}. Automatic restart ${this.restartAttempts.length + 1}/3 pending in ${delay} ms.`;
+    log.warn('Proxy', detail);
+    this.failHost(host, detail, () => {
+      if (delay === undefined || epoch !== this.restartEpoch || this.shuttingDown) return;
+      this.restartTimer = setTimeout(() => {
+        this.restartTimer = null;
+        void (async () => {
+          // Wait for any user operation, then recheck cancellation before acquiring serialization.
+          while (this.pending) await this.pending;
+          if (epoch !== this.restartEpoch || this.shuttingDown) return;
+          await this.operation('restarting proxy', async () => {
+            this.restartAttempts.push(Date.now());
+            log.warn('Proxy', 'Automatically restarting network proxy');
+            await this.start();
+          });
+        })().catch(error => log.error('Proxy', `Automatic restart failed: ${message(error)}`));
+      }, delay);
+      this.restartTimer.unref();
+    });
+  }
   private async start(): Promise<void> {
     if (this.current.proxy.state === 'running') return;
     this.processEpoch++; this.stoppedFlight = null;
@@ -513,7 +554,9 @@ export class AppController extends EventEmitter<ControllerEvents> {
       this.moduleProtection = {};
       if (expected) { this.protectionChanged(); return; }
       const error = `Network worker stopped unexpectedly (code ${code})`;
-      log.error('Proxy', error); this.failHost(host, error);
+      log.error('Proxy', error);
+      if (this.current.proxy.state === 'running' && !this.shuttingDown) this.restartHost(host, error);
+      else this.failHost(host, error);
     };
     host.on('session', onSession); host.on('connected', onConnected); host.on('closed', onClosed);
     host.on('routed', onRouted); host.on('diagnostic', diagnostic); host.on('note', note); host.on('fault', fault); host.on('exit', exit);
@@ -522,7 +565,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
       host.off('routed', onRouted); host.off('diagnostic', diagnostic); host.off('note', note); host.off('fault', fault); host.off('exit', exit);
     });
   }
-  private failHost(host: ReturnType<ControllerDeps['createHost']>, error: string): void {
+  private failHost(host: ReturnType<ControllerDeps['createHost']>, error: string, afterCleanup?: () => void): void {
     if (this.host !== host || this.shuttingDown) return;
     this.current.proxy = { state: 'failed', port: null, error };
     const cleanup = () => this.host === host && !this.shuttingDown
@@ -531,7 +574,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     // over a worker that has not finished stopping. Startup handles its own failure.
     const task = this.pending ? this.pending.then(cleanup) : cleanup();
     this.changed();
-    void task.catch(error => log.error('Proxy', `Cleanup failed: ${message(error)}`));
+    void task.then(() => afterCleanup?.()).catch(error => log.error('Proxy', `Cleanup failed: ${message(error)}`));
   }
   private sessionState(): void {
     this.current.sessions = { open: this.sessions.size, connected: this.connected.size }; this.changed();
@@ -560,7 +603,13 @@ export class AppController extends EventEmitter<ControllerEvents> {
       }
     }
   }
-  stopProxy(): Promise<void> { return this.operation('stopping proxy', () => this.stop()); }
+  async stopProxy(): Promise<void> {
+    this.cancelRestart();
+    // Stop is authoritative even during crash cleanup or an in-flight restart.
+    while (this.pending) await this.pending;
+    if (this.shuttingDown) { await this.shutdownPromise; return; }
+    return this.operation('stopping proxy', () => { this.cancelRestart(); return this.stop(); });
+  }
   private async stop(): Promise<void> {
     this.current.proxy = { ...this.current.proxy, state: 'stopping' }; this.changed();
     log.info('Proxy', 'Stopping…');
@@ -570,6 +619,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
   }
   launchGame(): Promise<void> {
     return this.operation('opening launcher', async () => {
+      this.cancelRestart(); this.restartAttempts = [];
       const override = this.current.game.launcher ?? undefined;
       try { if (override !== undefined) this.validateLauncher(override); }
       catch (error) {
@@ -605,10 +655,13 @@ export class AppController extends EventEmitter<ControllerEvents> {
       return result;
     } finally { this.refreshHelper(); this.changed(); }
   }
-  installHelper(): Promise<InstallResult> { return this.operation('installing helper', async () => this.install(this.gameDir())); }
+  installHelper(): Promise<InstallResult> {
+    return this.operation('installing helper', async () => { this.cancelRestart(); return this.install(this.gameDir()); });
+  }
   uninstallHelper(): Promise<UninstallStatus> {
     return this.operation('uninstalling helper', async () => {
       if (this.host) throw new Error('Stop the proxy before uninstalling the helper');
+      this.cancelRestart();
       try {
         const dir = this.gameDir();
         const status = this.deps.uninstallHelper(dir);
@@ -624,6 +677,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
       if (this.dataFlight) throw new OperationBusyError();
       this.catalogBuilds = null;
       if (!dir.trim() || !this.deps.isGameDir(resolve(dir))) throw new Error('Folder does not contain RotMG Exalt.exe');
+      this.cancelRestart();
       this.config.update({ gameDir: resolve(dir) }); this.current.game.dir = resolve(dir); this.refreshHelper(); this.changed();
     });
   }
@@ -639,6 +693,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
       const selected = listProfiles(this.config.dir).find(entry => entry.toLowerCase() === name.toLowerCase());
       if (!selected) throw new Error(`Profile does not exist: ${name}`);
       if (selected === this.current.profile.active) return;
+      this.cancelRestart();
       const running = this.current.proxy.state === 'running';
       this.config.update({ activeProfile: selected }); this.refreshProfiles(); this.changed();
       if (running) { await this.stop(); if (!this.shuttingDown) await this.start(); }
@@ -668,6 +723,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
   shutdown(): Promise<void> {
     if (!this.shutdownPromise) {
       this.shuttingDown = true;
+      this.cancelRestart();
       clearInterval(this.stoppedTimer); clearInterval(this.freshnessTimer);
       this.dataAbort?.abort(new Error('Game data refresh cancelled'));
       this.shutdownPromise = (async () => {
