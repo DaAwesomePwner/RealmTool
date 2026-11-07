@@ -41,6 +41,7 @@ export class EscapeAttemptCoordinator {
   private attemptSequence = 0;
   private writeSequence = 0;
   private current: Attempt | null = null;
+  private deferredAttempt: Attempt | null = null;
   private pending: Write | null = null;
   private recovery: { failedAt: number; until: number; freshnessMs: number } | null = null;
 
@@ -50,6 +51,9 @@ export class EscapeAttemptCoordinator {
     this.transport = transport; this.observeWrite = observeWrite;
   }
 
+  get retryDeferred(): boolean {
+    return this.current !== null && this.current === this.deferredAttempt && this.current.phase === 'written';
+  }
   get available(): boolean { return this.transport?.available() ?? true; }
   get status(): EscapeAttemptStatus | null {
     if (!this.current) return null;
@@ -145,8 +149,10 @@ export class EscapeAttemptCoordinator {
       const lastWriteAt = a.lastWriteAt ?? a.sharedWrite?.at;
       if (initial || lastWriteAt == null || now >= lastWriteAt + a.retryMs + 2 * a.reactionMs)
         this.fail(a, now, 'backpressure');
+      if (!initial && a.phase !== 'failed') this.deferredAttempt = a;
       return false; // Deferral neither consumes a retry nor releases another write's slot.
     }
+    this.deferredAttempt = null;
     const write: Write = { id: ++this.writeSequence, attempt: a, at: now, accepted: false, completedAt: null, error: null };
     a.sharedWrite = null; a.ownWrite = write;
     this.pending = write; a.writeId = write.id; a.lastWriteAt = now; a.phase = 'queued';

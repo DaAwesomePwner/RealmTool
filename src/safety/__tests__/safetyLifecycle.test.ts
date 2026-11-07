@@ -622,3 +622,40 @@ it.each(['generation', 'epoch', 'revision'])('retires a deferred retry on supers
   f.io.blocked = false; f.advance(400);
   expect(f.writes).toHaveLength(1);
 });
+
+it('shows deferred retry backpressure in lastReason only while the retry is deferred', () => {
+  const f = fixture(); f.health(200); f.complete(); f.io.blocked = true; f.advance(400);
+  expect(f.engine.status().lastReason).toContain('retry deferred (backpressure)');
+  f.io.blocked = false; f.advance(1); f.complete();
+  expect(f.engine.status().lastReason).toBe('server HP threshold');
+});
+
+it.each([false, true])('defers a retry held by another write slot (deadline=%s)', deadline => {
+  const f = fixture(); f.manual();
+  // Public lifecycle transitions normally prevent a foreign slot beside a
+  // written attempt. Arrange that defensive state with REAL write callbacks;
+  // the old callback must retain ownership and the retry must not clear it.
+  const slots = f.engine.attempts as unknown as { pending: unknown };
+  const older = slots.pending;
+  slots.pending = null;
+  f.health(200); f.complete(1);
+  slots.pending = older;
+  expect(f.io.blocked).toBe(false);
+  f.advance(400);
+  expect(f.writes).toHaveLength(2);
+  expect(slots.pending).toBe(older);
+  expect(f.engine.attempts.status).toMatchObject({ phase: 'written', failure: null });
+  expect(f.engine.attempts.recoveryState(f.now())).toBeNull();
+  if (deadline) {
+    f.advance(800);
+    expect(f.engine.attempts.status?.failure).toBe('backpressure');
+    expect(f.engine.attempts.recoveryState(f.now())).toBe('cooldown');
+    f.complete(0); f.advance(1);
+    expect(f.writes).toHaveLength(2);
+  } else {
+    f.complete(0); f.advance(1); f.complete(2);
+    f.advance(399); expect(f.writes).toHaveLength(3);
+    f.advance(1); f.complete(3);
+    expect(f.writes.map(write => write.at)).toEqual([1000, 1000, 1401, 1801]);
+  }
+});

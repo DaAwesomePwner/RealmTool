@@ -37,6 +37,11 @@ export class SafetyEngine {
   private tiles = new Map<string, number>();
   private aoeSeq = 0;
   private areas: AreaAttack[] = [];
+  private expiredAreas: AreaAttack[] = [];
+  private expiredAreaCount = 0;
+  // Independent old-FIFO correspondence supplies a per-ACK damage floor even
+  // after matching reorders consumption or the recent-expiry window elapses.
+  private fifoAreas: AreaAttack[] = [];
   private lastCleanup = 0;
   private predictionObservation = 0;
   private predictionOccurrences = new Map<string, number>();
@@ -76,7 +81,8 @@ export class SafetyEngine {
     this.settings = normalized;
     if (modeChanged) {
       // Retiring estimates is not a new HP sample or escape lifecycle.
-      this.predictor.clearDebt(); this.areas = [];
+      this.predictor.clearDebt();
+      this.areas = []; this.expiredAreas = []; this.fifoAreas = []; this.expiredAreaCount = 0;
       this.predictionOccurrences.clear(); this.predictionSignatures.clear();
       this.unresolvedOccurrences.clear(); this.projectileConditions.clear();
     }
@@ -99,7 +105,8 @@ export class SafetyEngine {
     this.player = new ServerPlayerState(); this.predictor.reset();
     this.predictionOccurrences.clear(); this.predictionSignatures.clear(); this.unresolvedOccurrences.clear();
     this.unresolvedSerial = 0; this.damageBasisRevision = 0; this.damageBasisAt = null;
-    this.projectileConditions.clear(); this.shots.clear(); this.types.clear(); this.tiles.clear(); this.areas = [];
+    this.projectileConditions.clear(); this.shots.clear(); this.types.clear(); this.tiles.clear();
+    this.areas = []; this.expiredAreas = []; this.fifoAreas = []; this.expiredAreaCount = 0;
     this.lastHp = null; this.lastHpAt = null; this.lastServerAt = null; this.hpAnchorContinuous = false;
     this.lastTick = -1; this.lastReason = '';
   }
@@ -193,24 +200,36 @@ export class SafetyEngine {
         this.uncertain(now, 'invalid AoE geometry/damage'); return;
       }
       this.expireAreas(now);
-      if (this.areas.length >= 128) { this.uncertain(now, 'AoE correspondence capacity'); return; }
       const area = { id: `aoe:${++this.aoeSeq}`, observationId, x: p.x, y: p.y, radius: d.radius, raw: d.damage, at: now };
+      if (this.fifoAreas.length < 128) this.fifoAreas.push(area);
+      if (this.areas.length >= 128) { this.uncertain(now, 'AoE correspondence capacity'); return; }
       this.areas.push(area);
     }
   }
 
 
   retireArea(observationId: number): void {
-    const index = this.areas.findIndex(area => area.observationId === observationId);
-    if (index !== -1) this.areas.splice(index, 1);
+    for (const areas of [this.areas, this.expiredAreas, this.fifoAreas]) {
+      const index = areas.findIndex(area => area.observationId === observationId);
+      if (index !== -1) areas.splice(index, 1);
+    }
   }
 
   private expireAreas(now: number): void {
     const freshnessMs = Math.max(1000, 2 * this.settings.reactionMs);
-    const count = this.areas.length;
+    const expired = this.areas.filter(area => now - area.at > freshnessMs);
     this.areas = this.areas.filter(area => now - area.at <= freshnessMs);
-    const expired = count - this.areas.length;
-    if (expired) this.predictor.noteCoverage(`expired-unacknowledged AoEs: ${expired}`);
+    // Retain at most 128 late-ACK candidates for one additional freshness window,
+    // independently of fresh capacity. FIFO below retains its original lifetime.
+    this.expiredAreas = [...this.expiredAreas, ...expired]
+      .filter(area => now - area.at <= 2 * freshnessMs).slice(-128);
+    this.expiredAreaCount += expired.length;
+    if (expired.length) {
+      const coverage = this.predictor.state(now).coverage;
+      if (!coverage || coverage === 'reported collisions; estimated reconciliation'
+        || coverage.startsWith('expired-unacknowledged AoEs:'))
+        this.predictor.noteCoverage(`expired-unacknowledged AoEs: ${this.expiredAreaCount}`);
+    }
   }
 
   private applyStatus(status: Parameters<ServerPlayerState['applyStatus']>[0], now: number, full = false): void {
@@ -318,17 +337,37 @@ export class SafetyEngine {
       this.expireAreas(now);
       const pos = d.position;
       const validPosition = pos && finite(pos.x) && finite(pos.y);
-      // ACKs have no area id. Prefer the oldest possible hit so an earlier
-      // unacknowledged miss cannot hide damage under hit-only ACK semantics.
-      const match = validPosition ? this.areas.findIndex(area =>
-        Math.hypot(pos.x - area.x, pos.y - area.y) <= area.radius + .5) : -1;
-      const [area] = this.areas.splice(match < 0 ? 0 : match, 1);
-      const known = area && this.player.conditionsKnown && !(this.player.effects2 & (1 << 6));
-      const misses = known && validPosition
-        && Math.hypot(pos.x - area.x, pos.y - area.y) > area.radius + .5;
-      if (!misses) this.predictor.impact(area?.id ?? `aoe-unresolved:${++this.seq}`,
-        { amount: known ? area.raw : Math.max(200, area?.raw ?? 0), kind: known ? 'mitigated-estimate' : 'assumed',
-          reason: known ? 'raw AoE damage estimate' : 'unresolved AoE mechanics' }, now, 'aoe', now + 12000, observationId);
+      const contains = (area: AreaAttack) => !validPosition
+        || Math.hypot(pos.x - area.x, pos.y - area.y) <= area.radius + .5;
+      const candidates = this.areas.filter(contains);
+      let area: AreaAttack | undefined, raw: number | undefined, recent = false;
+      if (candidates.length && (validPosition || !this.expiredAreas.length)) {
+        // Consume oldest, but ambiguous overlap must charge the largest possible hit.
+        area = candidates[0]; raw = Math.max(...candidates.map(candidate => candidate.raw));
+        this.areas.splice(this.areas.indexOf(area), 1);
+      } else {
+        const late = this.expiredAreas.filter(contains);
+        if (late.length) {
+          area = late.reduce((largest, candidate) => candidate.raw > largest.raw ? candidate : largest);
+          // An invalid position excludes neither fresh nor expired candidates.
+          raw = Math.max(area.raw, ...candidates.map(candidate => candidate.raw)); recent = true;
+          this.expiredAreas.splice(this.expiredAreas.indexOf(area), 1);
+        } else { area = this.areas.shift(); raw = area?.raw; }
+      }
+      const conditionsKnown = this.player.conditionsKnown && !(this.player.effects2 & (1 << 6));
+      const known = area && !recent && conditionsKnown;
+      const misses = known && area && !contains(area);
+      const estimate = misses ? 0 : known ? raw! : Math.max(200, raw ?? 0);
+      // Mirror the pre-matching FIFO rule independently: even valid-position
+      // misses and stale/missing correspondence must never lower its ACK charge.
+      const fifo = this.fifoAreas.shift();
+      const fifoKnown = fifo && now - fifo.at <= Math.max(1000, 2 * this.settings.reactionMs) && conditionsKnown;
+      const floor = fifoKnown ? (contains(fifo) ? fifo.raw : 0) : Math.max(200, fifo?.raw ?? 0);
+      const amount = Math.max(estimate, floor);
+      if (!misses || amount > 0) this.predictor.impact(area?.id ?? `aoe-unresolved:${++this.seq}`,
+        { amount, kind: known && floor <= estimate ? 'mitigated-estimate' : 'assumed',
+          reason: floor > estimate ? 'FIFO AoE damage floor' : known ? 'raw AoE damage estimate' : 'unresolved AoE mechanics' },
+        now, 'aoe', now + 12000, observationId);
     }
     this.check(now, 'reported impact');
   }
@@ -359,6 +398,7 @@ export class SafetyEngine {
     this.expireAreas(now);
     if (now - this.lastCleanup >= 1000) {
       this.lastCleanup = now;
+      this.fifoAreas = this.fifoAreas.filter(area => now - area.at <= 10000);
       for (const [id, occurrence] of this.unresolvedOccurrences) if (occurrence.expires < now) this.unresolvedOccurrences.delete(id);
       for (const [key, shot] of this.shots) if (shot.expires < now) {
         this.shots.delete(key); this.predictionOccurrences.delete(shot.id);
@@ -483,7 +523,8 @@ export class SafetyEngine {
       enabled: this.settings.enabled, protectionState: this.protectionState, automaticEligible: this.automaticEligible,
       attemptOrigin: attempt?.origin ?? null, attemptPhase: attempt?.phase ?? null,
       epoch: this.epoch, objectId: this.player.ownerObjectId, map: this.map, phase: this.phase,
-      confirmedHp: this.lastHp, maxHp: this.maxHp, lastReason: this.lastReason, reactionMs: this.settings.reactionMs,
+      confirmedHp: this.lastHp, maxHp: this.maxHp, lastReason: this.attempts.retryDeferred
+        ? `${this.lastReason}; retry deferred (backpressure)` : this.lastReason, reactionMs: this.settings.reactionMs,
       healthAgeMs: this.lastHpAt === null ? null : now - this.lastHpAt,
       streamAgeMs: this.lastServerAt === null ? null : now - this.lastServerAt };
   }
