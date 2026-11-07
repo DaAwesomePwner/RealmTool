@@ -66,6 +66,46 @@ describe('AppController lifecycle', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it('subscribes to module and plugin status, emits only changed protection, guards listeners and resets workers', async () => {
+    await controller.shutdown();
+    deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => selection('A');
+    deps.plugins = ['auto-nexus', 'auto-drink'].map(id => ({ id, name: id, apiVersion: PLUGIN_API_VERSION,
+      capabilities: [], register(ctx: PluginContext) { contexts.push(ctx); ctx.enabled = true;
+        ctx.setData('status', { protectionState: 'monitoring', collisionHp: 'on' }); } }));
+    controller = make(); await controller.startProxy(); await drain();
+    const host = hosts.at(-1)!;
+    host.emit('session', { id: 'game', remotePort: 123 }); await drain();
+    expect(controller.state().protection?.state).toBe('protected');
+    const changes = vi.fn(); controller.on('state', changes);
+    host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: 1 });
+    expect(controller.state().protection?.state).toBe('unprotected');
+    const since = controller.state().protection?.since;
+    changes.mockClear(); host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: 2 });
+    expect(changes).not.toHaveBeenCalled(); expect(controller.state().protection?.since).toBe(since);
+    const throwing = () => { throw new Error('consumer failed'); }; controller.on('state', throwing);
+    expect(() => host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'healthy', since: 3 })).not.toThrow();
+    expect(() => host.emit('moduleConfig', { type: 'moduleConfig', moduleId: 'auto-nexus', ok: false, error: 'bad' })).not.toThrow();
+    controller.off('state', throwing);
+    host.emit('moduleConfig', { type: 'moduleConfig', moduleId: 'auto-nexus', ok: true });
+    contexts[0].setData('status', { protectionState: 'monitoring-degraded', degraded: 'server-hp-stale' });
+    expect(controller.state().protection?.state).toBe('degraded');
+    contexts[0].enabled = false; expect(controller.state().protection?.reasons.some(r => r.code === 'nexus-disabled')).toBe(true);
+    contexts[0].enabled = true;
+    host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: 4 });
+    host.emit('exit', { code: 1, expected: false }); await drain();
+    expect(controller.state().protection?.state).toBe('unprotected');
+    expect(controller.state().protection?.reasons.some(r => r.code === 'auto-nexus-failing')).toBe(false);
+    await controller.startProxy(); await drain();
+    hosts.at(-1)!.emit('session', { id: 'new', remotePort: 124 }); await drain();
+    expect(controller.state().protection?.state).toBe('protected');
+    host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: 5 });
+    expect(controller.state().protection?.state).toBe('protected');
+    await controller.stopProxy();
+    // Stopping the proxy does not imply the observed game process stopped.
+    expect(controller.state().protection?.state).toBe('unprotected');
+    expect(host.listenerCount('moduleStatus')).toBe(0); expect(host.listenerCount('moduleConfig')).toBe(0);
+  });
+
   it('re-inspects helper on polls and sessions and detects missing routing with a grace period', async () => {
     await controller.shutdown(); vi.useFakeTimers();
     try {

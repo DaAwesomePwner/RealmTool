@@ -10,6 +10,7 @@ export class Readiness {
   readonly actions = el('div', undefined, 'controls');
   /** Proxy and request errors, shown above the tabs so they stay visible. */
   readonly notices = el('div', undefined, 'notices');
+  private readonly protectionReasons = el('ul', undefined, 'protection-reasons');
   private readonly error = el('p', '', 'error');
   private readonly requestError = el('p', '', 'error');
   private readonly folder = el('input');
@@ -49,7 +50,7 @@ export class Readiness {
     const helper = el('div', undefined, 'setup-row');
     helper.append(this.uninstall, el('p', 'Closing the window while the proxy runs hides RealmTool to the tray. Use tray Quit to exit. The helper stays installed until you uninstall it.', 'help'));
     this.error.setAttribute('role', 'alert'); this.requestError.setAttribute('role', 'alert');
-    this.notices.append(this.error, this.requestError);
+    this.notices.append(this.error, this.requestError, this.protectionReasons);
     this.element.append(el('h2', 'Game'), folderRow, options, el('h3', 'Game data'), data, el('h3', 'Helper'), helper);
     this.controls();
   }
@@ -57,6 +58,14 @@ export class Readiness {
   update(state: AppState): void {
     this.state = state;
     this.status.replaceChildren();
+    const protection = state.protection;
+    const item = el('div', undefined, 'protection'); item.dataset.key = 'protection';
+    item.dataset.value = protection?.state ?? 'degraded'; item.setAttribute('aria-live', 'polite');
+    const labels = { idle: 'Idle', protected: 'Protected', degraded: 'Degraded', unprotected: 'Not protected' };
+    item.append(el('span', 'Protection'), el('strong', protection ? labels[protection.state] : 'Unknown'));
+    this.status.append(item);
+    this.protectionReasons.replaceChildren(...(protection?.reasons ?? []).map(reason => el('li', reason.message)));
+
     for (const [label, value] of [
       ['Proxy', state.proxy.state], ['Helper', state.game.helper.state],
       ['Sessions', `${state.sessions.connected} connected / ${state.sessions.open} open`],

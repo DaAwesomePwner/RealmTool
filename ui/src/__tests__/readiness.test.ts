@@ -51,3 +51,16 @@ it('offers refresh during a live session and displays progress, result and failu
   expect(view.element.textContent).toContain('fixture failure');
   expect(view.element.textContent).toContain('2 items, 3 projectiles, 4 tiles (16000 ms)');
 });
+
+it.each(['idle', 'protected', 'degraded', 'unprotected'] as const)('renders protection %s first and explains reasons', state => {
+  const view = new Readiness({ post: vi.fn() }, vi.fn());
+  view.update({ protection: { state, since: 1, reasons: [{ code: 'test', source: 'test', severity: 'warning', message: '<unsafe> reason' }] },
+    data: { state: 'idle', gameBuild: null, catalogBuild: null, error: null, lastResult: null },
+    proxy: { state: 'running', port: 2050, error: null }, game: { dir: null, candidates: [], launcher: null, helper: { state: 'installed', backup: false } },
+    sessions: { open: 1, connected: 1 }, profile: { active: 'default', available: [] }, operation: null, revision: 1 });
+  const item = view.status.firstElementChild!;
+  expect(item.getAttribute('data-key')).toBe('protection'); expect(item.getAttribute('data-value')).toBe(state);
+  expect(item.getAttribute('aria-live')).toBe('polite');
+  expect(item.textContent).toContain({ idle: 'Idle', protected: 'Protected', degraded: 'Degraded', unprotected: 'Not protected' }[state]);
+  expect(view.notices.textContent).toContain('<unsafe> reason'); expect(view.notices.querySelector('unsafe')).toBeNull();
+});

@@ -1,3 +1,4 @@
+import { computeProtection, type Protection, type ModuleProtection } from './protection.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { gameProcessIds } from '../game/gameProcess.ts';
@@ -30,6 +31,8 @@ import type { ResourcePaths } from './resources.ts';
 
 export type ProxyState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
 export interface AppState {
+  /** Always present in controller output; optional for older API state producers. */
+  protection?: Protection & { since: number };
   data: DataState;
   proxy: { state: ProxyState; port: number | null; error: string | null };
   game: { dir: string | null; candidates: string[]; launcher: string | null;
@@ -103,6 +106,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private host: ReturnType<ControllerDeps['createHost']> | null = null;
   private pluginHost: PluginHost | null = null;
   private detachHost: (() => void)[] = [];
+  private moduleProtection: Record<string, ModuleProtection> = {};
   private sessions = new Set<string>();
   private connected = new Set<string>();
   private pending: Promise<void> | null = null;
@@ -114,6 +118,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private routingTimer: ReturnType<typeof setInterval> | null = null;
   private routingFlight: Promise<void> | null = null;
   private observedPids: number[] = [];
+  private gameDetected = false;
   private routedPids = new Set<number>();
   private unboundSession = false;
   private unroutedSince: number | null = null;
@@ -160,12 +165,28 @@ export class AppController extends EventEmitter<ControllerEvents> {
       operation: null, revision: 0,
     };
     this.refreshHelper();
+    this.updateProtection();
     this.detachLog = log.addSink(record => options.logs.push(record));
   }
 
   state(): AppState { return structuredClone(this.current); }
   plugins(): PluginSnapshot[] { return this.pluginHost?.snapshot() ?? []; }
-  private changed(): void { this.current.revision++; this.emit('state', this.state()); }
+  private updateProtection(): boolean {
+    const next = computeProtection({ proxy: this.current.proxy.state,
+      gameRunning: this.gameDetected || this.observedPids.length > 0 || this.sessions.size > 0,
+      routing: this.current.game.routing, routingReason: this.current.game.routingReason,
+      helper: this.current.game.helper.state, data: this.current.data, dataInvalidated: this.catalogsInvalidated,
+      plugins: this.plugins(), modules: this.moduleProtection });
+    const previous = this.current.protection;
+    if (previous?.state === next.state && JSON.stringify(previous.reasons) === JSON.stringify(next.reasons)) return false;
+    this.current.protection = { ...next, since: Date.now() };
+    if (previous?.state !== next.state) log.info('Protection', `${previous?.state ?? 'unknown'} → ${next.state}: ${next.reasons.map(r => r.message).join('; ') || 'All readiness checks passed'}`);
+    return true;
+  }
+  private protectionChanged(): void {
+    if (this.updateProtection()) { this.current.revision++; this.emit('state', this.state()); }
+  }
+  private changed(): void { this.updateProtection(); this.current.revision++; this.emit('state', this.state()); }
   private refreshHelper(): void {
     try { this.current.game.helper = this.current.game.dir ? this.deps.inspectHelper(this.current.game.dir, this.resources.helperDll) : { state: 'unknown', backup: false }; }
     catch { this.current.game.helper = { state: 'unknown', backup: false }; }
@@ -176,6 +197,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.changed();
   }
   private recordRoutedSession(): void {
+    this.gameDetected = true;
     this.unroutedSince = null;
     if (this.observedPids.length) {
       for (const pid of this.observedPids) this.routedPids.add(pid);
@@ -204,6 +226,8 @@ export class AppController extends EventEmitter<ControllerEvents> {
       }
       const changed = pids.length !== this.observedPids.length || pids.some(pid => !this.observedPids.includes(pid));
       this.observedPids = pids;
+      this.gameDetected = pids.length > 0;
+      this.protectionChanged();
       this.routedPids = new Set([...this.routedPids].filter(pid => pids.includes(pid)));
       if (this.unboundSession) {
         for (const pid of pids) this.routedPids.add(pid);
@@ -359,6 +383,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
   startProxy(): Promise<void> { return this.operation('starting proxy', () => this.start()); }
   private async start(): Promise<void> {
     if (this.current.proxy.state === 'running') return;
+    this.moduleProtection = {};
     this.current.proxy = { state: 'starting', port: null, error: null }; this.changed();
     let stage = 'Game';
     try {
@@ -384,12 +409,12 @@ export class AppController extends EventEmitter<ControllerEvents> {
         resolveTarget: createTargetResolver({ proxyPort: GAME_PORT }) });
       const plugins = this.pluginHost = new PluginHost({ proxy: host, factory: createFactory(schema), definitions: this.deps.plugins,
         profile: new ProfileStore({ dir: this.config.dir, name: this.current.profile.active }), gameDir,
-        onChange: () => this.emit('plugins', this.plugins()),
+        onChange: () => { this.protectionChanged(); this.emit('plugins', this.plugins()); },
         onData: (pluginId, type, data) => this.emit('data', { pluginId, type, data: toJsonSafe(data) }),
       });
+      this.watchHost(host);
       plugins.start(); this.emit('plugins', this.plugins());
       log.info('Plugins', `Loaded ${plugins.loaded().join(', ') || 'no plugins'}`);
-      this.watchHost(host);
       const port = await host.start();
       if (this.current.proxy.error) throw new Error(this.current.proxy.error);
       if (this.shuttingDown) return;
@@ -427,8 +452,22 @@ export class AppController extends EventEmitter<ControllerEvents> {
     const diagnostic = ({ id, message }: { id?: string; message: string }) => log.warn('Proxy', `${id ? `${id.slice(0, 8)}: ` : ''}${message}`);
     const note = ({ id, message }: { id: string; message: string }) => log.info('Proxy', `${id.slice(0, 8)}: ${message}`);
     const fault = ({ id, message }: { id?: string; message: string }) => log.error('Proxy', `${id ? `${id.slice(0, 8)}: ` : ''}${message}`);
+    // Host recovery scheduling must survive exceptions from downstream state listeners.
+    const guard = <T,>(fn: (event: T) => void) => (event: T) => { try { fn(event); } catch { /* Never throw into ProxyHost. */ } };
+    const status = guard((event: { moduleId: string; state: string }) => {
+      this.moduleProtection[event.moduleId] = { ...this.moduleProtection[event.moduleId], failing: event.state === 'failing' };
+      this.protectionChanged();
+    });
+    const config = guard((event: { moduleId: string; ok: boolean }) => {
+      this.moduleProtection[event.moduleId] = { ...this.moduleProtection[event.moduleId], rejected: !event.ok };
+      this.protectionChanged();
+    });
+    host.on('moduleStatus', status); host.on('moduleConfig', config);
+    this.detachHost.push(() => { host.off('moduleStatus', status); host.off('moduleConfig', config); });
     const exit = ({ code, expected }: { code: number; expected: boolean }) => {
-      if (expected || this.host !== host) return;
+      if (this.host !== host) return;
+      this.moduleProtection = {};
+      if (expected) { this.protectionChanged(); return; }
       const error = `Network worker stopped unexpectedly (code ${code})`;
       log.error('Proxy', error); this.failHost(host, error);
     };
@@ -454,6 +493,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.current.sessions = { open: this.sessions.size, connected: this.connected.size }; this.changed();
   }
   private async cleanup(): Promise<void> {
+    this.moduleProtection = {};
     if (this.routingTimer) clearInterval(this.routingTimer);
     this.routingTimer = null;
     this.observedPids = []; this.routedPids.clear(); this.unboundSession = false;

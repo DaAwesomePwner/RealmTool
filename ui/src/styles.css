@@ -152,3 +152,10 @@ details > summary { cursor: pointer; color: var(--accent); padding: 6px 0; }
   .log-row { grid-template-columns: 80px 42px minmax(0, 1fr); }
   .log-row > span:last-child { grid-column: 1 / -1; }
 }
+
+.readiness-bar .protection { border: 2px solid currentColor; border-radius: 6px; padding: 6px 12px; }
+.protection[data-value="idle"] { color: #aab4c4; }
+.protection[data-value="protected"] { color: #6ee7a0; }
+.protection[data-value="degraded"] { color: #ffd166; }
+.protection[data-value="unprotected"] { color: #ff8585; }
+.protection-reasons:empty { display: none; }
