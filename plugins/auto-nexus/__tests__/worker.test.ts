@@ -17,7 +17,7 @@ import { log } from '../../../src/util/log.ts';
 
 const factory = createFactory();
 const cleanups: (() => void | Promise<void>)[] = [];
-beforeEach(() => { log.setConsole(false); cleanups.push(log.addSink(() => {})); });
+beforeEach(() => { autoNexusModule.start!(); log.setConsole(false); cleanups.push(log.addSink(() => {})); });
 afterEach(async () => { for (const clean of cleanups.splice(0).reverse()) await clean(); vi.restoreAllMocks(); log.setConsole(true); });
 const catalog: SafetyCatalogFile = { schemaVersion: 1, gameBuild: 'a'.repeat(32),
   source: { objectsSha256: 'b'.repeat(64), tilesSha256: 'c'.repeat(64) },
@@ -89,10 +89,10 @@ describe('Auto Nexus session adapter', () => {
     });
     await h.tick(1);
     await until(() => h.escapes().length === 1, 'escape');
-    expect(h.sample().latency).toEqual({ count: 1, samples: 1, p50: 7, p99: 7, max: 7 });
+    expect(h.sample().latency).toEqual({ count: 1, samples: 1, p50: 7, p99: 7, max: 7, automaticWithoutSample: 0 });
     h.session.close();
     expect(h.events.some(e => e.type === 'module' && (e.message as any).type === 'latencySummary'
-      && (e.message as any).message.includes('p99=7ms'))).toBe(true);
+      && (e.message as any).message.includes('p99=7.0ms'))).toBe(true);
   });
 
   it('uses the unrounded 707 HP threshold and writes before the triggering main-thread event', async () => {
@@ -115,6 +115,7 @@ describe('Auto Nexus session adapter', () => {
       h.advance(1); await until(() => h.escapes().length === count, 'retry');
     }
     h.advance(10000); h.advance(10000); expect(h.order.filter(s => s === 'write:auto-nexus')).toHaveLength(5);
+    expect(h.sample().latency).toMatchObject({ count: 1, automaticWithoutSample: 0 });
   });
 
   it('writer-rejected and malformed RECONNECT do not stop retries; accepted rewritten RECONNECT does', async () => {
@@ -165,6 +166,7 @@ describe('Auto Nexus session adapter', () => {
     const h = await harness({ enabled: false }); h.session.command('auto-nexus', { type: 'escape' });
     await until(() => h.escapes().length === 1, 'manual ESCAPE');
     expect(h.context.automation.latchReason).toBe('manual escape');
+    expect(h.sample().latency).toMatchObject({ count: 0, automaticWithoutSample: 0 });
     for (const name of ['PLAYERHIT', 'AOEACK', 'GROUNDDAMAGE', 'MOVE']) expect(h.session.inject(frame(factory.getPacketId(name)!), false)).toBe(true);
     await until(() => h.upstream.frames.length === 6, 'manual reports');
     h.advance(400); expect(h.order.filter(s => s === 'write:auto-nexus')).toHaveLength(1);
@@ -219,7 +221,7 @@ describe('Collision HP worker wiring', () => {
       return p;
     });
     h.game.send(hit(2)); await until(() => h.escapes().length === 1, 'escape');
-    expect(h.sample().latency).toEqual({ count: 1, samples: 1, p50: 13, p99: 13, max: 13 });
+    expect(h.sample().latency).toEqual({ count: 1, samples: 1, p50: 13, p99: 13, max: 13, automaticWithoutSample: 0 });
   });
 
   it('defaults ON and escapes on receipt while a PLAYERHIT verdict is blocked, without posting or writing the crossing report', async () => {
@@ -321,6 +323,8 @@ describe('Collision HP worker wiring', () => {
     }
     await until(() => h.escapes().length === 1, 'preparation ESCAPE');
     expect(h.upstream.frames.filter(f => f[4] === factory.getPacketId('PLAYERHIT'))).toHaveLength(0);
+    expect(h.sample().latency).toMatchObject(kind === 'rewritten'
+      ? { count: 1, automaticWithoutSample: 0 } : { count: 0, automaticWithoutSample: 1 });
     expect(delivered).toHaveBeenCalledTimes(1);
     expect(delivered.mock.calls[0][2]).toBe(false);
     if (kind !== 'rewritten') expect(delivered.mock.calls[0][0]).toBeLessThan(0);
@@ -359,7 +363,8 @@ describe('Collision HP worker wiring', () => {
     h.advance(1);
     if (state === 'awaiting' || state === 'ready') {
       await until(() => h.escapes().length === 1, 'stalled danger escape');
-      expect(h.sample().status.lastReason).toBe('danger delivery stalled behind plugin processing');
+      expect(h.sample()).toMatchObject({ status: { lastReason: 'danger delivery stalled behind plugin processing' },
+        latency: { count: 1, p50: 101, automaticWithoutSample: 0 } });
     } else expect(h.order.filter(s => s === 'write:auto-nexus')).toHaveLength(0);
   });
 
@@ -440,6 +445,47 @@ describe('Auto Nexus module lifecycle', () => {
       replace: () => { automation.reset(++generation); module.connectionChanged!(generation); } };
   }
 
+  it('keeps sampled percentiles across session closes until a new proxy run', () => {
+    const first = local();
+    first.module.observe!(packet('NEWTICK', hpData(1, 1)), false, 0, 2, -7);
+    first.module.close!();
+    const second = local();
+    second.module.observe!(packet('NEWTICK', hpData(1, 1)), false, 0, 2, -13);
+    expect(second.messages.at(-1).latency).toMatchObject({ count: 2, p50: 7, p99: 13, max: 13, automaticWithoutSample: 0 });
+    second.module.close!();
+    expect(second.messages.at(-1).message).toContain('n=2, p50=7.0ms, p99=13.0ms, max=13.0ms');
+    autoNexusModule.start!();
+    const third = local(); third.advance(200);
+    expect(third.messages.at(-1).latency).toMatchObject({ count: 0, p50: null, p99: null, max: null });
+  });
+
+  it('counts unattributed automatic decisions, aggregates sessions and resets on a new run', () => {
+    const first = local(); first.observe('NEWTICK', hpData(1, 1));
+    expect(first.messages.at(-1).latency).toMatchObject({ count: 0, automaticWithoutSample: 1 });
+    first.module.close!();
+    const second = local(); second.observe('NEWTICK', hpData(1, 1));
+    expect(second.messages.at(-1).latency).toMatchObject({ count: 0, automaticWithoutSample: 2 });
+    second.module.close!();
+    expect(second.messages.at(-1).message).toContain('automatic escapes without a sample=2');
+    autoNexusModule.start!();
+    const third = local(); third.advance(200);
+    expect(third.messages.at(-1).latency).toMatchObject({ count: 0, automaticWithoutSample: 0 });
+    third.module.close!();
+    expect(third.messages.some(m => m.type === 'latencySummary')).toBe(false);
+  });
+
+  it('does not sample a shared manual write as an automatic write', () => {
+    const f = local();
+    f.writePriority.mockImplementation(() => true); // Keep the manual receipt pending.
+    f.observe('NEWTICK', hpData(600, 1));
+    f.module.command!({ type: 'escape' });
+    f.module.observe!(packet('NEWTICK', hpData(1, 2)), false, 0, 2, 0);
+    expect(f.writePriority).toHaveBeenCalledTimes(1);
+    const decision = f.messages.findLast(m => m.type === 'decision');
+    expect(decision.decision.origin).toBe('automatic');
+    expect(decision.latency).toMatchObject({ count: 0, automaticWithoutSample: 1 });
+  });
+
   it('posts stall and recovery transitions from tick and observe without a precautionary escape', () => {
     const f = local(); f.observe('NEWTICK', hpData(600, 1));
     f.advance(3000);
@@ -480,6 +526,7 @@ describe('Auto Nexus module lifecycle', () => {
     expect(f.ctx.automation.latchReason).toBe('auto escape');
     expect(f.module.suppressEntry!('MOVE', true)).toBe(false);
     expect(f.messages.find(m => m.type === 'decision').status.attemptPhase).toBe('failed');
+    expect(f.messages.find(m => m.type === 'decision').latency).toMatchObject({ count: 0, automaticWithoutSample: 1 });
   });
 
   it('releases the guard only on new generation and emits a fresh generation status', () => {

@@ -115,6 +115,8 @@ export interface WorkerSessionModule {
 }
 
 export interface WorkerModule {
+  /** Once per worker run, before configuring modules or opening sessions. */
+  start?(): void;
   readonly id: string;
   /** Lower runs first. Auto Nexus = 0, Auto Drink = 10. */
   readonly priority: number;

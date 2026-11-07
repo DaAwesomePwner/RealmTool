@@ -41,6 +41,7 @@ function configureModules(configs: Record<string, unknown>): void {
 if (init.host !== '127.0.0.1') {
   post({ type: 'fault', message: `Refusing to listen on ${init.host}: RealmTool listens only on 127.0.0.1` });
 } else {
+  for (const module of WORKER_MODULES) module.start?.();
   configureModules(init.moduleConfig);
 
   const sessions = new Map<string, Session>();
@@ -74,12 +75,12 @@ if (init.host !== '127.0.0.1') {
     post({ type: 'listening', port: bound });
   });
 
-  // Transport verdict deadlines must advance even without realtime modules.
   const lag = new LoopLagSampler(performance.now());
   const lagTimer = setInterval(() => {
     const sample = lag.sample(performance.now());
     if (sample) post({ type: 'loopLag', lag: sample });
   }, 100);
+  // Transport verdict deadlines must advance even without realtime modules.
   const timer = setInterval(() => {
     const now = performance.now();
     tickSessions(sessions.values(), now, post);

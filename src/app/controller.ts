@@ -32,8 +32,8 @@ import type { ResourcePaths } from './resources.ts';
 
 export type ProxyState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
 export interface AppState {
-  /** Always present in controller output; optional for older API state producers. */
   loopLag?: { worker?: LoopLag; main?: LoopLag };
+  /** Always present in controller output; optional for older API state producers. */
   protection?: Protection & { since: number };
   data: DataState;
   proxy: { state: ProxyState; port: number | null; error: string | null };
@@ -183,11 +183,15 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.stoppedTimer = setInterval(() => { void this.checkStoppedGame(); }, 30_000);
     this.freshnessTimer = setInterval(() => { if (this.connected.size) this.protectionChanged(); }, 1_000);
     const lag = new LoopLagSampler(performance.now());
+    let mainLagging = false, lastLagLog = -Infinity;
     this.lagTimer = setInterval(() => {
       const sample = lag.sample(performance.now());
       if (!sample) return;
       this.current.loopLag = { ...this.current.loopLag, main: sample };
-      if (sample.max > 50) log.info('Main loop', `Timer drift p99=${sample.p99.toFixed(1)}ms max=${sample.max.toFixed(1)}ms (informational)`);
+      if (sample.degraded !== mainLagging || (sample.degraded && performance.now() - lastLagLog >= 60_000)) {
+        mainLagging = sample.degraded; lastLagLog = performance.now();
+        log.info('Main loop', `${mainLagging ? 'Lagging' : 'Recovered'}: timer drift p99=${sample.p99.toFixed(1)}ms max=${sample.max.toFixed(1)}ms (informational)`);
+      }
       this.changed();
     }, 100);
     this.lagTimer.unref();

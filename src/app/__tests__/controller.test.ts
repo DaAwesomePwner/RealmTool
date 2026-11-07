@@ -68,6 +68,32 @@ describe('AppController lifecycle', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it('clears worker lag on stop, crash and automatic restart, ignoring retired hosts', async () => {
+    vi.useFakeTimers();
+    const lag = { p99: 90, max: 120, degraded: true };
+    try {
+      await controller.startProxy(); await drain();
+      hosts[0].emit('loopLag', lag);
+      expect(controller.state().loopLag?.worker).toEqual(lag);
+      await controller.stopProxy();
+      expect(controller.state().loopLag?.worker).toBeUndefined();
+      await controller.startProxy(); await drain();
+      expect(controller.state().loopLag?.worker).toBeUndefined();
+      const crashed = hosts.at(-1)!;
+      crashed.emit('loopLag', lag);
+      crashed.emit('exit', { code: 7, expected: false });
+      expect(controller.state().loopLag?.worker).toBeUndefined();
+      await drain(); await vi.advanceTimersByTimeAsync(0);
+      expect(controller.state().proxy.state).toBe('running');
+      expect(hosts.at(-1)).not.toBe(crashed);
+      expect(controller.state().loopLag?.worker).toBeUndefined();
+      crashed.emit('loopLag', lag);
+      expect(controller.state().loopLag?.worker).toBeUndefined();
+      hosts.at(-1)!.emit('loopLag', lag);
+      expect(controller.state().loopLag?.worker).toEqual(lag);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('automatically rebuilds after crashes with bounded backoff and a crash-loop cap', async () => {
     vi.useFakeTimers();
     try {
