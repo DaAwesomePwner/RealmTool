@@ -25,7 +25,7 @@ function fixture(reactionMs = 400) {
 }
 
 it.each([
-  [false, true, 180], [true, false, 70], [true, true, 180],
+  [false, true, 90], [true, false, 70], [true, true, 180],
 ] as const)('ack-every-AoE preserves conservative charges (A=%s B=%s)', (a, b, damage) => {
   const f = fixture();
   f.area(a ? 0 : 10, 70); f.area(b ? 0 : 10, 90);
@@ -51,7 +51,7 @@ it('consumes the oldest containing area, including the half-unit margin', () => 
   f.area(10, 300); f.area(1.5, 70); f.area(0, 90);
   f.ack(); expect(f.damage()).toBe(90);
   f.ack(); expect(f.damage()).toBe(180);
-  f.ack(); expect(f.damage()).toBe(270); // FIFO's third ACK still charged the final hit.
+  f.ack(); expect(f.damage()).toBe(180); // FIFO catches up; it cannot charge the same sequence again.
 });
 
 it.each([400, 800])('prunes before ACK at freshness max(1000, 2*%s), preserving the boundary', reactionMs => {
@@ -154,10 +154,10 @@ it('reset and mode changes clear all AoE correspondence including FIFO and recen
   }
 });
 
-it('never charges less per ACK than the original FIFO across mixed deterministic sequences', () => {
+it('never cumulatively charges less than the original FIFO across mixed deterministic sequences', () => {
   for (let seed = 1; seed <= 40; ++seed) {
     const f = fixture();
-    let random = seed, now = 1000, cleanup = 0;
+    let random = seed, now = 1000, cleanup = 0, oldTotal = 0;
     let fifo: { x: number; raw: number; at: number }[] = [];
     const next = () => (random = (Math.imul(random, 1664525) + 1013904223) >>> 0);
     for (let step = 0; step < 80; ++step) {
@@ -170,9 +170,9 @@ it('never charges less per ACK than the original FIFO across mixed deterministic
         const area = fifo.shift();
         const floor = !area || now - area.at > 1000 ? Math.max(200, area?.raw ?? 0)
           : invalid || Math.abs(x - area.x) <= 1.5 ? area.raw : 0;
-        const before = f.damage();
+        oldTotal += floor;
         f.ack(invalid ? null : { x, y: 0 });
-        expect(f.damage() - before, `seed=${seed}, step=${step}`).toBeGreaterThanOrEqual(floor);
+        expect(f.damage(), `seed=${seed}, step=${step}`).toBeGreaterThanOrEqual(oldTotal);
       }
       const elapsed = [0, 10, 1001, 5000, 11000][next() % 5];
       const advance = next() % 2 === 0;
@@ -194,8 +194,8 @@ it.each([null, undefined])('invalid late position %s considers expired damage de
 it('a valid late ACK charges and consumes the largest overlapping expired area', () => {
   const f = fixture(); f.area(0, 10); f.area(.5, 900); f.time(1001);
   f.ack(); expect(f.damage()).toBe(900);
-  // The remaining expired area costs 200, but FIFO's second ACK still costs 900.
-  f.ack(); expect(f.damage()).toBe(1800);
+  // Both models total 1100; their reversed pairing must not sum the two maxima.
+  f.ack(); expect(f.damage()).toBe(1100);
 });
 
 it('missing position and unknown conditions charge the largest fresh raw', () => {

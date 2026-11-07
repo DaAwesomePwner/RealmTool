@@ -39,9 +39,12 @@ export class SafetyEngine {
   private areas: AreaAttack[] = [];
   private expiredAreas: AreaAttack[] = [];
   private expiredAreaCount = 0;
-  // Independent old-FIFO correspondence supplies a per-ACK damage floor even
+  // Independent old-FIFO correspondence supplies a cumulative damage floor even
   // after matching reorders consumption or the recent-expiry window elapses.
   private fifoAreas: AreaAttack[] = [];
+  private oldAreaTotal = 0;
+  private newAreaTotal = 0;
+  private areaImpacts = new Set<string>();
   private lastCleanup = 0;
   private predictionObservation = 0;
   private predictionOccurrences = new Map<string, number>();
@@ -81,7 +84,7 @@ export class SafetyEngine {
     this.settings = normalized;
     if (modeChanged) {
       // Retiring estimates is not a new HP sample or escape lifecycle.
-      this.predictor.clearDebt();
+      this.predictor.clearDebt(); this.refreshAreaWindow();
       this.areas = []; this.expiredAreas = []; this.fifoAreas = []; this.expiredAreaCount = 0;
       this.predictionOccurrences.clear(); this.predictionSignatures.clear();
       this.unresolvedOccurrences.clear(); this.projectileConditions.clear();
@@ -102,7 +105,7 @@ export class SafetyEngine {
     this.safe = !!this.map.trim() && SAFE_MAPS.has(this.map.trim().toLowerCase());
     this.mapUnreadable = mapUnreadable;
     this.hpStreamUnreadable = false; this.streamStartedAt = this.latestNow;
-    this.player = new ServerPlayerState(); this.predictor.reset();
+    this.player = new ServerPlayerState(); this.predictor.reset(); this.refreshAreaWindow();
     this.predictionOccurrences.clear(); this.predictionSignatures.clear(); this.unresolvedOccurrences.clear();
     this.unresolvedSerial = 0; this.damageBasisRevision = 0; this.damageBasisAt = null;
     this.projectileConditions.clear(); this.shots.clear(); this.types.clear(); this.tiles.clear();
@@ -213,6 +216,15 @@ export class SafetyEngine {
       const index = areas.findIndex(area => area.observationId === observationId);
       if (index !== -1) areas.splice(index, 1);
     }
+  }
+
+  private refreshAreaWindow(): void {
+    // One window lasts while any of its AoE impacts (including zero) remain live.
+    // Partial credit/retirement and area expiry retain totals; full settlement,
+    // clearDebt, mode/epoch resets start both models afresh. Unconsumed areas
+    // remain candidates, but cannot carry retired charges into the new window.
+    for (const id of this.areaImpacts) if (!this.predictor.assessment(id)) this.areaImpacts.delete(id);
+    if (!this.areaImpacts.size) this.oldAreaTotal = this.newAreaTotal = 0;
   }
 
   private expireAreas(now: number): void {
@@ -358,16 +370,21 @@ export class SafetyEngine {
       const known = area && !recent && conditionsKnown;
       const misses = known && area && !contains(area);
       const estimate = misses ? 0 : known ? raw! : Math.max(200, raw ?? 0);
-      // Mirror the pre-matching FIFO rule independently: even valid-position
-      // misses and stale/missing correspondence must never lower its ACK charge.
+      // Mirror FIFO independently, then charge only the increase of the larger
+      // running total: differently paired ACKs must not sum both models' maxima.
       const fifo = this.fifoAreas.shift();
       const fifoKnown = fifo && now - fifo.at <= Math.max(1000, 2 * this.settings.reactionMs) && conditionsKnown;
       const floor = fifoKnown ? (contains(fifo) ? fifo.raw : 0) : Math.max(200, fifo?.raw ?? 0);
-      const amount = Math.max(estimate, floor);
-      if (!misses || amount > 0) this.predictor.impact(area?.id ?? `aoe-unresolved:${++this.seq}`,
-        { amount, kind: known && floor <= estimate ? 'mitigated-estimate' : 'assumed',
-          reason: floor > estimate ? 'FIFO AoE damage floor' : known ? 'raw AoE damage estimate' : 'unresolved AoE mechanics' },
-        now, 'aoe', now + 12000, observationId);
+      this.refreshAreaWindow();
+      const oldTotal = this.oldAreaTotal + floor, newTotal = this.newAreaTotal + estimate;
+      const amount = Math.max(0, Math.max(oldTotal, newTotal) - Math.max(this.oldAreaTotal, this.newAreaTotal));
+      const id = `aoe-ack:${++this.seq}`;
+      if (this.predictor.impact(id,
+        { amount, kind: known && oldTotal <= newTotal ? 'mitigated-estimate' : 'assumed',
+          reason: oldTotal > newTotal ? 'FIFO AoE cumulative floor' : known ? 'raw AoE damage estimate' : 'unresolved AoE mechanics' },
+        now, 'aoe', now + 12000, observationId)) {
+        this.oldAreaTotal = oldTotal; this.newAreaTotal = newTotal; this.areaImpacts.add(id);
+      }
     }
     this.check(now, 'reported impact');
   }
@@ -404,6 +421,7 @@ export class SafetyEngine {
         this.shots.delete(key); this.predictionOccurrences.delete(shot.id);
       }
     }
+    this.refreshAreaWindow();
     this.check(now, 'reaction deadline');
     // Evaluate real danger before a manual retry can occupy the write slot.
     this.attempts.advance(now);
