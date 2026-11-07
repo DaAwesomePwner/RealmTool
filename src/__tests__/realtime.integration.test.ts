@@ -60,13 +60,21 @@ async function fixture(options: { drink?: boolean; profile?: Profile; plugins?: 
   const faults: string[] = [];
   const diagnostics: string[] = [];
   let serverPort = 0;
+  let serverOnline = false;
+  let serverExit: number | null = null;
+  server.once('online', () => { serverOnline = true; });
+  server.once('exit', code => { serverExit = code; });
   server.on('error', error => faults.push(error.message));
   server.on('message', message => {
     if (message.type === 'listening') serverPort = message.port;
     else if (message.type === 'frame') received.push({ bytes: Buffer.from(message.bytes), at: message.at });
     else if (message.type === 'fault') faults.push(message.message);
   });
-  await until(() => serverPort !== 0 || faults.length > 0, 'fake server listening');
+  // The first native-TS worker cold-start can exceed 5 s under Windows CI load.
+  // Only startup gets extra time; packet, escape and watchdog deadlines stay unchanged.
+  await until(() => serverPort !== 0 || faults.length > 0 || serverExit !== null, 'fake server listening', 10_000)
+    .catch(error => { throw new Error(`${error.message} (worker online=${serverOnline}, exit=${serverExit})`); });
+  expect(serverExit, 'fake server exited before listening').toBeNull();
   expect(faults).toEqual([]);
   const proxy = new ProxyHost({ schema: loadSchema(), listenPort: 0,
     resolveTarget: () => ({ host: '127.0.0.1', port: serverPort }),
