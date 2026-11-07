@@ -1,14 +1,14 @@
 import { expect, it, vi } from 'vitest';
 import { cleanupBuildProcesses, sameExecutablePath, stopBuildProcess } from '../gui-smoke/owned-process.ts';
 
-const exe = 'D:\\ci-cache\\RealmTool\\target\\gui\\debug\\realmtool-shell.exe';
+const exe = 'C:\\work\\RealmTool\\target\\gui\\debug\\realmtool-shell.exe';
 it.each([
-  ['d:/ci-cache/realmtool/target/gui/debug/REALMTOOL-SHELL.EXE', true],
-  ['D:\\ci-cache\\RealmTool\\target\\gui\\debug\\..\\debug\\realmtool-shell.exe', true],
-  ['D:\\ci-cache\\RealmTool\\target\\build\\debug\\realmtool-shell.exe', false],
+  ['c:/work/realmtool/target/gui/debug/REALMTOOL-SHELL.EXE', true],
+  ['C:\\work\\RealmTool\\target\\gui\\debug\\..\\debug\\realmtool-shell.exe', true],
+  ['C:\\work\\RealmTool\\target\\build\\debug\\realmtool-shell.exe', false],
   ['C:\\installed\\realmtool-shell.exe', false],
   ['C:\\installed\\RealmTool.exe', false],
-  ['D:\\ci-cache\\RealmTool\\target\\gui-other\\debug\\realmtool-shell.exe', false],
+  ['C:\\work\\RealmTool\\target\\gui-other\\debug\\realmtool-shell.exe', false],
   ['realmtool-shell.exe', false], [null, false],
 ])('matches only the normalized complete build path: %s', (path, expected) => {
   expect(sameExecutablePath(path, exe)).toBe(expected);

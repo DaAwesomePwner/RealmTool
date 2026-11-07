@@ -8,4 +8,4 @@
 - RC4 keys live only in `src/protocol/constants.ts`. No hard-coded game-server IPs.
 - Ported files keep their `// Ported from realm-engine-client …` header.
 - The helper DLL builds with `npm run build:helper` (needs VS 2022 C++ x64 tools).
-- GitHub: `DaAwesomePwner/RealmTool` (private). Branch per task, PR into `main`.
+- GitHub: `daplabs/RealmTool` (public). Branch per task, PR into `main`; CI runs on GitHub-hosted Windows runners.

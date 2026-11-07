@@ -25,9 +25,9 @@ async function evaluate(options: {
 it('accepts a rendered dashboard backed by the fake profile and reports bound 2050', async () => {
   expect(await evaluate()).toEqual({ ready: true, proxy: 'bound 2050' });
 });
-it('accepts only the expected port-2050 conflict', async () => {
+it('fails on any proxy startup error, including a port-2050 conflict', async () => {
   expect(await evaluate({ state: 'failed', error: 'listen EADDRINUSE: address already in use 127.0.0.1:2050' }))
-    .toEqual({ ready: true, proxy: 'address-in-use fallback (2050 owned by another process)' });
+    .toContain('EADDRINUSE');
   expect(await evaluate({ state: 'failed', error: 'native module missing' })).toContain('native module missing');
 });
 it('rejects a real game path even when the backend is healthy', async () => {

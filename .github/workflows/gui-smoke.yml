@@ -13,11 +13,9 @@ concurrency:
 
 jobs:
   gui-smoke:
-    # Fork PR code must never execute on the persistent self-hosted runner.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: read
-    runs-on: [self-hosted, windows, nuc, gui]
+    runs-on: windows-latest
     timeout-minutes: 45
     defaults:
       run:
@@ -33,19 +31,14 @@ jobs:
           "GUI_SMOKE_STATE=$env:RUNNER_TEMP\gui-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.json" >> $env:GITHUB_ENV
           "GUI_SMOKE_SCREENSHOT=$env:RUNNER_TEMP\gui-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.png" >> $env:GITHUB_ENV
           "GUI_SMOKE_DIAGNOSTICS=$env:RUNNER_TEMP\gui-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-diagnostics" >> $env:GITHUB_ENV
-      - name: Persistent NUC caches (separate GUI target)
-        if: runner.environment != 'github-hosted'
-        run: |
-          $cacheRoot = 'D:\ci-cache\RealmTool'
-          New-Item -ItemType Directory -Force -Path "$cacheRoot\npm", "$cacheRoot\cargo-home", "$cacheRoot\target\gui" | Out-Null
-          'CARGO_HOME=D:\ci-cache\RealmTool\cargo-home' >> $env:GITHUB_ENV
-          'CARGO_TARGET_DIR=D:\ci-cache\RealmTool\target\gui' >> $env:GITHUB_ENV
-          'npm_config_cache=D:\ci-cache\RealmTool\npm' >> $env:GITHUB_ENV
-          (Join-Path $env:USERPROFILE '.cargo\bin') >> $env:GITHUB_PATH
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
+          cache: npm
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
       - name: Diagnose toolchains
         run: |
           rustup show
