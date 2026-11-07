@@ -11,6 +11,8 @@
 #include <windows.h>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
+#include <string>
 
 #include "MinHook.h"
 #include "connect_hook.h"
@@ -27,26 +29,55 @@ connect_t g_realConnect = nullptr;
 void* g_connectTarget = nullptr;
 bool  g_installed = false;
 
-bool WriteWholeFile(const char* path, const char* text) {
-    HANDLE h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+// Independent of the MAX_PATH recording buffer: even path construction failures
+// must attempt to remove an older record. Deletion is best effort (e.g. permissions).
+void DeleteOriginalTargets() {
+    wchar_t filename[64];
+    _snwprintf_s(filename, 64, _TRUNCATE,
+                 L"realmtool_target_%lu.txt", GetCurrentProcessId());
+    wchar_t dir[32768];
+    const wchar_t* variables[] = {L"TMP", L"TEMP", L"USERPROFILE"};
+    const auto removeInDir = [&](DWORD length) {
+        if (length == 0 || length >= 32768) return;
+        std::wstring path(dir, length);
+        if (path.back() != L'\\' && path.back() != L'/') path += L'\\';
+        path += filename;
+        DeleteFileW(path.c_str());
+    };
+    for (const wchar_t* variable : variables) {
+        removeInDir(GetEnvironmentVariableW(variable, dir, 32768));
+    }
+    removeInDir(GetTempPathW(32768, dir));
+    removeInDir(GetWindowsDirectoryW(dir, 32768));
+}
+
+bool WriteWholeFile(const wchar_t* path, const char* text) {
+    HANDLE h = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
+    if (h == INVALID_HANDLE_VALUE) {
+        DeleteFileW(path);
+        return false;
+    }
     DWORD written = 0;
     const DWORD length = static_cast<DWORD>(std::strlen(text));
     const BOOL success = WriteFile(h, text, length, &written, nullptr);
     CloseHandle(h);
-    return success && written == length;
+    if (!success || written != length) {
+        DeleteFileW(path);
+        return false;
+    }
+    return true;
 }
 
 // %TEMP%\realmtool_target_<pid>.txt - read and deleted by src/routing/targetResolver.ts.
 bool RecordOriginalTarget(const char* ipDottedQuad) {
-    char tmpDir[MAX_PATH];
-    DWORD n = GetTempPathA(MAX_PATH, tmpDir);
+    wchar_t tmpDir[MAX_PATH];
+    DWORD n = GetTempPathW(MAX_PATH, tmpDir);
     if (n == 0 || n >= MAX_PATH) return false;
 
-    char path[MAX_PATH];
-    if (_snprintf_s(path, sizeof(path), _TRUNCATE,
-                    "%srealmtool_target_%lu.txt", tmpDir, GetCurrentProcessId()) < 0) return false;
+    wchar_t path[MAX_PATH];
+    if (_snwprintf_s(path, MAX_PATH, _TRUNCATE,
+                    L"%lsrealmtool_target_%lu.txt", tmpDir, GetCurrentProcessId()) < 0) return false;
     return WriteWholeFile(path, ipDottedQuad);
 }
 
@@ -55,25 +86,21 @@ int WSAAPI HookedConnect(SOCKET s, const sockaddr* name, int namelen) {
         name->sa_family == AF_INET) {
         const sockaddr_in* in4 = reinterpret_cast<const sockaddr_in*>(name);
 
-        if (in4->sin_port == htons(kGamePort)) {
+        const bool isLoopback = (ntohl(in4->sin_addr.s_addr) >> 24) == 127;
+        if (in4->sin_port == htons(kGamePort) && !isLoopback) {
             char ip[INET_ADDRSTRLEN] = {0};
-            if (inet_ntop(AF_INET, &in4->sin_addr, ip, sizeof(ip)) != nullptr) {
-                const bool isLoopback =
-                    (std::strncmp(ip, "127.", 4) == 0);
-
-                if (!isLoopback) {
-                    if (RecordOriginalTarget(ip)) {
-                        sockaddr_in redirected = *in4;
-                        redirected.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-                        redirected.sin_port = htons(kGamePort);
-
-                        return g_realConnect(
-                            s, reinterpret_cast<const sockaddr*>(&redirected),
-                            static_cast<int>(sizeof(redirected)));
-                    }
-                    OutputDebugStringA("[RealmTool helper] could not record target; connecting directly\n");
-                }
+            if (inet_ntop(AF_INET, &in4->sin_addr, ip, sizeof(ip)) == nullptr ||
+                !RecordOriginalTarget(ip)) {
+                DeleteOriginalTargets();
+                OutputDebugStringA("[RealmTool helper] could not record target; redirecting to proxy\n");
             }
+            sockaddr_in redirected = *in4;
+            redirected.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            redirected.sin_port = htons(kGamePort);
+
+            return g_realConnect(
+                s, reinterpret_cast<const sockaddr*>(&redirected),
+                static_cast<int>(sizeof(redirected)));
         }
     }
 
