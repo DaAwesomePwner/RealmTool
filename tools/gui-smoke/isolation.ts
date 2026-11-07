@@ -19,13 +19,17 @@ export function compareSnapshots(before: Snapshot, after: Snapshot): string[] {
 
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
 
-/** `fs` is injectable so tests can make entries vanish mid-walk. */
-export async function snapshotDirectory(root: string, fs = { lstat, readdir }): Promise<Snapshot> {
+interface EntryStat { isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean; size: number; mtimeMs: number }
+/** The two calls the walk needs; injectable so tests can make entries vanish mid-walk. */
+export interface SnapshotFs { lstat(path: string): Promise<EntryStat>; readdir(path: string): Promise<string[]> }
+const nodeFs: SnapshotFs = { lstat: path => lstat(path), readdir: path => readdir(path) };
+
+export async function snapshotDirectory(root: string, fs: SnapshotFs = nodeFs): Promise<Snapshot> {
   const files: [string, { size: number; mtimeMs: number }][] = [];
   async function walk(path: string, relative: string): Promise<void> {
     // WebView2 removes files such as EBWebView/lockfile while it exits; an entry that vanishes
     // between readdir and lstat is simply absent from this snapshot (comparisons still see it).
-    let stat;
+    let stat: EntryStat;
     try { stat = await fs.lstat(path); } catch (error) { if (relative && missing(error)) return; throw error; }
     if (stat.isSymbolicLink()) throw new Error(`Cannot safely snapshot profile link: ${path}`);
     if (stat.isDirectory()) {
