@@ -5,7 +5,7 @@ import { win32GameInputSource, win32GameInputError } from '../input/win32GameInp
 import type { ProcessIdentity } from '../routing/tcpProcessIdentity.ts';
 import type { Packet } from '../protocol/Packet.ts';
 import type { PacketFactory } from '../protocol/PacketFactory.ts';
-import type { PacketEvent, ProxyHost } from '../transport/host.ts';
+import type { ModuleStatusEvent, PacketEvent, ProxyHost } from '../transport/host.ts';
 import { isCriticalPacket, type InterestSpec } from '../transport/interest.ts';
 import { log } from '../util/log.ts';
 import { describeError } from '../util/describeError.ts';
@@ -13,6 +13,8 @@ import {
   PLUGIN_API_VERSION, type Capability, type ClientConnection, type CommandHook, type ConnectionEvent,
   type InputApi, type PacketHook, type PluginContext, type PluginDefinition, type ServerInfo, type SettingDef, type WorkerChannel,
 } from './api.ts';
+import type { ModuleConfigEvent } from '../transport/messages.ts';
+import type { WorkerHealth } from './api.ts';
 import { IDENTITY_PACKETS, PlayerIdentity } from './identity.ts';
 import { SettingsStore, validateSetting } from './settings.ts';
 import { toJsonSafe, type PluginSnapshot } from './snapshot.ts';
@@ -74,6 +76,7 @@ class Plugin implements PluginContext {
   readonly dataInvalidatedHandlers: ((reason: string) => void)[] = [];
   readonly dataRefreshedHandlers: (() => void)[] = [];
   readonly cleanups: (() => void)[] = [];
+  readonly healthHandlers: ((event: WorkerHealth, clients: readonly ClientConnection[]) => void)[] = [];
   readonly workerHandlers: ((client: ClientConnection, message: unknown) => void)[] = [];
   private readonly host: PluginHost;
 
@@ -110,6 +113,7 @@ class Plugin implements PluginContext {
     return {
       configure: config => this.host.configureWorker(this, config),
       send: (client, message) => this.host.sendWorker(this, client, message),
+      onHealth: handler => { if (!this.failed) this.healthHandlers.push(handler); },
       onMessage: handler => { if (!this.failed) this.workerHandlers.push(handler); },
     };
   }
@@ -228,6 +232,8 @@ export class PluginHost {
     this.proxy.on('closed', this.onClosed);
     this.proxy.on('packet', this.onPacket);
     this.proxy.on('module', this.onModule);
+    this.proxy.on('moduleStatus', this.onModuleStatus);
+    this.proxy.on('moduleConfig', this.onModuleConfig);
     this.started = true;
     this.flushConfigs();
     return interest;
@@ -240,6 +246,8 @@ export class PluginHost {
     this.proxy.off('closed', this.onClosed);
     this.proxy.off('packet', this.onPacket);
     this.proxy.off('module', this.onModule);
+    this.proxy.off('moduleStatus', this.onModuleStatus);
+    this.proxy.off('moduleConfig', this.onModuleConfig);
     this.pendingConfigs.clear();
     this.started = false;
     this.flush();
@@ -465,6 +473,7 @@ export class PluginHost {
       try { cleanup(); } catch (error) { log.error(plugin.name, 'Cleanup failed', error); }
     }
     plugin.workerHandlers.length = 0;
+    plugin.healthHandlers.length = 0;
     plugin.dataRefreshedHandlers.length = 0;
     plugin.dataInvalidatedHandlers.length = 0;
   }
@@ -544,6 +553,21 @@ export class PluginHost {
     this.clients.delete(id);
     this.emitConnection('clientDisconnected', client);
   };
+
+  private readonly onModuleStatus = (event: ModuleStatusEvent): void => {
+    this.moduleHealth(event.moduleId, { state: event.state, since: event.since });
+  };
+  private readonly onModuleConfig = (event: ModuleConfigEvent): void => {
+    this.moduleHealth(event.moduleId, event.ok ? { configOk: true } : { configOk: false, reason: event.error });
+  };
+  private moduleHealth(moduleId: string, event: WorkerHealth): void {
+    const plugin = this.plugins.get(moduleId);
+    if (!plugin || plugin.failed) return;
+    for (const handler of plugin.healthHandlers) {
+      try { handler({ ...event }, [...this.clients.values()].filter(client => client.connected)); }
+      catch (error) { log.error(plugin.name, 'Worker health handler failed', error); }
+    }
+  }
 
   private readonly onModule = ({ moduleId, id, message }: { moduleId: string; id?: string; message: unknown }): void => {
     const plugin = this.plugins.get(moduleId);

@@ -86,6 +86,27 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     sync();
   });
   ctx.registerCleanup(() => { disposed = true; ctx.worker.configure(configuration(false)); });
+  let moduleFailing = false, configRejected = false;
+  const healthNotifiedAt = new Map<string, number>();
+  ctx.worker.onHealth((event, clients) => {
+    const wasDegraded = moduleFailing || configRejected;
+    let text: string | undefined;
+    if ('state' in event) {
+      const failing = event.state === 'failing';
+      if (failing && !moduleFailing) text = 'Auto Nexus module failing — protection degraded';
+      moduleFailing = failing;
+    } else {
+      if (!event.configOk && !configRejected) text = 'Auto Nexus settings rejected';
+      configRejected = !event.configOk;
+    }
+    if (wasDegraded && !moduleFailing && !configRejected) text = 'Auto Nexus module recovered — settings accepted';
+    if (disposed || !ctx.enabled || !text) return;
+    const connected = clients.filter(client => client.connected);
+    const now = performance.now();
+    if (!connected.length || now - (healthNotifiedAt.get(text) ?? -Infinity) < DEGRADED_NOTICE_MS) return;
+    healthNotifiedAt.set(text, now);
+    for (const client of connected) ctx.sendNotification(client, 'AutoNexus', text);
+  });
   const notified = new WeakSet<ClientConnection>();
   function notifyFallback(client: ClientConnection, event: AutoNexusEvent): void {
     // Worker statuses can arrive during login, before chat is visible. Wait for

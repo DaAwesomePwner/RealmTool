@@ -453,3 +453,34 @@ it('notifies each new HP-stream reason while map decoding remains unreadable', (
     'Auto Nexus degraded: hp-stream-unreadable; protection may be incomplete.',
   ]);
 });
+
+it('broadcasts failing, rejected and recovered notices with rate limits and no disconnected recipients', () => {
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const f = fixture();
+  f.h.connect('second'); f.h.connect('gone'); f.h.close('gone');
+  const health = (state: 'healthy' | 'failing') => f.h.proxy.emit('moduleStatus', { moduleId: 'auto-nexus', state, since: now });
+  const config = (ok: boolean) => f.h.proxy.emit('moduleConfig', ok
+    ? { type: 'moduleConfig', moduleId: 'auto-nexus', ok: true }
+    : { type: 'moduleConfig', moduleId: 'auto-nexus', ok: false, error: 'invalid' });
+  const notices = () => f.h.proxy.injected.map(i => ({ id: i.id, text: f.h.factory.createFromBytes(i.data, 'server').data.text }));
+  health('healthy'); config(true);
+  expect(notices()).toHaveLength(0);
+  health('failing'); health('failing'); config(false); health('healthy');
+  expect(notices()).toHaveLength(4); // Config rejection still blocks recovery.
+  config(true);
+  expect(notices()).toEqual([
+    ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus module failing — protection degraded' })),
+    ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus settings rejected' })),
+    ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus module recovered — settings accepted' })),
+  ]);
+  health('failing'); config(false); health('healthy'); config(true);
+  expect(notices()).toHaveLength(6);
+  now += 30000;
+  health('failing'); config(false); health('healthy'); config(true);
+  expect(notices()).toHaveLength(12);
+  f.h.close('c1'); f.h.close('second');
+  now += 30000;
+  health('failing'); config(false); health('healthy'); config(true);
+  expect(notices()).toHaveLength(12);
+});
