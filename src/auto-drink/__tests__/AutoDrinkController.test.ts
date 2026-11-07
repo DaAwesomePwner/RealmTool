@@ -28,7 +28,7 @@ function fixture(settings: Partial<AutoDrinkSettings> = {}, initial = [s(0, 1000
   };
   spawn(); clock(initialClock);
   return { controller, sent, sentAt, server, stats, clock, spawn, evaluate: () => controller.evaluate(gate),
-    at: (time: number) => { now = time; }, wallOffset: (offset: number) => { wallOffset = offset; },
+    now: () => now, at: (time: number) => { now = time; }, wallOffset: (offset: number) => { wallOffset = offset; },
     reject: () => { accepted = false; } };
 }
 
@@ -106,13 +106,13 @@ it('restock/replacement taints the reservation; timeout waits for a post-timeout
   f.at(3000); f.stats([s(116, 10, 2)]); f.evaluate(); expect(f.sent).toHaveLength(2);
 });
 
-it('never spams an unchanged slot after timeout, including toggles and catalog reloads', () => {
+it('retries only once across toggles and catalog reloads', () => {
   const f = fixture(); f.evaluate();
   for (let t = 1500; t <= 15000; t += 500) {
     f.at(t); f.clock(); f.stats([s(116, 10, 3)]); f.controller.configure({ enabled: false });
     f.controller.configure({ enabled: true }); f.controller.setCatalog([hpItem]); f.evaluate();
   }
-  expect(f.sent).toHaveLength(1); expect(f.controller.status().reason).toBe('awaiting fresh stock');
+  expect(f.sent).toHaveLength(2); expect(f.controller.status().reason).toBe('quickslot 1: drink not confirmed by server');
 });
 
 it('retains same-connection cooldown across MAPINFO, CREATESUCCESS, toggles and catalog reload', () => {
@@ -444,4 +444,110 @@ it.each(['DEATH', 'DAMAGE', 'disconnect'])('retires %s and does not resurrect on
 it('a rejected write backs off and requires fresh stock without a burst', () => {
   const f = fixture(); f.reject(); f.evaluate(); f.at(1000); f.stats([]); f.evaluate();
   expect(f.sent).toHaveLength(1); expect(f.controller.status().pending).toBe(false);
+});
+
+// Keep both authoritative streams fresh while advancing the injected monotonic clock.
+function advance(f: ReturnType<typeof fixture>, to: number) {
+  for (let t = f.now() + 500; t < to; t += 500) {
+    f.at(t); f.clock(); f.stats([]);
+  }
+  f.at(to); f.clock(); f.stats([]); f.evaluate();
+}
+
+it('retries after four seconds, confirms the retry and resumes normal consumption', () => {
+  const f = fixture(); f.evaluate(); advance(f, 1500);
+  advance(f, 5499); expect(f.sent).toHaveLength(1);
+  advance(f, 5500); expect(f.sent).toHaveLength(2);
+  f.stats([s(116, 10, 2)]); advance(f, 5900); expect(f.sent).toHaveLength(3);
+  advance(f, 7400); advance(f, 11400); expect(f.sent).toHaveLength(4);
+});
+
+it('waits after two unconfirmed attempts and releases on a new stock revision', () => {
+  const f = fixture(); f.evaluate(); advance(f, 1500); advance(f, 5500);
+  advance(f, 7000);
+  expect(f.controller.status().reason).toBe('quickslot 1: drink not confirmed by server');
+  advance(f, 12000);
+  expect(f.sent).toHaveLength(2);
+  expect(f.controller.status().reason).toBe('quickslot 1: drink not confirmed by server');
+  f.stats([s(116, 10, 4)]); f.evaluate(); expect(f.sent).toHaveLength(3);
+  advance(f, 13500); advance(f, 17500); expect(f.sent).toHaveLength(4);
+});
+
+it.each(['pending', 'delayed'])('manual use cancels the retry path while %s', phase => {
+  const f = fixture(); f.evaluate();
+  if (phase === 'delayed') advance(f, 1500);
+  f.controller.observeOutgoing(p('USEITEM', { slotObject: slot() }));
+  advance(f, 2000); advance(f, 10000);
+  expect(f.sent).toHaveLength(1);
+  expect(f.controller.status().reason).toBe('awaiting fresh stock');
+});
+
+it.each(['map', 'escape', 'connection'])('clears retry bookkeeping on %s', lifecycle => {
+  const f = fixture(); f.evaluate(); advance(f, 1500); advance(f, 5500); advance(f, 7000);
+  if (lifecycle === 'escape') {
+    f.controller.escape(); expect(f.controller.status().pending).toBe(false);
+    advance(f, 8000); expect(f.sent).toHaveLength(2);
+    f.controller.connectionChanged();
+  } else if (lifecycle === 'connection') f.controller.connectionChanged();
+  f.spawn(); f.clock(); f.at(8500); f.clock(); f.stats([]); f.evaluate();
+  expect(f.sent).toHaveLength(3);
+  advance(f, 10000); advance(f, 14000); expect(f.sent).toHaveLength(4);
+});
+
+it('retry respects shared cooldown and consumption blockReason', () => {
+  const f = fixture({ intervalMs: 5000 }); f.evaluate(); advance(f, 1500);
+  f.at(5000); f.controller.observeOutgoing(p('USEITEM', { time: 5100, slotObject: slot(1_000_001, 11) }));
+  advance(f, 5500); expect(f.sent).toHaveLength(1);
+  advance(f, 9999); expect(f.sent).toHaveLength(1);
+  f.at(10000); f.clock(); f.stats([]);
+  f.controller.evaluate({ ...gate, consumptionBlockReason: 'automation disabled' });
+  expect(f.controller.status().reason).toBe('automation disabled'); expect(f.sent).toHaveLength(1);
+  f.evaluate(); expect(f.sent).toHaveLength(2);
+});
+
+it('rejected writes get one delayed retry, then wait for stock', () => {
+  const f = fixture(); f.reject(); f.evaluate();
+  advance(f, 3999); expect(f.sent).toHaveLength(1);
+  advance(f, 4000); expect(f.sent).toHaveLength(2);
+  advance(f, 10000); expect(f.sent).toHaveLength(2);
+  expect(f.controller.status().reason).toBe('quickslot 1: drink write rejected twice');
+});
+
+it.each(['excluded', 'quickslot', 'healing', 'hot duration', 'sick', 'protocol'])('retry still honors %s eligibility', rule => {
+  const hot = rule === 'healing' || rule === 'hot duration';
+  const f = fixture({ healingOverTime: hot }); f.evaluate(); advance(f, 1500);
+  if (rule === 'excluded') f.controller.configure({ excludedItems: [10] });
+  if (rule === 'quickslot') f.controller.setCatalog([{ ...hpItem, quickslot: false }]);
+  if (hot) f.controller.setCatalog([{ ...hpItem, healingDurationMs: 10000 }]);
+  if (rule === 'healing') f.stats([s(29, 1 << 17)]);
+  if (rule === 'hot duration') f.controller.observeOutgoing(p('USEITEM', { slotObject: slot(1_000_001) }));
+  if (rule === 'sick') f.stats([s(29, 1 << 4)]);
+  if (rule === 'protocol') f.controller.observeOutgoing(p('USEITEM', { time: 10000, slotObject: slot(1_000_001) }));
+  advance(f, 5500); expect(f.sent).toHaveLength(1);
+  if (rule === 'excluded') f.controller.configure({ excludedItems: [] });
+  if (rule === 'quickslot') f.controller.setCatalog([hpItem]);
+  if (rule === 'healing' || rule === 'sick') f.stats([s(29, 0)]);
+  if (rule === 'hot duration') advance(f, 11500);
+  else if (rule === 'protocol') advance(f, 10300);
+  else f.evaluate();
+  expect(f.sent).toHaveLength(2);
+});
+
+it('escape retires an outstanding retry reservation immediately', () => {
+  const f = fixture(); f.evaluate(); advance(f, 1500); advance(f, 5500);
+  expect(f.controller.status().pending).toBe(true);
+  f.controller.escape(); expect(f.controller.status().pending).toBe(false);
+  advance(f, 12000); expect(f.sent).toHaveLength(2);
+});
+
+it('escape alone clears an exhausted episode and keeps consumption latched off', () => {
+  const f = fixture(); f.reject(); f.evaluate(); advance(f, 4000);
+  expect(f.controller.status().exhaustedSlots).toHaveLength(1);
+  f.controller.escape();
+  expect(f.controller.status().exhaustedSlots).toEqual([]);
+  expect(f.controller.status().pending).toBe(false);
+  advance(f, 12000);
+  expect(f.controller.status().exhaustedSlots).toEqual([]);
+  expect(f.controller.status().reason).toBe('escape lifecycle');
+  expect(f.sent).toHaveLength(2);
 });

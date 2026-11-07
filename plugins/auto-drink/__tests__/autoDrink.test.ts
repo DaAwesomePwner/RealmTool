@@ -275,3 +275,17 @@ describe('Auto Drink facade through the RealmTool host', () => {
     expect(f.proxy.configured).toHaveLength(1);expect(f.data()).toEqual(old);expect(f.proxy.listenerCount('module')).toBe(0);
   });
 });
+
+it('logs once per exhausted slot episode, independent of the last drink attempt', () => {
+  const f = fixture(); f.ctx.enabled = true;
+  const exhausted = { slotId: 1_000_000, episode: 1, reason: 'quickslot 1: drink not confirmed by server' };
+  const status = { ...workerStatus, state: 'waiting', reason: exhausted.reason, exhaustedSlots: [exhausted], lastAttemptAt: 123 };
+  const warnings = () => records.filter(r => r.message.includes('Warning:'));
+  f.status(status); f.status(status);
+  f.status({ ...status, reason: 'packet backlog' }); f.status(status);
+  f.status({ ...status, slotId: 1_000_001, lastAttemptAt: 456 });
+  expect(warnings()).toHaveLength(1);
+  expect(warnings()[0].message).toContain('quickslot 1: drink not confirmed by server');
+  f.status({ ...status, exhaustedSlots: [{ ...exhausted, episode: 2 }] });
+  expect(warnings()).toHaveLength(2);
+});

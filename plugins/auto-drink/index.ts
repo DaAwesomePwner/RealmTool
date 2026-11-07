@@ -86,6 +86,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     if (!disposed && refreshCatalog()) sync();
   });
   const diagnostics = new WeakMap<object, string>();
+  const warnings = new WeakMap<object, Map<number, string>>();
   const generations = new WeakMap<object, number>();
   ctx.worker.onMessage((client, message) => {
     if (disposed || !message || typeof message !== 'object') return;
@@ -99,6 +100,14 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     generations.set(client, event.generation);
     const status = event.status;
     publish(status, client.clientId);
+    const seen = warnings.get(client) ?? new Map<number, string>();
+    warnings.set(client, seen);
+    for (const exhausted of status.exhaustedSlots ?? []) {
+      const episode = JSON.stringify([event.generation, status.epoch, exhausted.episode]);
+      if (seen.get(exhausted.slotId) === episode) continue;
+      seen.set(exhausted.slotId, episode);
+      ctx.log(`[${client.clientId}] Warning: ${exhausted.reason}; waiting for stock to change.`);
+    }
     if (!ctx.getSetting('diagnostics')) return;
     const signature = JSON.stringify([status.epoch, status.enabled, status.state, status.reason,
       status.slotId, status.itemType, status.lastAttemptAt, status.pending]);

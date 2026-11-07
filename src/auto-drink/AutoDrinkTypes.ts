@@ -22,6 +22,13 @@ export interface AutoDrinkItem {
   quickslot: boolean;
 }
 
+export interface AutoDrinkExhaustion {
+  slotId: number;
+  /** Monotonic within a controller lifetime; unrelated drinks cannot change it. */
+  episode: number;
+  reason: string;
+}
+
 export interface AutoDrinkStatus {
   enabled: boolean;
   state: string;
@@ -35,6 +42,8 @@ export interface AutoDrinkStatus {
   cooldownRemainingMs: number;
   pending: boolean;
   epoch: number;
+  /** Current exhausted slots, independent of the most recent drink attempt. */
+  exhaustedSlots?: AutoDrinkExhaustion[];
 }
 
 export const DEFAULT_AUTO_DRINK_SETTINGS: AutoDrinkSettings = {
