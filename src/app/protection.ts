@@ -8,7 +8,7 @@ export interface ProtectionInputs {
   proxy: string; gameRunning: boolean; routing?: string; routingReason?: string; helper: string;
   data: { state: string; gameBuild: string | null; catalogBuild: string | null }; dataInvalidated?: boolean;
   plugins: readonly Pick<PluginSnapshot, 'id' | 'enabled' | 'failed' | 'data'>[];
-  nexusStatuses?: { status?: Record<string, unknown>; stale: boolean }[];
+  nexusStatuses?: { status?: Record<string, unknown>; stale: boolean; pending?: boolean }[];
   modules: Record<string, ModuleProtection>;
 }
 
@@ -39,6 +39,7 @@ export function computeProtection(input: ProtectionInputs): Protection {
     }
     const statuses = input.nexusStatuses ?? [{ status: nexus?.data.status as Record<string, unknown> | undefined, stale: false }];
     if (nexus?.enabled && !nexus.failed && input.gameRunning) for (const sample of statuses) {
+      if (sample.pending && !sample.status) continue; // Brief connection grace, never masks a reported problem.
       if (sample.stale) { add('nexus-status-stale', 'auto-nexus', 'warning', 'Auto Nexus status is stale'); continue; }
       const status = sample.status;
       if (status?.protectionState === 'disabled' || status?.protectionState === 'dead') add('nexus-inactive', 'auto-nexus', 'error', `Auto Nexus reports ${status.protectionState}`);

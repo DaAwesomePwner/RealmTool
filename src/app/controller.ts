@@ -188,7 +188,9 @@ export class AppController extends EventEmitter<ControllerEvents> {
       helper: this.current.game.helper.state, data: this.current.data, dataInvalidated: this.catalogsInvalidated,
       nexusStatuses: this.connected.size ? [...this.connected].sort().map(id => {
         const sample = this.nexusStatuses.get(id);
-        return { status: sample?.status, stale: Date.now() - (sample?.at ?? this.connectedAt.get(id) ?? 0) >= 5_000 };
+        return { status: sample?.status,
+          pending: !sample && Date.now() - (this.connectedAt.get(id) ?? 0) < 1_500,
+          stale: Date.now() - (sample?.at ?? this.connectedAt.get(id) ?? 0) >= 5_000 };
       }) : undefined,
       plugins: this.plugins(), modules: this.moduleProtection });
     const previous = this.current.protection;
@@ -224,7 +226,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private recordNexusStatus(pluginId: string, type: string, data: unknown): void {
     if (pluginId !== 'auto-nexus' || type !== 'status' || !data || typeof data !== 'object') return;
     const status = data as Record<string, unknown>;
-    if (typeof status.clientId !== 'string' || !this.sessions.has(status.clientId)) return;
+    if (typeof status.clientId !== 'string' || status.state === 'disconnected' || !this.sessions.has(status.clientId)) return;
     this.nexusStatuses.set(status.clientId, { status: structuredClone(status), at: Date.now() });
     this.protectionChanged();
   }

@@ -69,6 +69,14 @@ describe('computeProtection', () => {
     const input = ready(); input.nexusStatuses = [{ stale: true }, { stale: false, status: { protectionState: 'monitoring' } }, { stale: true }];
     expect(computeProtection(input)).toMatchObject({ state: 'degraded', reasons: [{ code: 'nexus-status-stale' }] });
   });
+  it('allows pending connection grace without masking a reported degraded status', () => {
+    const input = ready(); input.nexusStatuses = [{ pending: true, stale: false }];
+    expect(computeProtection(input).state).toBe('protected');
+    input.nexusStatuses = [{ pending: true, stale: false, status: { protectionState: 'monitoring-degraded' } }];
+    expect(computeProtection(input).state).toBe('degraded');
+    input.nexusStatuses = [{ pending: false, stale: false }];
+    expect(computeProtection(input).state).toBe('degraded');
+  });
   it('orders errors before warnings deterministically without changing its input', () => {
     const input = ready(); input.helper = 'outdated'; input.gameRunning = false;
     input.modules = { 'auto-nexus': { rejected: true }, 'auto-drink': { failing: true } };

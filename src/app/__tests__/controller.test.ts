@@ -10,6 +10,8 @@ import { FakeProxy } from '../../testing/pluginHarness.ts';
 import { PLUGIN_API_VERSION, type PluginContext } from '../../plugins/api.ts';
 import { inspectHelper, installHelper, HELPER_FILE, BACKUP_FILE } from '../../game/helperInstaller.ts';
 import { LogRing } from '../../util/logStore.ts';
+import autoNexus, { register as registerAutoNexus } from '../../../plugins/auto-nexus/index.ts';
+import { SafetyEngine } from '../../safety/SafetyEngine.ts';
 import { log } from '../../util/log.ts';
 
 class FakeHost extends FakeProxy {
@@ -164,10 +166,64 @@ describe('AppController lifecycle', () => {
       expect(controller.state().protection?.state).toBe('degraded');
       publishStatus('game'); expect(controller.state().protection?.state).toBe('protected');
       host.emit('connected', { id: 'game', generation: 2 });
+      expect(controller.state().protection?.state).toBe('protected');
+      await vi.advanceTimersByTimeAsync(2_000);
       expect(controller.state().protection?.state).toBe('degraded');
       await vi.advanceTimersByTimeAsync(5_000);
       expect(controller.state().protection?.reasons.some(r => r.code === 'nexus-status-stale')).toBe(true);
     } finally { vi.useRealTimers(); }
+  });
+
+  async function realNexusSession() {
+    await controller.shutdown();
+    deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => selection('A');
+    deps.plugins = [{ ...autoNexus, register: ctx => registerAutoNexus(ctx, () => ({ ok: true, path: 'fixture',
+      catalog: { schemaVersion: 1, gameBuild: 'A', source: { objectsSha256: 'a'.repeat(64), tilesSha256: 'b'.repeat(64) }, projectiles: [], tiles: [] } }), () => 'A') }];
+    controller = make(); await controller.startProxy(); await drain();
+    const host = hosts.at(-1)!;
+    const connect = (id: string) => { host.emit('session', { id, remotePort: 123 }); host.emit('connected', { id, generation: 1 }); };
+    const send = (id: string, generation = 1) => host.emit('module', { id, moduleId: 'auto-nexus', message: {
+      type: 'status', generation, sampledAt: performance.now(), collisionHp: 'on',
+      catalog: { state: 'ready', gameBuild: 'A', projectiles: 0, tiles: 0 },
+      status: { ...new SafetyEngine(() => {}).status(), enabled: true, protectionState: 'monitoring' },
+    } });
+    return { host, connect, send };
+  }
+  it('keeps two clients fresh through the real plugin coalescer', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    try {
+      const f = await realNexusSession(); f.connect('one'); f.connect('two'); await drain();
+      f.send('one'); f.send('two');
+      const states: string[] = []; controller.on('state', state => states.push(state.protection!.state));
+      // Match worker tick batches: both clients publish back to back every 50ms.
+      for (let tick = 0; tick < 140; tick++) {
+        await vi.advanceTimersByTimeAsync(50); f.send('one'); f.send('two');
+        expect(controller.state().protection?.state).toBe('protected');
+      }
+      expect(states).not.toContain('degraded');
+      f.host.emit('closed', { id: 'two', by: 'game' });
+      expect(controller.state().protection?.state).toBe('protected');
+      // A genuinely silent remaining client still expires.
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(controller.state().protection?.reasons.some(r => r.code === 'nexus-status-stale')).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+  it('does not transition or log during a normal reconnect awaiting throttled plugin status', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const records: string[] = [], remove = log.addSink(record => { if (record.module === 'Protection') records.push(record.message); });
+    try {
+      const f = await realNexusSession(); f.connect('one'); await drain(); f.send('one');
+      expect(controller.state().protection?.state).toBe('protected');
+      const since = controller.state().protection?.since;
+      const states: string[] = []; controller.on('state', state => states.push(state.protection!.state)); records.length = 0;
+      await vi.advanceTimersByTimeAsync(50);
+      f.host.emit('connected', { id: 'one', generation: 2 }); f.send('one', 2);
+      expect(controller.state().protection?.state).toBe('protected');
+      await vi.advanceTimersByTimeAsync(250);
+      expect(controller.state().protection?.state).toBe('protected');
+      expect(controller.state().protection?.since).toBe(since);
+      expect(states.every(state => state === 'protected')).toBe(true); expect(records).toEqual([]);
+    } finally { remove(); vi.useRealTimers(); }
   });
 
   it('re-inspects helper on polls and sessions and detects missing routing with a grace period', async () => {

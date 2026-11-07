@@ -122,18 +122,18 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   // Worker timestamps use the process-wide monotonic clock, not wall time.
   // Generation notifications are ordered on this session's worker channel.
   const views = new WeakMap<ClientConnection, { generation: number; sample?: Extract<AutoNexusEvent, { type: 'status' }> }>();
-  let lastPublished = -Infinity;
-  let pending: ClientConnection | undefined;
-  let publishTimer: ReturnType<typeof setTimeout> | undefined;
+  // Worker ticks arrive back to back for every client; one shared pending slot
+  // would starve all but the last client. Each client owns its throttle.
+  const publications = new Map<ClientConnection, { lastPublished: number; timer?: ReturnType<typeof setTimeout> }>();
   function publish(data: Record<string, unknown>): void {
     ctx.setData('status', data);
     ctx.broadcastData('status', data);
   }
-  function flushStatus(): void {
-    publishTimer = undefined;
-    const client = pending;
-    pending = undefined;
-    if (disposed || !client?.connected) return;
+  function flushStatus(client: ClientConnection): void {
+    const publication = publications.get(client);
+    if (!publication) return;
+    publication.timer = undefined;
+    if (disposed || !client.connected) return;
     const view = views.get(client);
     const sample = view?.sample;
     const now = performance.now();
@@ -144,7 +144,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     const safeCatalog = catalog.state === 'ready'
       ? { state: catalog.state, gameBuild: catalog.gameBuild, projectiles: catalog.projectiles, tiles: catalog.tiles }
       : { state: catalog.state, reason: catalog.reason };
-    lastPublished = now;
+    publication.lastPublished = now;
     publish({ clientId: client.clientId, collisionHp, catalog: safeCatalog,
       protectionState: status.protectionState, degraded: status.degraded, automaticEligible: status.automaticEligible,
       confirmedHp: status.confirmedHp, maxHp: status.maxHp, lowerHp: status.lowerHp,
@@ -159,21 +159,23 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
       if (view) view.sample = undefined;
       return;
     }
-    pending = client;
-    if (publishTimer !== undefined) return;
-    const wait = 250 - (performance.now() - lastPublished);
-    if (wait <= 0) flushStatus();
-    else publishTimer = setTimeout(flushStatus, wait);
+    let publication = publications.get(client);
+    if (!publication) { publication = { lastPublished: -Infinity }; publications.set(client, publication); }
+    if (publication.timer !== undefined) return;
+    const wait = 250 - (performance.now() - publication.lastPublished);
+    if (wait <= 0) flushStatus(client);
+    else publication.timer = setTimeout(() => flushStatus(client), wait);
   }
   ctx.on('clientDisconnected', client => {
     views.delete(client);
-    if (pending === client) {
-      pending = undefined;
-      clearTimeout(publishTimer); publishTimer = undefined;
-    }
+    clearTimeout(publications.get(client)?.timer);
+    publications.delete(client);
     if (!disposed) publish({ clientId: client.clientId, state: 'disconnected' });
   });
-  ctx.registerCleanup(() => { clearTimeout(publishTimer); publishTimer = undefined; pending = undefined; });
+  ctx.registerCleanup(() => {
+    for (const publication of publications.values()) clearTimeout(publication.timer);
+    publications.clear();
+  });
   ctx.worker.onMessage((client, message) => {
     if (disposed || !message || typeof message !== 'object' || !('type' in message)) return;
     if (!loaded.ok && !awaitingVerification && performance.now() - lastMessageRetry >= 15_000) {
