@@ -192,6 +192,7 @@ export class SafetyEngine {
       if (!p || ![p.x, p.y, d.radius, d.damage].every(finite) || d.radius < 0 || d.damage < 0) {
         this.uncertain(now, 'invalid AoE geometry/damage'); return;
       }
+      this.expireAreas(now);
       if (this.areas.length >= 128) { this.uncertain(now, 'AoE correspondence capacity'); return; }
       const area = { id: `aoe:${++this.aoeSeq}`, observationId, x: p.x, y: p.y, radius: d.radius, raw: d.damage, at: now };
       this.areas.push(area);
@@ -202,6 +203,14 @@ export class SafetyEngine {
   retireArea(observationId: number): void {
     const index = this.areas.findIndex(area => area.observationId === observationId);
     if (index !== -1) this.areas.splice(index, 1);
+  }
+
+  private expireAreas(now: number): void {
+    const freshnessMs = Math.max(1000, 2 * this.settings.reactionMs);
+    const count = this.areas.length;
+    this.areas = this.areas.filter(area => now - area.at <= freshnessMs);
+    const expired = count - this.areas.length;
+    if (expired) this.predictor.noteCoverage(`expired-unacknowledged AoEs: ${expired}`);
   }
 
   private applyStatus(status: Parameters<ServerPlayerState['applyStatus']>[0], now: number, full = false): void {
@@ -306,12 +315,16 @@ export class SafetyEngine {
       this.predictor.impact(`ground:${++this.seq}`, { amount: known ? evidence.tileDamage! : Math.max(200, evidence.tileDamage ?? 0),
         kind: known ? 'mitigated-estimate' : 'assumed', reason: known ? 'raw tile damage estimate' : 'unresolved ground mechanics' }, now, 'ground', now + 12000, observationId);
     } else {
-      const area = this.areas[0];
-      this.areas.shift();
-      const known = area && now - area.at <= Math.max(1000, 2 * this.settings.reactionMs)
-        && this.player.conditionsKnown && !(this.player.effects2 & (1 << 6));
+      this.expireAreas(now);
       const pos = d.position;
-      const misses = known && pos && finite(pos.x) && finite(pos.y)
+      const validPosition = pos && finite(pos.x) && finite(pos.y);
+      // ACKs have no area id. Prefer the oldest possible hit so an earlier
+      // unacknowledged miss cannot hide damage under hit-only ACK semantics.
+      const match = validPosition ? this.areas.findIndex(area =>
+        Math.hypot(pos.x - area.x, pos.y - area.y) <= area.radius + .5) : -1;
+      const [area] = this.areas.splice(match < 0 ? 0 : match, 1);
+      const known = area && this.player.conditionsKnown && !(this.player.effects2 & (1 << 6));
+      const misses = known && validPosition
         && Math.hypot(pos.x - area.x, pos.y - area.y) > area.radius + .5;
       if (!misses) this.predictor.impact(area?.id ?? `aoe-unresolved:${++this.seq}`,
         { amount: known ? area.raw : Math.max(200, area?.raw ?? 0), kind: known ? 'mitigated-estimate' : 'assumed',
@@ -343,9 +356,9 @@ export class SafetyEngine {
   advance(now: number): void {
     this.latestNow = now;
     this.predictor.expire(now);
+    this.expireAreas(now);
     if (now - this.lastCleanup >= 1000) {
       this.lastCleanup = now;
-      this.areas = this.areas.filter(area => now - area.at <= 10000);
       for (const [id, occurrence] of this.unresolvedOccurrences) if (occurrence.expires < now) this.unresolvedOccurrences.delete(id);
       for (const [key, shot] of this.shots) if (shot.expires < now) {
         this.shots.delete(key); this.predictionOccurrences.delete(shot.id);
