@@ -159,3 +159,5 @@ details > summary { cursor: pointer; color: var(--accent); padding: 6px 0; }
 .protection[data-value="degraded"] { color: #ffd166; }
 .protection[data-value="unprotected"] { color: #ff8585; }
 .protection-reasons:empty { display: none; }
+
+.protection[data-value="unknown"] { color: #c4b5fd; }

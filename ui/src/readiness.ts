@@ -10,6 +10,8 @@ export class Readiness {
   readonly actions = el('div', undefined, 'controls');
   /** Proxy and request errors, shown above the tabs so they stay visible. */
   readonly notices = el('div', undefined, 'notices');
+  private readonly protectionItem = el('div', undefined, 'protection');
+  private readonly protectionValue = el('strong');
   private readonly protectionReasons = el('ul', undefined, 'protection-reasons');
   private readonly error = el('p', '', 'error');
   private readonly requestError = el('p', '', 'error');
@@ -31,6 +33,9 @@ export class Readiness {
   constructor(api: Pick<ApiClient, 'post'>, changed: () => void) {
     this.api = api; this.changed = changed;
     this.status.setAttribute('aria-live', 'polite');
+    this.protectionItem.dataset.key = 'protection';
+    this.protectionItem.append(el('span', 'Protection'), this.protectionValue);
+    this.status.append(this.protectionItem);
     this.launch = button('Launch', () => void this.run('/api/game/launch'));
     this.launch.className = 'primary';
     this.proxy = button('Start proxy', () => void this.run(`/api/proxy/${this.state?.proxy.state === 'running' ? 'stop' : 'start'}`));
@@ -57,14 +62,13 @@ export class Readiness {
 
   update(state: AppState): void {
     this.state = state;
-    this.status.replaceChildren();
+    for (const child of [...this.status.children]) if (child !== this.protectionItem) child.remove();
     const protection = state.protection;
-    const item = el('div', undefined, 'protection'); item.dataset.key = 'protection';
-    item.dataset.value = protection?.state ?? 'degraded'; item.setAttribute('aria-live', 'polite');
+    this.protectionItem.dataset.value = protection?.state ?? 'unknown';
     const labels = { idle: 'Idle', protected: 'Protected', degraded: 'Degraded', unprotected: 'Not protected' };
-    item.append(el('span', 'Protection'), el('strong', protection ? labels[protection.state] : 'Unknown'));
-    this.status.append(item);
-    this.protectionReasons.replaceChildren(...(protection?.reasons ?? []).map(reason => el('li', reason.message)));
+    const value = protection ? labels[protection.state] : 'Unknown';
+    if (this.protectionValue.textContent !== value) this.protectionValue.textContent = value;
+    this.protectionReasons.replaceChildren(...(protection?.reasons ?? []).filter(r => r.severity !== 'info').map(reason => el('li', reason.message)));
 
     for (const [label, value] of [
       ['Proxy', state.proxy.state], ['Helper', state.game.helper.state],

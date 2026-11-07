@@ -60,7 +60,23 @@ it.each(['idle', 'protected', 'degraded', 'unprotected'] as const)('renders prot
     sessions: { open: 1, connected: 1 }, profile: { active: 'default', available: [] }, operation: null, revision: 1 });
   const item = view.status.firstElementChild!;
   expect(item.getAttribute('data-key')).toBe('protection'); expect(item.getAttribute('data-value')).toBe(state);
-  expect(item.getAttribute('aria-live')).toBe('polite');
+  expect(item.hasAttribute('aria-live')).toBe(false); expect(view.status.getAttribute('aria-live')).toBe('polite');
   expect(item.textContent).toContain({ idle: 'Idle', protected: 'Protected', degraded: 'Degraded', unprotected: 'Not protected' }[state]);
   expect(view.notices.textContent).toContain('<unsafe> reason'); expect(view.notices.querySelector('unsafe')).toBeNull();
+});
+
+it('retains the protection element, filters info reasons, and renders missing protection as unknown', () => {
+  const view = new Readiness({ post: vi.fn() }, vi.fn());
+  const state: AppState = { data: { state: 'idle', gameBuild: null, catalogBuild: null, error: null, lastResult: null },
+    proxy: { state: 'stopped', port: null, error: null }, game: { dir: null, candidates: [], launcher: null, helper: { state: 'unknown', backup: false } },
+    sessions: { open: 0, connected: 0 }, profile: { active: 'default', available: [] }, operation: null, revision: 1 };
+  view.update(state); const item = view.status.firstElementChild!, value = item.querySelector('strong');
+  expect(item.getAttribute('data-value')).toBe('unknown'); expect(item.textContent).toContain('Unknown');
+  view.update({ ...state, protection: { state: 'idle', since: 1, reasons: [
+    { code: 'info', source: 'proxy', severity: 'info', message: 'Hidden info' },
+    { code: 'warn', source: 'helper', severity: 'warning', message: 'Visible warning' },
+    { code: 'error', source: 'helper', severity: 'error', message: 'Visible error' }] } });
+  expect(view.status.firstElementChild).toBe(item); expect(item.querySelector('strong')).toBe(value);
+  expect(item.textContent).toContain('Idle'); expect(view.notices.textContent).not.toContain('Hidden info');
+  expect(view.notices.textContent).toContain('Visible warning'); expect(view.notices.textContent).toContain('Visible error');
 });

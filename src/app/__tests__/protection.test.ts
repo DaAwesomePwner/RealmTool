@@ -46,6 +46,7 @@ describe('computeProtection', () => {
   it('degrades for missing status or unavailable drink, but permits optional drink to be off', () => {
     const input = ready(); input.plugins[1].enabled = false;
     expect(computeProtection(input).state).toBe('protected');
+    input.plugins[1].enabled = true;
     input.plugins[1].data.status = { reason: 'consumables catalog unavailable: missing' };
     expect(computeProtection(input).state).toBe('degraded');
     input.plugins[0].data = {}; expect(computeProtection(input).reasons.map(r => r.code)).toContain('nexus-status-unknown');
@@ -53,6 +54,20 @@ describe('computeProtection', () => {
   it.each(['waiting', 'degraded', 'transition', 'escaping', 'cooldown', 'disabled', 'dead'])('does not call %s protected', protectionState => {
     const input = ready(); input.plugins[0].data.status = { protectionState };
     expect(computeProtection(input).state).not.toBe('protected');
+  });
+  it('waits idly for a game without masking actual failures', () => {
+    const input = { ...ready(), gameRunning: false, routing: 'unknown' };
+    expect(computeProtection(input)).toEqual({ state: 'idle', reasons: [{ code: 'waiting-for-game', source: 'game', severity: 'info', message: 'Waiting for the game' }] });
+    input.data.state = 'failed'; expect(computeProtection(input).state).toBe('degraded');
+  });
+  it.each([false, true])('only enabled Auto Drink problems degrade (enabled=%s)', enabled => {
+    const input = ready(); input.plugins[1].enabled = enabled; input.plugins[1].failed = 'broken';
+    input.modules['auto-drink'] = { failing: true, rejected: true };
+    expect(computeProtection(input).state).toBe(enabled ? 'degraded' : 'protected');
+  });
+  it('uses the worst client status and deduplicates shared reasons', () => {
+    const input = ready(); input.nexusStatuses = [{ stale: true }, { stale: false, status: { protectionState: 'monitoring' } }, { stale: true }];
+    expect(computeProtection(input)).toMatchObject({ state: 'degraded', reasons: [{ code: 'nexus-status-stale' }] });
   });
   it('orders errors before warnings deterministically without changing its input', () => {
     const input = ready(); input.helper = 'outdated'; input.gameRunning = false;
