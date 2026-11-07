@@ -289,6 +289,18 @@ fn recovery_script(log_path: &str) -> String {
     )
 }
 
+/// Debug builds only: the GUI smoke sets `REALMTOOL_GUI_SMOKE_CDP_PORT` to open the WebView2
+/// DevTools protocol. wry passes explicit browser arguments, which current WebView2 runtimes
+/// prefer over `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, so the port goes in here. Explicit
+/// arguments replace wry's defaults, so its disabled features are repeated.
+#[cfg(debug_assertions)]
+fn smoke_browser_args(port: Option<String>) -> Option<String> {
+    let port = port?.parse::<u16>().ok().filter(|port| *port != 0)?;
+    Some(format!(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
+    ))
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -301,10 +313,15 @@ fn main() {
                 .path()
                 .config_dir()?
                 .join("RealmTool/logs/realmtool.log");
-            let window = WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
+            let builder = WebviewWindowBuilder::from_config(app, &app.config().app.windows[0])?
                 .on_navigation(trusted_origin)
-                .initialization_script(recovery_script(&log_path.to_string_lossy()))
-                .build()?;
+                .initialization_script(recovery_script(&log_path.to_string_lossy()));
+            #[cfg(debug_assertions)]
+            let builder = match smoke_browser_args(std::env::var("REALMTOOL_GUI_SMOKE_CDP_PORT").ok()) {
+                Some(args) => builder.additional_browser_args(&args),
+                None => builder,
+            };
+            let window = builder.build()?;
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit_item])?;
@@ -369,4 +386,24 @@ fn main() {
             }
         }
     });
+}
+
+#[cfg(all(test, debug_assertions))]
+mod smoke_args_tests {
+    use super::smoke_browser_args;
+
+    #[test]
+    fn opens_the_requested_debugging_port_and_keeps_wry_defaults() {
+        assert_eq!(
+            smoke_browser_args(Some("9241".into())).as_deref(),
+            Some("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9241")
+        );
+    }
+
+    #[test]
+    fn ignores_missing_zero_or_invalid_ports() {
+        for value in [None, Some(""), Some("0"), Some("65536"), Some("-1"), Some("9241 --x"), Some("abc")] {
+            assert_eq!(smoke_browser_args(value.map(String::from)), None, "{value:?}");
+        }
+    }
 }
