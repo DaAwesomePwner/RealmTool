@@ -255,6 +255,9 @@ it.each([false, true])('an unreadable/empty MAPINFO (defined=%s) retires retries
   expect(f.engine.epoch).toBeGreaterThan(epoch);
   expect(snapshot(f.engine)).toMatchObject({ map: '', confirmedHp: null, attempt: null, protectionState: 'waiting', automaticEligible: false });
   expect(f.writes).toHaveLength(1);
+  f.emit('CREATESUCCESS', { objectId: 1 }); f.health(600);
+  expect(f.engine.status()).toMatchObject({ mapUnreadable: true, degraded: 'map-unreadable', automaticEligible: true });
+  f.health(200); expect(f.writes).toHaveLength(2);
 });
 
 it.each(['death', 'unreadable death', 'kill flag', 'reconnect', 'accepted reconnect', 'safe map'] as const)('%s retires writes/retries and remains inactive across toggles', terminal => {
@@ -503,4 +506,82 @@ it.each(['dead', 'transition'] as const)('mode changes preserve the %s terminal 
   expect(f.decision).not.toHaveBeenCalled(); expect(f.writes).toHaveLength(0);
   f.engine.connectionChanged(2); f.enter('Realm', 200);
   expect(snapshot(f.engine).attempt).toMatchObject({ connectionGeneration: 2, origin: 'automatic' });
+});
+
+it.each(['', '   '])('an empty map %j still allows threshold escapes', map => {
+  const f = fixture(); f.enter(map, 200);
+  expect(f.writes).toHaveLength(1);
+});
+
+it('retains unreadable map evidence through character creation and protects the player', () => {
+  const f = fixture(); f.emit('MAPINFO', {}, false, false);
+  f.emit('CREATESUCCESS', { objectId: 1 }); f.health(600);
+  expect(f.engine.status()).toMatchObject({ mapUnreadable: true, degraded: 'map-unreadable', protectionState: 'monitoring-degraded' });
+  f.health(200); expect(f.writes).toHaveLength(1);
+});
+
+it('detects a total HP stall without escaping and recovers on a fresh tick', () => {
+  const f = fixture();
+  f.advance(3000); expect(f.engine.status().degraded).toBeNull();
+  f.advance(1);
+  expect(f.engine.status()).toMatchObject({ degraded: 'server-hp-stale', protectionState: 'monitoring-degraded', automaticEligible: true });
+  expect(f.writes).toHaveLength(0);
+  f.health(); expect(f.engine.status().degraded).toBeNull();
+});
+
+it.each(['NEWTICK', 'UPDATE'])('flags unreadable %s until a fresh player tick', name => {
+  const f = fixture(); f.emit(name, {}, false, false);
+  expect(f.engine.status().degraded).toBe('hp-stream-unreadable');
+  f.emit('UPDATE', { newObjs: [{ status: { objectId: 2, data: [] } }] });
+  expect(f.engine.status().degraded).toBe('hp-stream-unreadable');
+  f.emit('UPDATE', { newObjs: [{ status: { objectId: 1, data: [{ id: 1, value: 600 }] } }] });
+  expect(f.engine.status().degraded).toBeNull();
+});
+
+it.each(['disabled', 'safe', 'disconnected', 'waiting', 'dead'])('does not warn about stalls while %s', state => {
+  const f = fixture();
+  if (state === 'disabled') f.configure({ enabled: false });
+  if (state === 'safe') f.enter('Nexus');
+  if (state === 'disconnected') f.io.available = false;
+  if (state === 'waiting') f.emit('MAPINFO', { name: 'Realm' });
+  if (state === 'dead') f.emit('DEATH');
+  f.advance(3001); expect(f.engine.status().degraded).toBeNull();
+});
+
+it('reports HP degradation ahead of unreadable-map evidence, then restores the map reason', () => {
+  const f = fixture(); f.emit('MAPINFO', {}, false, false);
+  f.emit('CREATESUCCESS', { objectId: 1 }); f.health(600);
+  expect(f.engine.status().degraded).toBe('map-unreadable');
+  f.advance(3001);
+  expect(f.engine.status()).toMatchObject({ mapUnreadable: true, degraded: 'server-hp-stale' });
+  f.emit('UPDATE', {}, false, false);
+  expect(f.engine.status().degraded).toBe('hp-stream-unreadable');
+  f.health(600);
+  expect(f.engine.status().degraded).toBe('map-unreadable');
+});
+
+it('keeps escaping and cooldown visible alongside HP watchdog reasons', () => {
+  const f = fixture(); f.health(200);
+  f.emit('UPDATE', {}, false, false);
+  expect(f.engine.status()).toMatchObject({ protectionState: 'escaping', degraded: 'hp-stream-unreadable' });
+  f.advance(800);
+  expect(f.engine.status()).toMatchObject({ protectionState: 'cooldown', degraded: 'hp-stream-unreadable' });
+  f.advance(10000);
+  expect(f.engine.status()).toMatchObject({ protectionState: 'degraded', degraded: 'hp-stream-unreadable' });
+});
+
+it.each([false, true])('keeps unreadable HP degraded through HP-less ticks until an explicit anchor (prediction=%s)', preHitPrediction => {
+  const f = fixture({ preHitPrediction }); f.health(600);
+  f.emit('NEWTICK', {}, false, false);
+  for (let i = 0; i < 17; ++i) {
+    f.advance(1000); f.health();
+    expect(f.engine.status()).toMatchObject({ confirmedHp: 600, degraded: 'hp-stream-unreadable' });
+  }
+  f.emit('UPDATE', { newObjs: [{ status: { objectId: 1, data: [{ id: 0, value: 1000 }] } }] });
+  expect(f.engine.status().degraded).toBe('hp-stream-unreadable');
+  f.health(NaN);
+  expect(f.engine.status().degraded).toBe('hp-stream-unreadable');
+  expect(f.writes).toHaveLength(0);
+  f.health(550);
+  expect(f.engine.status()).toMatchObject({ confirmedHp: 550, degraded: null, protectionState: 'monitoring' });
 });

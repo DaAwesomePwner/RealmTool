@@ -8,6 +8,7 @@ import { safetySettings, type SafetyDecisionEvidence } from '../../src/safety/Sa
 import { SETTING_DEFS, migrate, validate } from './settings.ts';
 import type { AutoNexusConfig, AutoNexusEvent } from './messages.ts';
 
+const DEGRADED_NOTICE_MS = 30000;
 const ZERO_SUFFIX = ' (proactive escapes suppressed; confirmed server zero only; manual Nexus available)';
 const ROUTING = 'routing: normal ESCAPE; server-authorized transfer; automatic escape report suppression policy: after accepted local AUTO escape until new connection; manual ESCAPE alone unaffected';
 
@@ -87,6 +88,29 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     ctx.sendNotification(client, 'AutoNexus', `Collision HP FALLBACK: server HP only (${loaded.reason}). RealmTool refreshes game data automatically; if it keeps failing, use "Refresh game data" in RealmTool and check the log.`);
   }
 
+  const degradation = new WeakMap<ClientConnection, {
+    reason: AutoNexusEvent['status']['degraded'];
+  }>();
+  // Plugin lifetime spans map hops, whose new ClientConnection must not reset the limit.
+  const degradedNotifiedAt = new Map<string, number>();
+  function notifyDegraded(client: ClientConnection, event: Extract<AutoNexusEvent, { type: 'status' }>): void {
+    const now = performance.now();
+    const age = now - event.sampledAt;
+    if (!client.connected || !Number.isFinite(age) || age < 0 || age > 2000) return;
+    const state = degradation.get(client) ?? { reason: null };
+    const reason = ctx.enabled ? event.status.degraded : null;
+    if (reason && reason !== state.reason) {
+      const text = `Auto Nexus degraded: ${reason}; protection may be incomplete.`;
+      if (now - (degradedNotifiedAt.get(reason) ?? -Infinity) >= DEGRADED_NOTICE_MS) {
+        degradedNotifiedAt.set(reason, now);
+        log.warn('auto-nexus', text);
+        ctx.sendNotification(client, 'AutoNexus', text);
+      }
+    }
+    state.reason = reason;
+    degradation.set(client, state);
+  }
+
   // Worker timestamps use the process-wide monotonic clock, not wall time.
   // Generation notifications are ordered on this session's worker channel.
   const views = new WeakMap<ClientConnection, { generation: number; sample?: Extract<AutoNexusEvent, { type: 'status' }> }>();
@@ -114,7 +138,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
       : { state: catalog.state, reason: catalog.reason };
     lastPublished = now;
     publish({ clientId: client.clientId, collisionHp, catalog: safeCatalog,
-      protectionState: status.protectionState, automaticEligible: status.automaticEligible,
+      protectionState: status.protectionState, degraded: status.degraded, automaticEligible: status.automaticEligible,
       confirmedHp: status.confirmedHp, maxHp: status.maxHp, lowerHp: status.lowerHp,
       pendingDamage: status.prediction?.pendingDamage ?? 0, pendingCount: status.prediction?.pendingCount ?? 0,
       attemptPhase: status.attemptPhase, sampledAgeMs: age });
@@ -151,6 +175,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
       if (current && event.generation < current.generation) return;
       views.set(client, { generation: event.generation, sample: event });
       notifyFallback(client, event);
+      notifyDegraded(client, event);
       scheduleStatus(client);
     } else if (event.type === 'decision') {
       const { decision, writeDelayMs } = event;
@@ -179,7 +204,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     const status = fresh ? sample.status : undefined;
     const t = ctx.getSetting<number>('ForceAutoNexusHealth');
     ctx.sendNotification(client, 'AutoNexus', `Threshold ${t}%${t === 0 ? ZERO_SUFFIX : ''}; `
-      + (status ? `worker ${status.enabled ? 'enabled' : 'disabled'}; automatic ${status.automaticEligible ? 'eligible' : 'not eligible'}; protection ${status.protectionState}; ${modeText(sample!.collisionHp, sample!.catalog)}; ${sample!.catalog.state === 'ready' ? `catalog game build ${sample!.catalog.gameBuild}` : `catalog fallback: ${sample!.catalog.reason}`}; pending damage ${status.prediction?.pendingDamage ?? 0}, count ${status.prediction?.pendingCount ?? 0}; assumed count ${status.prediction?.assumedCount ?? 0}; attempt ${status.attemptOrigin === 'manual' ? 'MANUAL NEXUS' : status.attemptOrigin} ${status.attemptPhase}; `
+      + (status ? `worker ${status.enabled ? 'enabled' : 'disabled'}; automatic ${status.automaticEligible ? 'eligible' : 'not eligible'}; protection ${status.protectionState}${status.degraded ? ` (${status.degraded})` : ''}; ${modeText(sample!.collisionHp, sample!.catalog)}; ${sample!.catalog.state === 'ready' ? `catalog game build ${sample!.catalog.gameBuild}` : `catalog fallback: ${sample!.catalog.reason}`}; pending damage ${status.prediction?.pendingDamage ?? 0}, count ${status.prediction?.pendingCount ?? 0}; assumed count ${status.prediction?.assumedCount ?? 0}; attempt ${status.attemptOrigin === 'manual' ? 'MANUAL NEXUS' : status.attemptOrigin} ${status.attemptPhase}; `
         : 'Worker status unavailable / awaiting current worker; ') + ROUTING);
   });
   ctx.hookCommand('reset', client => ctx.sendNotification(client, 'AutoNexus', 'Pending loss reconciles from server evidence and cannot be erased by command.'));

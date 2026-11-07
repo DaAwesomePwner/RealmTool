@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { GAME_PORT } from '../protocol/constants.ts';
 import { log } from '../util/log.ts';
 import type { Destination } from './router.ts';
@@ -28,36 +28,56 @@ export interface TargetResolverOptions {
   identify?: (remotePort: number) => ProcessIdentity | null;
 }
 
+/** Shared by lookup and startup cleanup so neither can leave an alternate target behind. */
+function targetDirectories(tempDir?: string): string[] {
+  const candidates = tempDir !== undefined
+    ? [tempDir]
+    : [process.env.TMP, process.env.TEMP, process.env.USERPROFILE, tmpdir()];
+  return [...new Set(candidates
+    .filter((dir): dir is string => Boolean(dir))
+    .map(dir => resolve(dir)))];
+}
+
 /** Maps a new loopback game socket to the server the game originally tried to reach. */
 export function createTargetResolver(options: TargetResolverOptions = {}): (remotePort: number) => Destination | null {
-  const dir = options.tempDir ?? tmpdir();
+  const dirs = targetDirectories(options.tempDir);
   const proxyPort = options.proxyPort ?? GAME_PORT;
   const identify = options.identify ?? ((remotePort: number) => readTcpProcessIdentity(remotePort, proxyPort));
   return remotePort => {
     const identity = identify(remotePort);
     if (!identity) return null;
-    const path = targetFilePath(identity.pid, dir);
-    let text: string;
-    try {
-      text = readFileSync(path, 'utf8');
-    } catch {
-      return null;
+    for (const dir of dirs) {
+      const path = targetFilePath(identity.pid, dir);
+      let text: string;
+      try {
+        text = readFileSync(path, 'utf8');
+      } catch {
+        continue;
+      }
+      for (const candidate of dirs) {
+        const stalePath = targetFilePath(identity.pid, candidate);
+        try { unlinkSync(stalePath); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            log.warn('Routing', `Failed to remove target file ${stalePath}: ${(error as Error).message}`);
+          }
+        }
+      }
+      const host = parseTargetFile(text);
+      return host ? { host, port: GAME_PORT } : null;
     }
-    try { unlinkSync(path); } catch (error) {
-      log.warn('Routing', `Failed to remove target file ${path}: ${(error as Error).message}`);
-    }
-    const host = parseTargetFile(text);
-    return host ? { host, port: GAME_PORT } : null;
+    return null;
   };
 }
 
-export function removeStaleTargetFiles(dir: string = tmpdir()): number {
+export function removeStaleTargetFiles(dir?: string): number {
   let removed = 0;
-  let names: string[];
-  try { names = readdirSync(dir); } catch { return 0; }
-  for (const name of names) {
-    if (!/^realmtool_target_\d+\.txt$/.test(name)) continue;
-    try { unlinkSync(join(dir, name)); removed++; } catch { /* in use or already gone */ }
+  for (const candidate of targetDirectories(dir)) {
+    let names: string[];
+    try { names = readdirSync(candidate); } catch { continue; }
+    for (const name of names) {
+      if (!/^realmtool_target_\d+\.txt$/.test(name)) continue;
+      try { unlinkSync(join(candidate, name)); removed++; } catch { /* in use or already gone */ }
+    }
   }
   return removed;
 }
