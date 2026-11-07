@@ -278,6 +278,46 @@ describe('AppController lifecycle', () => {
     const data = { clientId, protectionState, collisionHp: 'on', degraded: 'server-hp-stale' };
     contexts.at(-2)!.setData('status', data); contexts.at(-2)!.broadcastData('status', data);
   }
+  it.each([
+    { name: 'low HP', expected: false, override: {}, warn: true },
+    { name: 'safe map', expected: false, override: { protectionState: 'safe' }, warn: false },
+    { name: 'nexus', expected: false, override: { phase: 'nexus' }, warn: false },
+    { name: 'dead', expected: false, override: { phase: 'dead' }, warn: false },
+    { name: 'transfer', expected: false, override: { phase: 'transition' }, warn: false },
+    { name: 'disabled', expected: false, override: { enabled: false }, warn: false },
+    { name: 'unknown HP', expected: false, override: { confirmedHp: null }, warn: false },
+    { name: 'high HP', expected: false, override: { confirmedHp: 800, lowerHp: 800 }, warn: false },
+    { name: 'expected exit', expected: true, override: {}, warn: false },
+  ])('handles worker exit at $name', async ({ expected, override, warn }) => {
+    const host = await protectedSession();
+    contexts.at(-2)!.broadcastData('status', { clientId: 'game', enabled: true, phase: 'armed',
+      protectionState: 'monitoring', confirmedHp: 250, lowerHp: 180, maxHp: 1000, thresholdPct: 25, ...override });
+    host.emit('exit', { code: 1, expected });
+    expect(controller.state().safetyWarning?.message).toBe(warn
+      ? 'Network worker crashed at 18% HP (threshold 25%) — Auto Nexus could not act' : undefined);
+    await drain();
+  });
+
+  it('uses each connected client snapshot on crash and excludes disconnected clients', async () => {
+    const host = await protectedSession();
+    const notice = vi.fn(); controller.on('state', notice);
+    for (const id of ['other', 'gone']) {
+      host.emit('session', { id, remotePort: 124 });
+      host.emit('connected', { id, generation: 1 });
+      contexts.at(-2)!.broadcastData('status', { clientId: id, enabled: true, phase: 'armed',
+        protectionState: 'monitoring', confirmedHp: 240, lowerHp: 200, maxHp: 1000, thresholdPct: 25 });
+    }
+    host.emit('closed', { id: 'gone', by: 'game' });
+    contexts.at(-2)!.broadcastData('status', { clientId: 'game', enabled: true, phase: 'armed',
+      protectionState: 'monitoring', confirmedHp: 250, lowerHp: 180, maxHp: 1000, thresholdPct: 25 });
+    notice.mockClear();
+    host.emit('exit', { code: 1, expected: false });
+    const warnings = notice.mock.calls.map(([state]) => state.safetyWarning?.message);
+    expect(warnings.some(text => text?.includes('18% HP'))).toBe(true);
+    expect(warnings.some(text => text?.includes('20% HP'))).toBe(true);
+    await drain();
+  });
+
   it('emits only changed protection and retains since when only reasons change', async () => {
     const host = await protectedSession();
     const changes = vi.fn(); controller.on('state', changes);

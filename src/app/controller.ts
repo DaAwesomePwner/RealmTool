@@ -573,10 +573,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
       if (event.moduleId !== 'auto-nexus' || !event.message || typeof event.message !== 'object') return;
       const value = event.message as Record<string, unknown>;
       if (value.type !== 'lowHpClose' || typeof value.hpPct !== 'number' || typeof value.thresholdPct !== 'number') return;
-      const text = `Connection closed at ${Math.round(value.hpPct)}% HP (threshold ${value.thresholdPct}%) — Auto Nexus could not act`;
-      log.warn('Auto Nexus', text);
-      this.current.safetyWarning = { message: text, expiresAt: Date.now() + 60_000 };
-      this.changed();
+      this.warnLowHp('Connection closed', value.hpPct, value.thresholdPct);
     });
     host.on('module', closeWarning);
     this.detachHost.push(() => host.off('module', closeWarning));
@@ -589,6 +586,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
       this.moduleProtection = {};
       if (this.current.loopLag) delete this.current.loopLag.worker;
       if (expected) { this.protectionChanged(); return; }
+      if (!this.shuttingDown && this.current.proxy.state === 'running') this.warnCrashHp();
       const error = `Network worker stopped unexpectedly (code ${code})`;
       log.error('Proxy', error);
       if (this.current.proxy.state === 'running' && !this.shuttingDown) this.restartHost(host, error);
@@ -601,6 +599,28 @@ export class AppController extends EventEmitter<ControllerEvents> {
       host.off('routed', onRouted); host.off('diagnostic', diagnostic); host.off('note', note); host.off('fault', fault); host.off('exit', exit);
     });
   }
+  private warnLowHp(cause: string, hpPct: number, thresholdPct: number): void {
+    const text = `${cause} at ${Math.round(hpPct)}% HP (threshold ${thresholdPct}%) — Auto Nexus could not act`;
+    log.warn('Auto Nexus', text);
+    this.current.safetyWarning = { message: text, expiresAt: Date.now() + 60_000 };
+    this.changed();
+  }
+
+  private warnCrashHp(): void {
+    if (!this.plugins().find(plugin => plugin.id === 'auto-nexus')?.enabled) return;
+    for (const id of this.connected) {
+      const status = this.nexusStatuses.get(id)?.status;
+      if (!status || status.enabled !== true || status.protectionState === 'safe'
+        || ['nexus', 'dead', 'transition'].includes(String(status.phase))) continue;
+      const { confirmedHp, lowerHp, maxHp, thresholdPct } = status;
+      if (typeof confirmedHp !== 'number' || !Number.isFinite(confirmedHp)
+        || typeof maxHp !== 'number' || !Number.isFinite(maxHp) || maxHp <= 0
+        || typeof thresholdPct !== 'number' || !Number.isFinite(thresholdPct)) continue;
+      const hp = typeof lowerHp === 'number' && Number.isFinite(lowerHp) ? Math.min(confirmedHp, lowerHp) : confirmedHp;
+      if (hp / maxHp * 100 < 2 * thresholdPct) this.warnLowHp('Network worker crashed', hp / maxHp * 100, thresholdPct);
+    }
+  }
+
   private failHost(host: ReturnType<ControllerDeps['createHost']>, error: string, afterCleanup?: () => void): void {
     if (this.host !== host || this.shuttingDown) return;
     this.current.proxy = { state: 'failed', port: null, error };
