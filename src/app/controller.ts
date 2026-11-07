@@ -32,6 +32,7 @@ import type { ResourcePaths } from './resources.ts';
 
 export type ProxyState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
 export interface AppState {
+  safetyWarning?: { message: string; expiresAt: number };
   loopLag?: { worker?: LoopLag; main?: LoopLag };
   /** Always present in controller output; optional for older API state producers. */
   protection?: Protection & { since: number };
@@ -568,6 +569,14 @@ export class AppController extends EventEmitter<ControllerEvents> {
       this.current.loopLag = { ...this.current.loopLag, worker: sample };
       this.changed();
     });
+    const closeWarning = guard((event: { moduleId: string; message: unknown }) => {
+      if (event.moduleId !== 'auto-nexus' || !event.message || typeof event.message !== 'object') return;
+      const value = event.message as Record<string, unknown>;
+      if (value.type !== 'lowHpClose' || typeof value.hpPct !== 'number' || typeof value.thresholdPct !== 'number') return;
+      this.warnLowHp('Connection closed', value.hpPct, value.thresholdPct);
+    });
+    host.on('module', closeWarning);
+    this.detachHost.push(() => host.off('module', closeWarning));
     host.on('loopLag', loopLag);
     this.detachHost.push(() => host.off('loopLag', loopLag));
     host.on('moduleStatus', status); host.on('moduleConfig', config);
@@ -577,6 +586,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
       this.moduleProtection = {};
       if (this.current.loopLag) delete this.current.loopLag.worker;
       if (expected) { this.protectionChanged(); return; }
+      if (!this.shuttingDown && this.current.proxy.state === 'running') this.warnCrashHp();
       const error = `Network worker stopped unexpectedly (code ${code})`;
       log.error('Proxy', error);
       if (this.current.proxy.state === 'running' && !this.shuttingDown) this.restartHost(host, error);
@@ -589,6 +599,30 @@ export class AppController extends EventEmitter<ControllerEvents> {
       host.off('routed', onRouted); host.off('diagnostic', diagnostic); host.off('note', note); host.off('fault', fault); host.off('exit', exit);
     });
   }
+  private warnLowHp(cause: string, hpPct: number, thresholdPct: number, statusAgeMs = 0): void {
+    const age = statusAgeMs > 5_000 ? ` (last reported ${Math.round(statusAgeMs / 1000)} s before the crash)` : '';
+    const text = `${cause} at ${Math.round(hpPct)}% HP (threshold ${thresholdPct}%) — Auto Nexus could not act${age}`;
+    log.warn('Auto Nexus', text);
+    this.current.safetyWarning = { message: text, expiresAt: Date.now() + 60_000 };
+    this.changed();
+  }
+
+  private warnCrashHp(): void {
+    if (!this.plugins().find(plugin => plugin.id === 'auto-nexus')?.enabled) return;
+    for (const id of this.connected) {
+      const sample = this.nexusStatuses.get(id);
+      const status = sample?.status;
+      if (!sample || !status || status.enabled !== true || status.protectionState === 'safe'
+        || ['nexus', 'dead', 'transition'].includes(String(status.phase))) continue;
+      const { confirmedHp, lowerHp, maxHp, thresholdPct } = status;
+      if (typeof confirmedHp !== 'number' || !Number.isFinite(confirmedHp)
+        || typeof maxHp !== 'number' || !Number.isFinite(maxHp) || maxHp <= 0
+        || typeof thresholdPct !== 'number' || !Number.isFinite(thresholdPct)) continue;
+      const hp = typeof lowerHp === 'number' && Number.isFinite(lowerHp) ? Math.min(confirmedHp, lowerHp) : confirmedHp;
+      if (hp / maxHp * 100 < 2 * thresholdPct) this.warnLowHp('Network worker crashed', hp / maxHp * 100, thresholdPct, Date.now() - sample.at);
+    }
+  }
+
   private failHost(host: ReturnType<ControllerDeps['createHost']>, error: string, afterCleanup?: () => void): void {
     if (this.host !== host || this.shuttingDown) return;
     this.current.proxy = { state: 'failed', port: null, error };

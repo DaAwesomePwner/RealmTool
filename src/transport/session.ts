@@ -179,7 +179,7 @@ export class Session {
     if (this.helloTimer) clearTimeout(this.helloTimer);
     this.heldHello = null;
     this.helloForRetry = null;
-    for (const module of this.modules) this.call(module, 'close', () => module.hooks.close?.(), undefined);
+    for (const module of this.modules) this.call(module, 'close', () => module.hooks.close?.(by), undefined);
     this.failures.flush(this.env.now(), true);
     // A fault is an abort, so the game gets the reset it would see without us. While it loads
     // a map it ignores a clean FIN and sits on the loading screen with the socket in CLOSE_WAIT.

@@ -59,7 +59,14 @@ export type PacketHook = (client: ClientConnection, packet: Packet) => void;
 export type CommandHook = (client: ClientConnection, command: string, args: string[]) => void;
 export type ConnectionEvent = 'clientConnected' | 'clientDisconnected';
 
+export type WorkerHealth =
+  | { state: 'failing' | 'healthy'; since: number }
+  | { configOk: boolean; reason?: string };
+
 export interface WorkerChannel {
+  /** Only this plugin's module health/config events, including while disabled.
+   * Clients is a snapshot of currently connected clients. Removed on cleanup. */
+  onHealth(handler: (event: WorkerHealth, clients: readonly ClientConnection[]) => void): void;
   /** Module-wide configuration for this plugin's worker module (module id = plugin id). Coalesced: while the host is starting or applying a profile only the last value per plugin is kept, and all plugins' values are sent in one batch. */
   configure(config: unknown): void;
   /** A message for this plugin's worker module instance on one game connection. Ignored when that client is no longer connected. */

@@ -13,6 +13,10 @@ export class Readiness {
   private readonly protectionItem = el('div', undefined, 'protection');
   private readonly protectionValue = el('strong');
   private readonly protectionReasons = el('ul', undefined, 'protection-reasons');
+  private readonly safetyWarning = el('div', undefined, 'warning');
+  private warningExpiry?: ReturnType<typeof setTimeout>;
+  private dismissedWarning = 0;
+  private renderedWarning?: AppState['safetyWarning'];
   private readonly error = el('p', '', 'error');
   private readonly requestError = el('p', '', 'error');
   private readonly folder = el('input');
@@ -55,13 +59,26 @@ export class Readiness {
     const helper = el('div', undefined, 'setup-row');
     helper.append(this.uninstall, el('p', 'Closing the window while the proxy runs hides RealmTool to the tray. Use tray Quit to exit. The helper stays installed until you uninstall it.', 'help'));
     this.error.setAttribute('role', 'alert'); this.requestError.setAttribute('role', 'alert');
-    this.notices.append(this.error, this.requestError, this.protectionReasons);
+    this.safetyWarning.setAttribute('role', 'alert');
+    this.notices.append(this.safetyWarning, this.error, this.requestError, this.protectionReasons);
     this.element.append(el('h2', 'Game'), folderRow, options, el('h3', 'Game data'), data, el('h3', 'Helper'), helper);
     this.controls();
   }
 
   update(state: AppState): void {
     this.state = state;
+    const warning = state.safetyWarning;
+    if (warning?.expiresAt !== this.renderedWarning?.expiresAt || warning?.message !== this.renderedWarning?.message) {
+      this.renderedWarning = warning ? { ...warning } : undefined;
+      clearTimeout(this.warningExpiry);
+      this.safetyWarning.replaceChildren();
+      if (warning && warning.expiresAt > Date.now() && warning.expiresAt !== this.dismissedWarning) {
+        this.safetyWarning.append(el('span', warning.message), button('Dismiss', () => {
+          this.dismissedWarning = warning.expiresAt; this.safetyWarning.replaceChildren();
+        }));
+        this.warningExpiry = setTimeout(() => this.safetyWarning.replaceChildren(), warning.expiresAt - Date.now());
+      }
+    }
     for (const child of [...this.status.children]) if (child !== this.protectionItem) child.remove();
     for (const [name, lag] of Object.entries(state.loopLag ?? {})) {
       if (lag) this.status.append(el('div', `${name === 'worker' ? 'Network' : 'Main (informational)'} loop: p99 ${lag.p99.toFixed(1)} ms / max ${lag.max.toFixed(1)} ms`));

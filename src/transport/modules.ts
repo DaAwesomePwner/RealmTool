@@ -111,7 +111,7 @@ export interface WorkerSessionModule {
   connectionChanged?(generation: number): void;
   tick?(now: number): void;
   command?(message: unknown): void;
-  close?(): void;
+  close?(by?: import('./messages.ts').CloseSide): void;
 }
 
 export interface WorkerModule {

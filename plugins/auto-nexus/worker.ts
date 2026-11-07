@@ -116,7 +116,7 @@ export const autoNexusModule: WorkerModule = {
       lastStatusAt = now;
       const sample = engine.status(now);
       lastDegraded = sample.degraded;
-      post({ type: 'status', status: sample, sampledAt: now, generation: context.generation(),
+      post({ type: 'status', thresholdPct: current.settings.thresholdPct, status: sample, sampledAt: now, generation: context.generation(),
         latency: runLatency.snapshot(), catalog: current.catalogState, collisionHp: current.collisionHp });
     };
     const backlog = (now: number, pending: readonly PendingDelivery[]) => engine.deliveryBacklog(
@@ -208,10 +208,25 @@ export const autoNexusModule: WorkerModule = {
           engine.request(context.now(), 'manual nexus', true);
         }
       },
-      close() {
+      close(by) {
         if (closed) return;
-        if (automaticDecisions) context.post({ type: 'latencySummary', message: runLatency.summary() });
-        closed = true; sessions.delete(configure); clear(); engine.attempts.cancel(context.now()); },
+        try {
+          const sample = engine.status(context.now());
+          const receipt = engine.attempts.status?.writeReceipt;
+          const expectedTransfer = context.automation.latchReason === 'transfer'
+            || guard.suppresses(true, 'MOVE') || (receipt?.accepted && !receipt.failed);
+          const hp = sample.confirmedHp === null ? null : Math.min(sample.confirmedHp, sample.lowerHp ?? sample.confirmedHp);
+          if (by !== 'proxy' && by !== undefined && sample.enabled && sample.phase !== 'dead'
+            && sample.phase !== 'transition' && sample.phase !== 'nexus' && sample.protectionState !== 'safe' && !expectedTransfer
+            && hp !== null && sample.maxHp > 0 && hp / sample.maxHp * 100 < 2 * current.settings.thresholdPct) {
+            context.post({ type: 'lowHpClose', serverHp: sample.confirmedHp, predictedHp: sample.lowerHp,
+              hpPct: hp / sample.maxHp * 100, thresholdPct: current.settings.thresholdPct });
+          }
+          if (automaticDecisions) context.post({ type: 'latencySummary', message: runLatency.summary() });
+        } finally {
+          closed = true; sessions.delete(configure); clear(); engine.attempts.cancel(context.now());
+        }
+      },
     };
   },
 };

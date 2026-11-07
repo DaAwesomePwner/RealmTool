@@ -112,6 +112,7 @@ describe('Auto Nexus UI status', () => {
     const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');
     sendStatus(f, 'on');
     const expected = { clientId: f.client, collisionHp: 'on', catalog: ready,
+      enabled: status().enabled, phase: status().phase, thresholdPct: 25,
       protectionState: status().protectionState, degraded: null, automaticEligible: false,
       confirmedHp: status().confirmedHp, maxHp: status().maxHp, lowerHp: status().lowerHp,
       pendingDamage: 230, pendingCount: 2, attemptPhase: status().attemptPhase, sampledAgeMs: 0 };
@@ -322,7 +323,7 @@ describe('Auto Nexus facade', () => {
 });
 
 function sendStatus(f: ReturnType<typeof fixture>, mode: AutoNexusEvent['collisionHp'] = 'fallback', client = f.client, reason = 'missing', objectId = 1) {
-  f.h.workerMessage(client, 'auto-nexus', { type: 'status', generation: 1, sampledAt: performance.now(),
+  f.h.workerMessage(client, 'auto-nexus', { type: 'status', thresholdPct: 25, generation: 1, sampledAt: performance.now(),
     status: { ...status(), objectId, prediction: { pendingDamage: 230, pendingCount: 2, assumedCount: 1 } },
     collisionHp: mode, catalog: mode === 'fallback' ? { state: 'fallback', reason } : ready });
 }
@@ -452,4 +453,119 @@ it('notifies each new HP-stream reason while map decoding remains unreadable', (
     'Auto Nexus degraded: server-hp-stale; protection may be incomplete.',
     'Auto Nexus degraded: hp-stream-unreadable; protection may be incomplete.',
   ]);
+});
+
+it('broadcasts failing, rejected and recovered notices with rate limits and no disconnected recipients', () => {
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const f = fixture();
+  f.h.connect('second'); f.h.connect('gone'); f.h.close('gone');
+  f.h.connect('logging-in');
+  for (const id of ['c1', 'second']) f.h.packet(id, 'CREATESUCCESS', { objectId: 1, charId: 1 });
+  const health = (state: 'healthy' | 'failing') => f.h.proxy.emit('moduleStatus', { moduleId: 'auto-nexus', state, since: now });
+  const config = (ok: boolean) => f.h.proxy.emit('moduleConfig', ok
+    ? { type: 'moduleConfig', moduleId: 'auto-nexus', ok: true }
+    : { type: 'moduleConfig', moduleId: 'auto-nexus', ok: false, error: 'invalid' });
+  const notices = () => f.h.proxy.injected.map(i => ({ id: i.id, text: f.h.factory.createFromBytes(i.data, 'server').data.text }));
+  health('healthy'); config(true);
+  expect(notices()).toHaveLength(0);
+  health('failing'); health('failing'); config(false); health('healthy');
+  expect(notices()).toHaveLength(6); // Clearing failure announces the rejection that remains.
+  config(true);
+  expect(notices()).toEqual([
+    ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus module failing — protection degraded' })),
+    ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus module failing and settings rejected — protection degraded' })),
+    ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus settings rejected' })),
+    ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus module recovered — settings accepted' })),
+  ]);
+  health('failing'); config(false); health('healthy'); config(true);
+  expect(notices()).toHaveLength(16);
+  now += 30000;
+  health('failing'); config(false); health('healthy'); config(true);
+  expect(notices()).toHaveLength(24);
+  f.h.close('c1'); f.h.close('second');
+  now += 30000;
+  health('failing'); config(false); health('healthy'); config(true);
+  expect(notices()).toHaveLength(24);
+});
+
+it('announces rejection again after recovery inside 30 seconds and skips clients logging in', () => {
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const f = fixture();
+  const config = (ok: boolean) => f.h.proxy.emit('moduleConfig', ok
+    ? { type: 'moduleConfig', moduleId: 'auto-nexus', ok: true }
+    : { type: 'moduleConfig', moduleId: 'auto-nexus', ok: false, error: 'invalid' });
+  config(false);
+  expect(f.h.proxy.injected).toHaveLength(0);
+  f.h.packet(f.client, 'CREATESUCCESS', { objectId: 1, charId: 1 });
+  config(false); // The skipped notice did not spend the rate limit.
+  config(false);
+  expect(f.h.proxy.injected).toHaveLength(1);
+  config(true); config(false);
+  expect(f.h.proxy.injected.map(i => f.h.factory.createFromBytes(i.data, 'server').data.text)).toEqual([
+    'Auto Nexus settings rejected', 'Auto Nexus module recovered — settings accepted', 'Auto Nexus settings rejected',
+  ]);
+  config(false); expect(f.h.proxy.injected).toHaveLength(3);
+  now += 29999; config(false); expect(f.h.proxy.injected).toHaveLength(3);
+  now += 1; config(false); expect(f.h.proxy.injected).toHaveLength(4);
+});
+
+
+it.each(['rejected', 'failing'] as const)('announces every combined state starting with %s', first => {
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const f = fixture();
+  f.h.packet(f.client, 'CREATESUCCESS', { objectId: 1, charId: 1 });
+  const health = (state: 'healthy' | 'failing') => f.h.proxy.emit('moduleStatus', { moduleId: 'auto-nexus', state, since: now });
+  const config = (ok: boolean) => f.h.proxy.emit('moduleConfig', ok
+    ? { type: 'moduleConfig', moduleId: 'auto-nexus', ok: true }
+    : { type: 'moduleConfig', moduleId: 'auto-nexus', ok: false, error: 'invalid' });
+  const texts = () => f.h.proxy.injected.map(i => f.h.factory.createFromBytes(i.data, 'server').data.text);
+  const failing = 'Auto Nexus module failing — protection degraded';
+  const rejected = 'Auto Nexus settings rejected';
+  const both = 'Auto Nexus module failing and settings rejected — protection degraded';
+  if (first === 'rejected') { config(false); health('failing'); }
+  else { health('failing'); config(false); }
+  expect(texts()).toEqual([first === 'rejected' ? rejected : failing, both]);
+  health('failing'); config(false);
+  expect(texts()).toHaveLength(2);
+  now += 30000; config(false);
+  expect(texts()).toEqual([first === 'rejected' ? rejected : failing, both, both]);
+  // Both ways of partially recovering must announce the remaining problem immediately.
+  if (first === 'rejected') config(true);
+  else health('healthy');
+  expect(texts().at(-1)).toBe(first === 'rejected' ? failing : rejected);
+  if (first === 'rejected') health('healthy');
+  else config(true);
+  expect(texts()).toHaveLength(5);
+  expect(texts().at(-1)).toBe('Auto Nexus module recovered — settings accepted');
+});
+
+it('delivers a degraded health state that began during login once the client is in game', () => {
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const f = fixture();
+  const texts = () => f.h.proxy.injected.map(i => f.h.factory.createFromBytes(i.data, 'server').data.text);
+  const inGameStatus = (id: string, generation: number) => f.h.workerMessage(id, 'auto-nexus', {
+    type: 'status', generation, sampledAt: now, collisionHp: 'on', catalog: ready,
+    status: { ...status(), objectId: 1, enabled: true },
+  });
+  f.h.proxy.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: now });
+  expect(texts()).toEqual([]); // Still logging in: nothing sent, limit not spent.
+  f.h.packet(f.client, 'CREATESUCCESS', { objectId: 1, charId: 1 });
+  inGameStatus(f.client, 1);
+  inGameStatus(f.client, 2);
+  expect(texts()).toEqual(['Auto Nexus module failing — protection degraded']);
+  // A map hop opens a new connection; the pending notice is not repeated within 30 s.
+  f.h.connect('hop'); f.h.packet('hop', 'CREATESUCCESS', { objectId: 2, charId: 1 });
+  now += 5000; inGameStatus('hop', 1);
+  expect(texts()).toHaveLength(1);
+  now += 30000; inGameStatus('hop', 2);
+  expect(texts()).toEqual(['Auto Nexus module failing — protection degraded', 'Auto Nexus module failing — protection degraded']);
+  // Once healthy, status updates deliver nothing further.
+  f.h.proxy.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'healthy', since: now });
+  const count = texts().length;
+  now += 60000; inGameStatus('hop', 3);
+  expect(texts()).toHaveLength(count);
 });

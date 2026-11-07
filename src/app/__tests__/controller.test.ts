@@ -278,6 +278,63 @@ describe('AppController lifecycle', () => {
     const data = { clientId, protectionState, collisionHp: 'on', degraded: 'server-hp-stale' };
     contexts.at(-2)!.setData('status', data); contexts.at(-2)!.broadcastData('status', data);
   }
+  it.each([
+    { name: 'low HP', expected: false, override: {}, warn: true },
+    { name: 'safe map', expected: false, override: { protectionState: 'safe' }, warn: false },
+    { name: 'nexus', expected: false, override: { phase: 'nexus' }, warn: false },
+    { name: 'dead', expected: false, override: { phase: 'dead' }, warn: false },
+    { name: 'transfer', expected: false, override: { phase: 'transition' }, warn: false },
+    { name: 'disabled', expected: false, override: { enabled: false }, warn: false },
+    { name: 'unknown HP', expected: false, override: { confirmedHp: null }, warn: false },
+    { name: 'high HP', expected: false, override: { confirmedHp: 800, lowerHp: 800 }, warn: false },
+    { name: 'expected exit', expected: true, override: {}, warn: false },
+  ])('handles worker exit at $name', async ({ expected, override, warn }) => {
+    const host = await protectedSession();
+    contexts.at(-2)!.broadcastData('status', { clientId: 'game', enabled: true, phase: 'armed',
+      protectionState: 'monitoring', confirmedHp: 250, lowerHp: 180, maxHp: 1000, thresholdPct: 25, ...override });
+    host.emit('exit', { code: 1, expected });
+    expect(controller.state().safetyWarning?.message).toBe(warn
+      ? 'Network worker crashed at 18% HP (threshold 25%) — Auto Nexus could not act' : undefined);
+    await drain();
+  });
+
+  it.each([5000, 12000])('qualifies crash HP when the snapshot is %i ms old', async ageMs => {
+    const host = await protectedSession();
+    const reportedAt = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(reportedAt);
+    contexts.at(-2)!.broadcastData('status', { clientId: 'game', enabled: true, phase: 'armed',
+      protectionState: 'monitoring', confirmedHp: 250, lowerHp: 180, maxHp: 1000, thresholdPct: 25 });
+    clock.mockReturnValue(reportedAt + ageMs);
+    const warn = vi.spyOn(log, 'warn');
+    host.emit('exit', { code: 1, expected: false });
+    const text = 'Network worker crashed at 18% HP (threshold 25%) — Auto Nexus could not act'
+      + (ageMs > 5000 ? ' (last reported 12 s before the crash)' : '');
+    expect(controller.state().safetyWarning?.message).toBe(text);
+    expect(warn).toHaveBeenCalledWith('Auto Nexus', text);
+    clock.mockRestore();
+    await drain();
+  });
+
+  it('uses each connected client snapshot on crash and excludes disconnected clients', async () => {
+    const host = await protectedSession();
+    const notice = vi.fn(); controller.on('state', notice);
+    for (const id of ['other', 'gone']) {
+      host.emit('session', { id, remotePort: 124 });
+      host.emit('connected', { id, generation: 1 });
+      contexts.at(-2)!.broadcastData('status', { clientId: id, enabled: true, phase: 'armed',
+        protectionState: 'monitoring', confirmedHp: 240, lowerHp: 200, maxHp: 1000, thresholdPct: 25 });
+    }
+    host.emit('closed', { id: 'gone', by: 'game' });
+    contexts.at(-2)!.broadcastData('status', { clientId: 'game', enabled: true, phase: 'armed',
+      protectionState: 'monitoring', confirmedHp: 250, lowerHp: 180, maxHp: 1000, thresholdPct: 25 });
+    notice.mockClear();
+    host.emit('exit', { code: 1, expected: false });
+    const warnings = notice.mock.calls.map(([state]) => state.safetyWarning?.message);
+    expect(warnings.some(text => text?.includes('18% HP'))).toBe(true);
+    expect(warnings.some(text => text?.includes('20% HP'))).toBe(true);
+    await drain();
+  });
+
   it('emits only changed protection and retains since when only reasons change', async () => {
     const host = await protectedSession();
     const changes = vi.fn(); controller.on('state', changes);
@@ -1016,6 +1073,16 @@ describe('AppController lifecycle', () => {
     expect(hosts[0].stop).toHaveBeenCalledOnce();
     expect(controller.state().sessions).toEqual({ open: 0, connected: 0 });
     expect(states.every((s, i) => i === 0 || s.revision > states[i - 1].revision)).toBe(true);
+  });
+
+  it('publishes a transient low HP close warning', async () => {
+    await controller.startProxy(); await drain();
+    hosts[0].emit('module', { moduleId: 'auto-nexus', id: 's1',
+      message: { type: 'lowHpClose', hpPct: 18, thresholdPct: 25 } });
+    expect(controller.state().safetyWarning).toEqual({
+      message: 'Connection closed at 18% HP (threshold 25%) — Auto Nexus could not act',
+      expiresAt: expect.any(Number),
+    });
   });
 
   it('emits plugin snapshots and sanitized data', async () => {

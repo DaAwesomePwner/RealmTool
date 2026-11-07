@@ -86,6 +86,40 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     sync();
   });
   ctx.registerCleanup(() => { disposed = true; ctx.worker.configure(configuration(false)); });
+  let moduleFailing = false, configRejected = false;
+  const healthNotified = new WeakMap<ClientConnection, { text: string; at: number }>();
+  ctx.worker.onHealth((event, clients) => {
+    const wasDegraded = moduleFailing || configRejected;
+    if ('state' in event) moduleFailing = event.state === 'failing';
+    else configRejected = !event.configOk;
+    const text = healthText() ?? (wasDegraded ? 'Auto Nexus module recovered — settings accepted' : undefined);
+    if (disposed || !ctx.enabled || !text) return;
+    const now = performance.now();
+    for (const client of clients) notifyHealth(client, text, now);
+  });
+  function healthText(): string | undefined {
+    return moduleFailing && configRejected ? 'Auto Nexus module failing and settings rejected — protection degraded'
+      : configRejected ? 'Auto Nexus settings rejected'
+      : moduleFailing ? 'Auto Nexus module failing — protection degraded' : undefined;
+  }
+  function notifyHealth(client: ClientConnection, text: string, now: number): void {
+    // Clients still logging in are skipped without spending the limit; status updates retry them.
+    if (!client.connected || !(client.playerData.ownerObjectId > 0)) return;
+    const last = healthNotified.get(client);
+    if (last?.text === text && now - last.at < DEGRADED_NOTICE_MS) return;
+    ctx.sendNotification(client, 'AutoNexus', text);
+    healthNotified.set(client, { text, at: now });
+    lastHealthNotice = { text, at: now };
+  }
+  // Plugin lifetime spans map hops, whose new ClientConnection must not repeat the pending notice each hop.
+  let lastHealthNotice: { text: string; at: number } | null = null;
+  /** A degraded state that began during login is delivered once the client is in game. */
+  function notifyPendingHealth(client: ClientConnection): void {
+    const text = healthText(), now = performance.now();
+    if (disposed || !ctx.enabled || !text || healthNotified.get(client)?.text === text) return;
+    if (lastHealthNotice?.text === text && now - lastHealthNotice.at < DEGRADED_NOTICE_MS) return;
+    notifyHealth(client, text, now);
+  }
   const notified = new WeakSet<ClientConnection>();
   function notifyFallback(client: ClientConnection, event: AutoNexusEvent): void {
     // Worker statuses can arrive during login, before chat is visible. Wait for
@@ -145,7 +179,8 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
       ? { state: catalog.state, gameBuild: catalog.gameBuild, projectiles: catalog.projectiles, tiles: catalog.tiles }
       : { state: catalog.state, reason: catalog.reason };
     publication.lastPublished = now;
-    publish({ clientId: client.clientId, latency: sample.latency, collisionHp, catalog: safeCatalog,
+    publish({ clientId: client.clientId, enabled: status.enabled, phase: status.phase,
+      thresholdPct: sample.thresholdPct, latency: sample.latency, collisionHp, catalog: safeCatalog,
       protectionState: status.protectionState, degraded: status.degraded, automaticEligible: status.automaticEligible,
       confirmedHp: status.confirmedHp, maxHp: status.maxHp, lowerHp: status.lowerHp,
       pendingDamage: status.prediction?.pendingDamage ?? 0, pendingCount: status.prediction?.pendingCount ?? 0,
@@ -191,6 +226,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
       views.set(client, { generation: event.generation, sample: event });
       notifyFallback(client, event);
       notifyDegraded(client, event);
+      notifyPendingHealth(client);
       scheduleStatus(client);
     } else if (event.type === 'decision') {
       const { decision, writeDelayMs } = event;
