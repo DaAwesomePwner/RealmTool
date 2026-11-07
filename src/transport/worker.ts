@@ -8,9 +8,7 @@ import { Interest } from './interest.ts';
 import type { WorkerCommand, WorkerEvent, WorkerInit } from './messages.ts';
 import { Session, type SessionEnv } from './session.ts';
 import { WORKER_MODULES } from './workerModules.ts';
-import type { WorkerModule } from './modules.ts';
-import { describeError } from '../util/describeError.ts';
-import { guardWorkerCall, tickSessions } from './workerGuard.ts';
+import { ModuleDiagnosticLimiter, configureWorkerModule, guardWorkerCall, tickSessions } from './workerGuard.ts';
 
 const TICK_MS = 8;
 const init = workerData as WorkerInit;
@@ -18,17 +16,13 @@ const port = parentPort;
 if (!port) throw new Error('src/transport/worker.ts must run as a worker thread');
 const post = (event: WorkerEvent): void => port.postMessage(event);
 
-function configureModule(module: WorkerModule, config: unknown): void {
-  try {
-    module.configure?.(config);
-  } catch (error) {
-    post({ type: 'diagnostic', message: `module ${module.id} rejected its configuration: ${describeError(error)}` });
-  }
-}
-
 function configureModules(configs: Record<string, unknown>): void {
+  // Preserve registry order regardless of caller key order.
   for (const module of WORKER_MODULES) {
-    if (Object.hasOwn(configs, module.id)) configureModule(module, configs[module.id]);
+    if (Object.hasOwn(configs, module.id)) configureWorkerModule(module, module.id, configs[module.id], post);
+  }
+  for (const moduleId of Object.keys(configs)) {
+    if (!WORKER_MODULES.some(module => module.id === moduleId)) configureWorkerModule(undefined, moduleId, configs[moduleId], post);
   }
 }
 
@@ -38,11 +32,13 @@ if (init.host !== '127.0.0.1') {
   configureModules(init.moduleConfig);
 
   const sessions = new Map<string, Session>();
+  const moduleDiagnostics = new ModuleDiagnosticLimiter(post);
   const env: SessionEnv = {
     factory: new PacketFactory(init.definitions, init.stats, true),
     router: new Router({ loopbackPort: init.port }),
     interest: new Interest(init.interest),
     modules: WORKER_MODULES,
+    moduleDiagnostics,
     post,
     now: () => performance.now(),
     fallbackDestination: init.fallbackDestination,
@@ -70,6 +66,7 @@ if (init.host !== '127.0.0.1') {
   const timer = setInterval(() => {
     const now = performance.now();
     tickSessions(sessions.values(), now, post);
+    moduleDiagnostics.flush(now);
   }, TICK_MS);
 
   port.on('message', (command: WorkerCommand) => guardWorkerCall(post, `Worker command ${command.type}`, () => {
@@ -85,7 +82,7 @@ if (init.host !== '127.0.0.1') {
     }
     if (command.type === 'module' && command.id === undefined) {
       const module = WORKER_MODULES.find(module => module.id === command.moduleId);
-      if (module) configureModule(module, command.message);
+      configureWorkerModule(module, command.moduleId, command.message, post);
       return;
     }
     if (command.type === 'modules') {

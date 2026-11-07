@@ -1,11 +1,12 @@
 import { resourcePaths } from '../app/resources.ts';
+import { performance } from 'node:perf_hooks';
 import { EventEmitter } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { GAME_PORT } from '../protocol/constants.ts';
 import type { ProtocolSchema } from '../protocol/schema.ts';
 import type { Destination } from '../routing/router.ts';
 import type { InterestSpec } from './interest.ts';
-import { DEFAULTS, type CloseSide, type WorkerCommand, type WorkerEvent, type WorkerInit } from './messages.ts';
+import { DEFAULTS, MODULE_HEALTH_QUIET_MS, type ModuleHealthEvent, type ModuleConfigEvent, type CloseSide, type WorkerCommand, type WorkerEvent, type WorkerInit } from './messages.ts';
 
 export interface PacketEvent {
   id: string;
@@ -17,7 +18,33 @@ export interface PacketEvent {
   data: Buffer;
 }
 
+export interface ModuleHealthSnapshot {
+  status: 'healthy' | 'failing';
+  /** Start of the current episode on the host's performance.now(); null after recovery. */
+  failingSince: number | null;
+  lastError: string;
+  /** Host receipt time of the most recent failure report. */
+  lastFailureAt: number;
+  totalFailures: number;
+}
+
+export type ModuleConfigState = { status: 'accepted' } | { status: 'rejected'; error: string };
+
+export interface ModuleStatusEvent {
+  moduleId: string;
+  state: 'failing' | 'healthy';
+  /** Host performance.now() timestamp when this state began. */
+  since: number;
+  lastError?: string;
+}
+
 export interface HostEvents {
+  /** Emitted once per transition, including timer-driven recovery; no polling required. */
+  moduleStatus: [event: ModuleStatusEvent];
+  /** Incremental reports; query getModuleHealth() for the aggregate snapshot. */
+  moduleHealth: [event: ModuleHealthEvent];
+  /** Result of each initial or live configure; rejection retains the previous worker config. */
+  moduleConfig: [event: ModuleConfigEvent];
   listening: [port: number];
   exit: [info: { code: number; expected: boolean }];
   session: [info: { id: string; remotePort: number }];
@@ -51,11 +78,35 @@ export class ProxyHost extends EventEmitter<HostEvents> {
   private worker: Worker | null = null;
   private readonly expectedExits = new WeakSet<Worker>();
   private listening = false;
+  private readonly health = new Map<string, ModuleHealthSnapshot>();
+  private readonly configs = new Map<string, ModuleConfigState>();
+
+  private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private healthTrackingStopped = false;
   private starting: { resolve(port: number): void; reject(error: Error): void } | null = null;
 
   constructor(options: ProxyHostOptions) {
     super();
     this.options = options;
+  }
+
+  /** Snapshot across sessions/hooks in this worker run; undefined before the first failure.
+   * Recovery emits moduleStatus after MODULE_HEALTH_QUIET_MS without a received failure report.
+   * All snapshot times use the host clock. Worker reports can lag by MODULE_FAILURE_REPORT_MS.
+   */
+  getModuleHealth(moduleId: string): ModuleHealthSnapshot | undefined {
+    const state = this.health.get(moduleId);
+    return state ? { ...state } : undefined;
+  }
+
+  /** Result of the latest worker configuration acknowledgment in this run.
+   * Undefined until the worker replies; sending another request retains the previous result
+   * until its reply arrives. Rejected means the worker kept its previous configuration.
+   * Accepted confirms configuration validation, not that the module is enabled or healthy.
+   */
+  getModuleConfigState(moduleId: string): ModuleConfigState | undefined {
+    const state = this.configs.get(moduleId);
+    return state ? { ...state } : undefined;
   }
 
   start(): Promise<number> {
@@ -80,6 +131,10 @@ export class ProxyHost extends EventEmitter<HostEvents> {
       this.worker = null;
       return Promise.reject(error);
     }
+    this.clearRecoveryTimer();
+    this.healthTrackingStopped = false;
+    this.health.clear();
+    this.configs.clear();
     this.worker = worker;
     const started = new Promise<number>((resolve, reject) => { this.starting = { resolve, reject }; });
     worker.on('message', (event: WorkerEvent) => this.handle(event));
@@ -88,6 +143,8 @@ export class ProxyHost extends EventEmitter<HostEvents> {
       this.emit('fault', { message: `Network worker crashed: ${error.message}` });
     });
     worker.on('exit', code => {
+      this.healthTrackingStopped = true;
+      this.clearRecoveryTimer();
       if (this.worker === worker) this.worker = null;
       this.listening = false;
       this.failStart(new Error(`Network worker exited (code ${code}) before listening`));
@@ -122,6 +179,8 @@ export class ProxyHost extends EventEmitter<HostEvents> {
   close(id: string): void { this.send({ type: 'close', id }); }
 
   async stop(): Promise<void> {
+    this.healthTrackingStopped = true;
+    this.clearRecoveryTimer();
     const worker = this.worker;
     if (!worker) return;
     this.expectedExits.add(worker);
@@ -130,6 +189,33 @@ export class ProxyHost extends EventEmitter<HostEvents> {
     const timeout = setTimeout(() => { void worker.terminate(); }, 2000);
     await exited;
     clearTimeout(timeout);
+  }
+
+  private clearRecoveryTimer(): void {
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = null;
+  }
+
+  private scheduleRecovery(): void {
+    this.clearRecoveryTimer();
+    if (this.healthTrackingStopped) return;
+    let deadline = Infinity;
+    for (const state of this.health.values()) {
+      if (state.status === 'failing') deadline = Math.min(deadline, state.lastFailureAt + MODULE_HEALTH_QUIET_MS);
+    }
+    if (deadline === Infinity) return;
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = null;
+      const now = performance.now();
+      for (const [moduleId, state] of this.health) {
+        if (state.status !== 'failing' || now - state.lastFailureAt < MODULE_HEALTH_QUIET_MS) continue;
+        state.status = 'healthy';
+        state.failingSince = null;
+        this.emit('moduleStatus', { moduleId, state: 'healthy', since: now });
+      }
+      this.scheduleRecovery();
+    }, Math.max(1, deadline - performance.now()));
+    this.recoveryTimer.unref();
   }
 
   private send(command: WorkerCommand): void {
@@ -146,6 +232,28 @@ export class ProxyHost extends EventEmitter<HostEvents> {
 
   private handle(event: WorkerEvent): void {
     switch (event.type) {
+      case 'moduleHealth': {
+        const now = performance.now();
+        const previous = this.health.get(event.moduleId);
+        const continuing = previous?.status === 'failing';
+        this.health.set(event.moduleId, {
+          status: 'failing',
+          failingSince: continuing ? previous.failingSince : now,
+          lastError: event.lastError,
+          lastFailureAt: now,
+          totalFailures: (previous?.totalFailures ?? 0) + event.failures,
+        });
+        this.scheduleRecovery();
+        if (!continuing) this.emit('moduleStatus', {
+          moduleId: event.moduleId, state: 'failing', since: now, lastError: event.lastError,
+        });
+        this.emit('moduleHealth', event);
+        return;
+      }
+      case 'moduleConfig':
+        this.configs.set(event.moduleId, event.ok ? { status: 'accepted' } : { status: 'rejected', error: event.error });
+        this.emit('moduleConfig', event);
+        return;
       case 'listening':
         this.listening = true;
         this.starting?.resolve(event.port);

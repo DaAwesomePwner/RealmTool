@@ -1,5 +1,6 @@
 import net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { ModuleConfigEvent } from '../messages.ts';
 import { ProxyHost } from '../host.ts';
 import { createFactory, loadSchema } from '../../protocol/schema.ts';
 import { frame, helloBytes, unknownId } from '../../testing/wire.ts';
@@ -89,15 +90,42 @@ describe('ProxyHost', () => {
 
   it.each(['init', 'single', 'batch'] as const)('isolates a rejected %s configuration and keeps the worker and previous config', async mode => {
     const { host, messages, diagnostics } = moduleHost({ a: mode === 'init' ? 'invalid' : 1, b: 2 });
+    const acknowledgments: ModuleConfigEvent[] = [];
+    host.on('moduleConfig', event => acknowledgments.push(event));
+    expect(host.getModuleConfigState('a')).toBeUndefined();
     await host.start();
+    expect(acknowledgments).toContainEqual({ type: 'moduleConfig', moduleId: 'b', ok: true });
+    expect(host.getModuleConfigState('b')).toEqual({ status: 'accepted' });
+    if (mode !== 'init') expect(acknowledgments).toContainEqual({ type: 'moduleConfig', moduleId: 'a', ok: true });
     if (mode === 'single') host.configureModule('a', 'invalid');
     if (mode === 'batch') host.configureModules({ a: 'invalid', b: 3 });
     await until(() => diagnostics.length === 1, 'configuration rejection');
     expect(diagnostics).toEqual(['module a rejected its configuration: expected a number']);
+    expect(acknowledgments).toContainEqual({ type: 'moduleConfig', moduleId: 'a', ok: false, error: 'expected a number' });
+    expect(host.getModuleConfigState('a')).toEqual({ status: 'rejected', error: 'expected a number' });
     messages.length = 0;
     host.configureModule('b', 4);
     await until(() => messages.some(message => !!message && typeof message === 'object' && 'configured' in message), 'worker still handles configs');
     expect(messages).toContainEqual(expect.objectContaining({ configured: { a: mode === 'init' ? 0 : 1, b: 4 } }));
+    host.configureModule('a', 5);
+    await until(() => host.getModuleConfigState('a')?.status === 'accepted', 'accepted retry');
+    expect(host.getModuleConfigState('a')).toEqual({ status: 'accepted' });
+    await host.stop();
+    expect(await host.start()).toBeGreaterThan(0);
+    expect(host.getModuleConfigState('a')).toEqual({ status: 'accepted' });
+  });
+
+  it.each(['init', 'single', 'batch'] as const)('nacks an unknown module in %s configuration', async mode => {
+    const { host, diagnostics } = moduleHost(mode === 'init' ? { missing: {} } : {});
+    const events: ModuleConfigEvent[] = [];
+    host.on('moduleConfig', event => events.push(event));
+    await host.start();
+    if (mode === 'single') host.configureModule('missing', {});
+    if (mode === 'batch') host.configureModules({ missing: {} });
+    await until(() => diagnostics.length === 1, 'unknown module rejection');
+    expect(events).toEqual([{ type: 'moduleConfig', moduleId: 'missing', ok: false, error: 'Unknown worker module' }]);
+    expect(diagnostics).toEqual(['module missing rejected its configuration: Unknown worker module']);
+    expect(host.getModuleConfigState('missing')).toEqual({ status: 'rejected', error: 'Unknown worker module' });
   });
 
   it('runs sessions in the worker thread and supplies helper targets from the main thread', async () => {

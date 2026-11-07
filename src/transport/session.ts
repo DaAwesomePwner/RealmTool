@@ -1,5 +1,5 @@
 import net from 'node:net';
-import { describeError } from '../util/describeError.ts';
+import { ModuleFailures, type ModuleDiagnosticLimiter } from './workerGuard.ts';
 import { RC4_KEYS } from '../protocol/constants.ts';
 import { FrameDecoder, isWholeFrame } from '../protocol/frames.ts';
 import { RC4Cipher } from '../protocol/RC4Cipher.ts';
@@ -18,6 +18,8 @@ export interface SessionEnv {
   router: Router;
   interest: Interest;
   modules: readonly WorkerModule[];
+  /** Worker-wide diagnostic budget shared across all sessions. */
+  moduleDiagnostics?: ModuleDiagnosticLimiter;
   post(event: WorkerEvent): void;
   now(): number;
   fallbackDestination: Destination | null;
@@ -79,6 +81,7 @@ export class Session {
   private readonly modules: ActiveModule[];
   private readonly automation = new SessionAutomation();
   private readonly trace: SessionTrace;
+  private readonly failures: ModuleFailures;
   private server: net.Socket | null = null;
   private serverReady = false;
   private serverResponded = false;
@@ -115,6 +118,7 @@ export class Session {
     this.id = id;
     this.client = client;
     this.env = env;
+    this.failures = new ModuleFailures(id, event => env.post(event), env.moduleDiagnostics);
     this.trace = new SessionTrace(env.now());
     this.modules = [...env.modules].sort((a, b) => a.priority - b.priority).map(module => ({
       id: module.id,
@@ -164,6 +168,7 @@ export class Session {
     if (this.closed) return;
     for (const module of this.modules) this.call(module, 'tick', () => module.hooks.tick?.(now), undefined);
     if (!this.closed) this.expireVerdicts(now);
+    this.failures.flush(now);
   }
 
   close(by: CloseSide = 'proxy'): void {
@@ -175,6 +180,7 @@ export class Session {
     this.heldHello = null;
     this.helloForRetry = null;
     for (const module of this.modules) this.call(module, 'close', () => module.hooks.close?.(), undefined);
+    this.failures.flush(this.env.now(), true);
     // A fault is an abort, so the game gets the reset it would see without us. While it loads
     // a map it ignores a clean FIN and sits on the loading screen with the socket in CLOSE_WAIT.
     if (by === 'fault' && !this.client.destroyed) this.client.resetAndDestroy();
@@ -257,11 +263,11 @@ export class Session {
     return { available, backlog, upstreamBackpressure };
   }
 
-  private call<T>(module: ActiveModule, hook: string, fn: () => T, fallback: T): T {
+  private call<T>(module: ActiveModule, hook: keyof WorkerSessionModule, fn: () => T, fallback: T): T {
     try {
       return fn();
     } catch (error) {
-      this.env.post({ type: 'diagnostic', id: this.id, message: `Worker module ${module.id}.${hook} failed: ${describeError(error)}` });
+      this.failures.record(module.id, hook, error, this.env.now());
       return fallback;
     }
   }

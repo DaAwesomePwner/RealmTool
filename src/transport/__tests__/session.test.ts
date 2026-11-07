@@ -1078,3 +1078,26 @@ describe('Session tracing', () => {
     expect(game.errors.map(e => (e as NodeJS.ErrnoException).code)).toContain('ECONNRESET');
   });
 });
+
+it('keeps suppressEntry fail-open and reports accumulated session hook failures on ticks', async () => {
+  let now = 0;
+  const h = await harness({ now: () => now, modules: [{
+    id: 'broken', priority: 0,
+    createSession: () => ({ suppressEntry() { throw new Error('entry failure'); } }),
+  }] });
+  const server = await fakeServer();
+  const { game, upstream, session } = await connected(h, server);
+  const hit = frame(id('PLAYERHIT'), Buffer.alloc(5));
+  game.send(hit);
+  await until(() => upstream.frames.length === 2, 'fail-open hit report');
+  expect(upstream.frames[1]).toEqual(hit);
+  expect(h.events.filter(e => e.type === 'diagnostic')).toHaveLength(1);
+  expect(h.events.filter(e => e.type === 'moduleHealth')).toHaveLength(1);
+  now = 5000;
+  session.tick(now);
+  expect(h.events.filter(e => e.type === 'moduleHealth')).toEqual([
+    expect.objectContaining({ moduleId: 'broken', hook: 'suppressEntry', failures: 1 }),
+    expect.objectContaining({ moduleId: 'broken', hook: 'suppressEntry', failures: 2 }),
+  ]);
+  expect(h.events.filter(e => e.type === 'diagnostic')).toHaveLength(2);
+});
