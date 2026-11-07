@@ -10,9 +10,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   test:
-    # Fork PRs never reach the persistent self-hosted runner or its shared caches.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, windows, nuc, build]
+    runs-on: windows-latest
     timeout-minutes: 60
     defaults:
       run:
@@ -26,17 +24,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: ${{ runner.environment == 'github-hosted' && 'npm' || '' }}
-      - name: Configure persistent NUC caches
-        if: runner.environment == 'self-hosted'
-        run: |
-          $cacheRoot = 'D:\ci-cache\RealmTool'
-          New-Item -ItemType Directory -Force -Path "$cacheRoot\npm", "$cacheRoot\cargo-home", "$cacheRoot\target\build" | Out-Null
-          "npm_config_cache=$cacheRoot\npm" >> $env:GITHUB_ENV
-          "CARGO_HOME=$cacheRoot\cargo-home" >> $env:GITHUB_ENV
-          "CARGO_TARGET_DIR=$cacheRoot\target\build" >> $env:GITHUB_ENV
-          # rustup proxies stay in the user's original Cargo bin directory.
-          (Join-Path $env:USERPROFILE '.cargo\bin') >> $env:GITHUB_PATH
+          cache: npm
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
       - name: Diagnose toolchains
         run: |
           rustup show

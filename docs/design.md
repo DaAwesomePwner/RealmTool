@@ -1,7 +1,7 @@
 # RealmTool — Design Spec
 
 **Status:** Phase 5 UI shell and installer implemented (2026-10-04), including the installed-size gate: 95.65 MiB. Phase 3b functional gates include default-ON Collision HP. Live smoke testing remains pending; see the [Phase 5 handoff](handoff/2026-10-04-phase5-handoff.md) for validation. Phases 3c and 4 remain post-release additions.
-**Repository:** private, `DaAwesomePwner/RealmTool`
+**Repository:** public, `DaAwesomePwner/RealmTool`
 **Source of ported code:** `DaAwesomePwner/realm-engine-client` (MIT, © Evergreen-Techworks; see `NOTICE`). Research was done at `9ab4f8f`. Each phase ports from the **then-current `main`**, so Chat Filter fixes such as `88a66b2` are included.
 **Research inputs:** [`docs/research/`](research/) (four Codex read-only investigations of realm-engine-client)
 

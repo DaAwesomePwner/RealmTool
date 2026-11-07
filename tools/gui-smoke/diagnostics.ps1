@@ -16,9 +16,10 @@ function Capture([string]$Name, [scriptblock]$Work) {
 $sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId
 # This helper inherits the runner's interactive session. Never switch sessions or change the host.
 if ($CaptureDesktop) { Capture 'desktop' {
-  @{ sessionId = $sessionId; expectedSessionId = 1; userInteractive = [Environment]::UserInteractive } |
+  @{ sessionId = $sessionId; userInteractive = [Environment]::UserInteractive } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Directory 'desktop-session.json')
-  if ($sessionId -ne 1) { throw "Desktop capture requires session 1; collector is in session $sessionId" }
+  # Best effort: capture whatever desktop this session has; a non-interactive session has none.
+  if (-not [Environment]::UserInteractive) { throw "No interactive desktop in session $sessionId; skipping desktop capture" }
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
   Add-Type 'using System.Runtime.InteropServices; public static class SmokeDpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }'

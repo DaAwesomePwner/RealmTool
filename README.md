@@ -8,7 +8,7 @@ RealmTool reuses selected, tested pieces of [realm-engine-client](https://github
 
 ## Install and first run
 
-Run `RealmTool_0.1.0_x64-setup.exe` from `src-tauri/target/release/bundle/nsis/`. It installs for the current Windows user without an admin prompt. Node is bundled; WebView2 is shared with Windows and its bootstrapper needs internet if the runtime is missing. This private installer is unsigned.
+Run `RealmTool_0.1.0_x64-setup.exe` from `src-tauri/target/release/bundle/nsis/`. It installs for the current Windows user without an admin prompt. Node is bundled; WebView2 is shared with Windows and its bootstrapper needs internet if the runtime is missing. This installer is unsigned.
 
 Close Exalt before starting RealmTool from the Start menu. The app automatically starts the proxy and installs or updates the helper in the selected game folder, backing up a foreign `winhttp.dll`. Check the game folder and readiness bar; if detection failed, enter the Exalt Production folder and click Start proxy. Click Launch to open your launcher, then Play as usual.
 

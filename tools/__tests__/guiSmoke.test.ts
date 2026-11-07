@@ -153,11 +153,13 @@ it('fails a missing root after the bounded render wait and captures it', async (
 
 it('builds fake files and overrides inherited profile/debugging variables case-insensitively', () => {
   const root = temp(); const gameDir = prepareProfile(root, 'build-123');
-  const env = launchEnvironment(root, 9241, { AppData: 'real', localappdata: 'real', NODE_OPTIONS: '--inspect', PATH: 'keep' });
+  const env = launchEnvironment(root, 9241, { AppData: 'real', localappdata: 'real', NODE_OPTIONS: '--inspect', PATH: 'keep',
+    webview2_additional_browser_arguments: '--inherited' });
   expect(env.AppData).toBeUndefined(); expect(env.NODE_OPTIONS).toBeUndefined(); expect(env.PATH).toBe('keep');
   expect(env.APPDATA).toBe(join(root, 'home/AppData/Roaming')); expect(env.LOCALAPPDATA).toBe(join(root, 'home/AppData/Local'));
   expect(env.WEBVIEW2_USER_DATA_FOLDER).toBe(join(root, 'webview'));
-  expect(env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS).toBe('--remote-debugging-port=9241');
+  expect(env.REALMTOOL_GUI_SMOKE_CDP_PORT).toBe('9241');
+  expect(env.webview2_additional_browser_arguments).toBeUndefined(); expect(env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS).toBeUndefined();
   expect(JSON.parse(readFileSync(join(root, 'home/AppData/Roaming/RealmTool/config.json'), 'utf8'))).toMatchObject({ gameDir, launcher: null });
   expect(readFileSync(join(gameDir, 'RotMG Exalt_Data/boot.config'), 'utf8')).toBe('build-guid=build-123\n');
   // Tauri's known-folder lookup fails ("unknown path") unless these exist under the fake USERPROFILE.

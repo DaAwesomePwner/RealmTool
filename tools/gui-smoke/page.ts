@@ -22,11 +22,6 @@ export function pageAssertion(gameDir: string): string {
     if (state.game.dir !== ${JSON.stringify(gameDir)}) return 'SAFETY: backend is not using the fake game';
     if (state.operation !== null) return 'Backend startup operation is still pending';
     if (state.proxy.state === 'running' && state.proxy.port === 2050) return { ready: true, proxy: 'bound 2050' };
-    // The separate nuc-build runner can concurrently own 2050 on this host.
-    // Only that expected backend failure is tolerated; browser errors still fail.
-    if (state.proxy.state === 'failed' && /EADDRINUSE|address already in use|port.*in use/i.test(state.proxy.error ?? '')) {
-      return { ready: true, proxy: 'address-in-use fallback (2050 owned by another process)' };
-    }
     return 'Unexpected proxy state: ' + state.proxy.state + ': ' + (state.proxy.error ?? '');
   })()`;
 }

@@ -24,10 +24,12 @@ export function launchEnvironment(root: string, port: number, inherited = proces
     APPDATA: join(root, ROAMING), LOCALAPPDATA: join(root, LOCAL), USERPROFILE: join(root, 'home'),
     HOME: join(root, 'home'), ROTMG_PATH: join(root, 'game'),
     TEMP: root, TMP: root, TMPDIR: root,
-    WEBVIEW2_USER_DATA_FOLDER: join(root, 'webview'), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port}`,
+    WEBVIEW2_USER_DATA_FOLDER: join(root, 'webview'),
+    // Debug shell builds open this loopback DevTools port; WebView2 ignores the env-var arguments.
+    REALMTOOL_GUI_SMOKE_CDP_PORT: String(port),
   };
   const removed = new Set([...Object.keys(overrides), 'NODE_OPTIONS', 'NODE_PATH', 'ROTMG_LAUNCHER',
-    'WEBVIEW2_BROWSER_EXECUTABLE_FOLDER', 'REALMTOOL_RESOURCES', 'REALMTOOL_API_TOKEN', 'REALMTOOL_UI_ORIGINS']);
+    'WEBVIEW2_BROWSER_EXECUTABLE_FOLDER', 'WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', 'REALMTOOL_RESOURCES', 'REALMTOOL_API_TOKEN', 'REALMTOOL_UI_ORIGINS']);
   return { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => !removed.has(key.toUpperCase()))), ...overrides };
 }
 

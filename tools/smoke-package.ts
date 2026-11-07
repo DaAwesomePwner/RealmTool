@@ -8,19 +8,18 @@ import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import type { AppState } from '../src/app/controller.ts';
 import type { PluginSnapshot } from '../src/plugins/snapshot.ts';
-import { parseSmokePortOptions, smokeProxyStartupError, waitForSmokePort } from './smoke-port.ts';
+import { assertSmokePortFree, smokeProxyStartupError } from './smoke-port.ts';
 
 /** Controller-run after build:app; never uses or launches the real game. */
 async function smoke(): Promise<void> {
-  const portOptions = parseSmokePortOptions(process.env);
-  const portFree = await waitForSmokePort(() => new Promise<boolean>((resolve, reject) => {
+  await assertSmokePortFree(() => new Promise<boolean>((resolve, reject) => {
     const probe = net.createServer();
     probe.once('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') resolve(false);
       else reject(error);
     });
     probe.listen(2050, '127.0.0.1', () => probe.close(error => error ? reject(error) : resolve(true)));
-  }), { ...portOptions, log: message => console.warn(message) });
+  }));
   const repo = fileURLToPath(new URL('../', import.meta.url));
   const resources = resolve(repo, 'dist/app');
   const build = JSON.parse(readFileSync(join(resources, 'data/catalogs/safety.json'), 'utf8')).gameBuild;
@@ -82,9 +81,8 @@ async function smoke(): Promise<void> {
     // Check before polling startup or performing any further API operation.
     assert.equal(state.game.dir, gameDir, 'SAFETY: sidecar did not select the fake game directory');
     const startupDeadline = Date.now() + 10_000;
-    const expectedState = portFree ? 'running' : 'failed';
-    while (state.proxy.state !== expectedState || state.operation !== null) {
-      if (portFree && state.proxy.state === 'failed') throw smokeProxyStartupError(state.proxy.error);
+    while (state.proxy.state !== 'running' || state.operation !== null) {
+      if (state.proxy.state === 'failed') throw smokeProxyStartupError(state.proxy.error);
       assert.ok(!exited, 'Sidecar exited during proxy startup');
       assert.ok(Date.now() < startupDeadline, 'Timed out waiting for proxy startup');
       await new Promise(resolve => setTimeout(resolve, 25));
@@ -92,21 +90,14 @@ async function smoke(): Promise<void> {
       assert.equal(state.game.dir, gameDir, 'SAFETY: game directory changed');
     }
     const plugins = await request<PluginSnapshot[]>('/api/plugins');
-    if (portFree) {
-      assert.equal(state.game.helper.state, 'installed');
-      assert.equal(plugins.length, 6);
-      assert.ok(plugins.every(plugin => plugin.failed === null), 'A built-in failed to load');
-    } else {
-      assert.equal(state.proxy.state, 'failed');
-      assert.match(state.proxy.error ?? '', /EADDRINUSE|address already in use|port.*in use/i);
-      assert.deepEqual(plugins, []);
-    }
+    assert.equal(state.game.helper.state, 'installed');
+    assert.equal(plugins.length, 6);
+    assert.ok(plugins.every(plugin => plugin.failed === null), 'A built-in failed to load');
     assert.deepEqual(await request('/api/shutdown', true), { ok: true });
     await waitFor(() => exited, 'sidecar exit');
     assert.equal(await exit, 0);
     assert.equal(output.trim().split(/\r?\n/).length, 1, 'Unexpected stdout beyond READY');
-    console.log(portFree ? 'package smoke ok: fake game, running proxy, six built-ins, clean shutdown'
-      : 'package API smoke ok: fake game, expected port conflict, no plugins, clean shutdown');
+    console.log('package smoke ok: fake game, running proxy, six built-ins, clean shutdown');
   } finally {
     if (!exited) {
       child.stdin.end();
