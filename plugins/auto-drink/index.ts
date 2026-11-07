@@ -14,6 +14,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   ctx.enabled = false;
   let disposed = false;
   let awaitingVerification = false;
+  let lastMessageRetry = -Infinity;
   function readCatalog() {
     let gameBuild: string | undefined, buildError: unknown;
     try { if (ctx.gameDir) gameBuild = buildReader(ctx.gameDir); } catch (error) { buildError = error; }
@@ -88,6 +89,10 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   const generations = new WeakMap<object, number>();
   ctx.worker.onMessage((client, message) => {
     if (disposed || !message || typeof message !== 'object') return;
+    if (!loaded.ok && !awaitingVerification && performance.now() - lastMessageRetry >= 15_000) {
+      lastMessageRetry = performance.now();
+      try { refreshCatalog(); sync(); } catch { /* Retry transient disk failures on a later message. */ }
+    }
     const event = message as AutoDrinkEvent;
     if (event.type !== 'status' || !event.status || !Number.isInteger(event.generation)
       || event.generation < (generations.get(client) ?? 0)) return;

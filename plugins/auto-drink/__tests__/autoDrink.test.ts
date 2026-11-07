@@ -39,6 +39,26 @@ describe('Auto Drink facade through the RealmTool host', () => {
     f.loader.mockReturnValue(catalog); f.connect();
     expect(f.config().items).toEqual([item]);
   });
+  it('retries failed reloads mid-session at most once per 15 seconds, except while invalidated', () => {
+    let now = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const f = fixture(); f.ctx.enabled = true;
+    const client = f.connect();
+    const send = () => f.workerMessage(client, 'auto-drink', { type: 'status', generation: 1, status: workerStatus });
+    f.host.notifyDataInvalidated('stale');
+    const before = f.loader.mock.calls.length;
+    send(); expect(f.loader).toHaveBeenCalledTimes(before);
+    f.loader.mockImplementation(() => { throw new Error('disk busy'); });
+    f.host.notifyDataRefreshed();
+    send();
+    const failed = f.loader.mock.calls.length;
+    f.loader.mockReturnValue(catalog);
+    now = 14_999; send(); expect(f.loader).toHaveBeenCalledTimes(failed);
+    expect(f.config().items).toEqual([]);
+    now = 15_000; send();
+    expect(f.loader).toHaveBeenCalledTimes(failed + 1);
+    expect(f.config().items).toEqual([item]);
+  });
   it('starts disabled before the enable callback, publishes strict defaults and an offline status', () => {
     const timer=vi.spyOn(globalThis,'setInterval');const f=fixture();
     expect(f.ctx.name).toBe('Auto Drink');expect(f.ctx.category).toBe('automation');expect(f.ctx.enabled).toBe(false);

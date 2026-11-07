@@ -17,6 +17,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   ctx.name = 'Auto Nexus'; ctx.category = 'combat';
   let disposed = false;
   let awaitingVerification = false;
+  let lastMessageRetry = -Infinity;
   function readCatalog() {
     let gameBuild: string | undefined, buildError: unknown;
     try { if (ctx.gameDir) gameBuild = buildReader(ctx.gameDir); } catch (error) { buildError = error; }
@@ -175,6 +176,10 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   ctx.registerCleanup(() => { clearTimeout(publishTimer); publishTimer = undefined; pending = undefined; });
   ctx.worker.onMessage((client, message) => {
     if (disposed || !message || typeof message !== 'object' || !('type' in message)) return;
+    if (!loaded.ok && !awaitingVerification && performance.now() - lastMessageRetry >= 15_000) {
+      lastMessageRetry = performance.now();
+      try { refreshCatalog(); sync(); } catch { /* Retry transient disk failures on a later message. */ }
+    }
     const event = message as AutoNexusEvent;
     if (event.type === 'status') {
       if (!Number.isInteger(event.generation) || event.generation < 0) return;

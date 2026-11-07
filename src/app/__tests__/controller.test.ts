@@ -31,6 +31,7 @@ describe('AppController lifecycle', () => {
     config = new AppConfigStore(join(root, 'config')); config.update({ gameDir: game });
     hosts = []; contexts = [];
     deps = {
+      gameProcessIds: vi.fn(async () => []),
       readGameFileStamps: async () => ({ resourcesAssets: { size: 1, mtimeMs: 0 }, bootConfig: { size: 2, mtimeMs: 0 } }),
       findGameDirs: () => [game], nativeModuleError: () => null,
       createHost: vi.fn(options => {
@@ -68,8 +69,8 @@ describe('AppController lifecycle', () => {
   it('re-inspects helper on polls and sessions and detects missing routing with a grace period', async () => {
     await controller.shutdown(); vi.useFakeTimers();
     try {
-      let running = true;
-      deps.isGameRunning = vi.fn(async () => running);
+      let pids = [123];
+      deps.gameProcessIds = vi.fn(async () => pids);
       controller = make(); await controller.startProxy(); await drain();
       expect(controller.state().game.routing).toBe('unknown');
       await vi.advanceTimersByTimeAsync(20_000);
@@ -77,21 +78,73 @@ describe('AppController lifecycle', () => {
       rmSync(join(game, HELPER_FILE));
       await vi.advanceTimersByTimeAsync(40_000);
       expect(controller.state().game.helper.state).toBe('absent');
-      expect(deps.isGameRunning).toHaveBeenCalledTimes(7);
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(7);
       writeFileSync(join(game, HELPER_FILE), 'RealmTool-Helper/current');
       hosts[0].emit('session', { id: 'game', remotePort: 123 });
       expect(controller.state().game).toMatchObject({ routing: 'routed', helper: { state: 'installed' } });
       hosts[0].emit('closed', { id: 'game', by: 'game' });
-      running = false; await vi.advanceTimersByTimeAsync(60_000);
+      pids = []; await vi.advanceTimersByTimeAsync(60_000);
       expect(controller.state().game.routing).toBe('unknown');
-      running = true; await vi.advanceTimersByTimeAsync(30_000);
+      pids = [456]; await vi.advanceTimersByTimeAsync(30_000);
       expect(controller.state().game.routing).toBe('not-routed');
       await controller.stopProxy();
-      const count = vi.mocked(deps.isGameRunning!).mock.calls.length;
+      const count = vi.mocked(deps.gameProcessIds!).mock.calls.length;
       await vi.advanceTimersByTimeAsync(60_000);
       expect(controller.state().game.routing).toBe('unknown');
-      expect(deps.isGameRunning).toHaveBeenCalledTimes(count);
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(count);
     } finally { vi.useRealTimers(); }
+  });
+
+  it('retains routing at character select, but a new game PID needs a new session', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let pids = [123];
+      deps.gameProcessIds = vi.fn(async () => pids);
+      controller = make(); await controller.startProxy(); await drain();
+      hosts[0].emit('session', { id: 'game', remotePort: 123 });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(1); // No enumeration with open sessions.
+      hosts[0].emit('closed', { id: 'game', by: 'game' });
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe('routed');
+      pids = [456]; // Restart between polls, without observing an empty list.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(controller.state().game.routing).toBe('not-routed');
+      expect(controller.state().game.routingReason).toContain("if you're in game");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('prioritizes an open session over a late empty process result', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let finish!: (pids: number[]) => void;
+      deps.gameProcessIds = vi.fn(() => new Promise<number[]>(resolve => { finish = resolve; }));
+      controller = make(); await controller.startProxy(); await drain();
+      hosts[0].emit('session', { id: 'game', remotePort: 123 });
+      finish([]); await drain();
+      expect(controller.state().game.routing).toBe('routed');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(controller.state().game.routing).toBe('routed');
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('caches the bundled helper hash while re-reading installed bytes on sessions', async () => {
+    await controller.startProxy(); await drain();
+    expect(controller.state().game.helper.state).toBe('installed');
+    rmSync(helper);
+    hosts[0].emit('session', { id: 'one', remotePort: 123 });
+    expect(controller.state().game.helper.state).toBe('installed');
+    writeFileSync(join(game, HELPER_FILE), 'RealmTool-Helper/old');
+    writeFileSync(join(game, BACKUP_FILE), 'backup');
+    hosts[0].emit('session', { id: 'two', remotePort: 124 });
+    expect(controller.state().game.helper).toEqual({ state: 'outdated', backup: true });
+    writeFileSync(join(game, HELPER_FILE), 'foreign');
+    hosts[0].emit('session', { id: 'three', remotePort: 125 });
+    expect(controller.state().game.helper.state).toBe('foreign');
+    rmSync(join(game, HELPER_FILE));
+    hosts[0].emit('session', { id: 'four', remotePort: 126 });
+    expect(controller.state().game.helper.state).toBe('absent');
   });
 
   it('listens before mismatched data finishes, shares refreshes, then reloads live', async () => {
