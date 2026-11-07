@@ -541,3 +541,31 @@ it.each(['rejected', 'failing'] as const)('announces every combined state starti
   expect(texts()).toHaveLength(5);
   expect(texts().at(-1)).toBe('Auto Nexus module recovered — settings accepted');
 });
+
+it('delivers a degraded health state that began during login once the client is in game', () => {
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const f = fixture();
+  const texts = () => f.h.proxy.injected.map(i => f.h.factory.createFromBytes(i.data, 'server').data.text);
+  const inGameStatus = (id: string, generation: number) => f.h.workerMessage(id, 'auto-nexus', {
+    type: 'status', generation, sampledAt: now, collisionHp: 'on', catalog: ready,
+    status: { ...status(), objectId: 1, enabled: true },
+  });
+  f.h.proxy.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: now });
+  expect(texts()).toEqual([]); // Still logging in: nothing sent, limit not spent.
+  f.h.packet(f.client, 'CREATESUCCESS', { objectId: 1, charId: 1 });
+  inGameStatus(f.client, 1);
+  inGameStatus(f.client, 2);
+  expect(texts()).toEqual(['Auto Nexus module failing — protection degraded']);
+  // A map hop opens a new connection; the pending notice is not repeated within 30 s.
+  f.h.connect('hop'); f.h.packet('hop', 'CREATESUCCESS', { objectId: 2, charId: 1 });
+  now += 5000; inGameStatus('hop', 1);
+  expect(texts()).toHaveLength(1);
+  now += 30000; inGameStatus('hop', 2);
+  expect(texts()).toEqual(['Auto Nexus module failing — protection degraded', 'Auto Nexus module failing — protection degraded']);
+  // Once healthy, status updates deliver nothing further.
+  f.h.proxy.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'healthy', since: now });
+  const count = texts().length;
+  now += 60000; inGameStatus('hop', 3);
+  expect(texts()).toHaveLength(count);
+});
