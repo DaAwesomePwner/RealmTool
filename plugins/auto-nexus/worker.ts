@@ -1,4 +1,5 @@
 // Adapted from realm-engine-client client/src/proxy/network-worker.ts @ 88a66b2 (MIT, see NOTICE).
+import { EscapeLatency } from '../../src/transport/latency.ts';
 import type { PendingDelivery, WorkerModule } from '../../src/transport/modules.ts';
 import { SafetyEngine } from '../../src/safety/SafetyEngine.ts';
 import { AutoEscapeReportGuard } from '../../src/safety/AutoEscapeReportGuard.ts';
@@ -16,6 +17,7 @@ interface Configuration {
 let config = configuration({ settings: safetySettings({}), catalog: null,
   catalogState: { state: 'fallback', reason: 'not loaded' } });
 const sessions = new Set<(config: Configuration) => void>();
+let runLatency = new EscapeLatency();
 const reports = ['PLAYERHIT', 'AOEACK', 'GROUNDDAMAGE'];
 const dangers = ['ENEMYSHOOT', 'AOE'];
 
@@ -57,6 +59,7 @@ function configuration(config: unknown): Configuration {
 
 export const autoNexusModule: WorkerModule = {
   id: 'auto-nexus', priority: 0,
+  start() { runLatency = new EscapeLatency(); },
   observe: { server: ['MAPINFO', 'CREATESUCCESS', 'UPDATE', 'NEWTICK', 'DAMAGE', 'DEATH', ...dangers, 'GOTO'], client: reports },
   prepare: reports,
   writtenServer: ['RECONNECT', ...dangers],
@@ -66,6 +69,11 @@ export const autoNexusModule: WorkerModule = {
     for (const configure of sessions) configure(next);
   },
   createSession(context) {
+    let automaticDecisions = 0;
+    const packetTimes = new Map<number, number>();
+    const deliveryTimes = new Map<number, number>();
+    let receivedAt: number | undefined;
+    let acceptedAt: number | undefined;
     let closed = false;
     let guard = new AutoEscapeReportGuard(context.generation());
     let lastStatusAt = -Infinity;
@@ -74,18 +82,26 @@ export const autoNexusModule: WorkerModule = {
     const stalledLosses = new Map<number, number>();
     const unpreparedReports = new Set<number>();
     const deliveries = new Map<number, number | null>();
-    const clear = () => { stalledLosses.clear(); unpreparedReports.clear(); deliveries.clear(); };
+    const clear = () => { stalledLosses.clear(); unpreparedReports.clear(); deliveries.clear(); packetTimes.clear(); deliveryTimes.clear(); };
     const post = (event: AutoNexusEvent) => context.post(event);
-    const engine = new SafetyEngine(decision => {
+    const engine = new SafetyEngine((decision, accepted) => {
+      if (decision.origin === 'automatic') {
+        automaticDecisions++;
+        runLatency.record(receivedAt, accepted ? acceptedAt : undefined);
+      }
       context.automation.latchEscape(decision.origin === 'manual' ? 'manual escape' : 'auto escape');
       guard.activate(decision, engine.attempts);
       post({ type: 'decision', decision, status: engine.status(context.now()), writeDelayMs: context.now() - decision.at,
-        catalog: current.catalogState, collisionHp: current.collisionHp });
+        latency: runLatency.snapshot(), catalog: current.catalogState, collisionHp: current.collisionHp });
     }, {
       now: () => context.now(),
       available: () => context.transport().available,
       blocked: () => context.transport().upstreamBackpressure,
-      write: done => context.writePriority(context.factory.serialize(context.factory.createByName('ESCAPE')), false, done, 'auto-nexus'),
+      write: done => {
+        const accepted = context.writePriority(context.factory.serialize(context.factory.createByName('ESCAPE')), false, done, 'auto-nexus');
+        acceptedAt = accepted ? (context.lastWriteAcceptedAt?.() ?? context.now()) : undefined;
+        return accepted;
+      },
     }, receipt => { guard.activate(receipt, engine.attempts); });
     // SafetyEngine owns its ServerPlayerState and EscapeAttemptCoordinator.
     engine.connectionChanged(context.generation());
@@ -101,17 +117,20 @@ export const autoNexusModule: WorkerModule = {
       const sample = engine.status(now);
       lastDegraded = sample.degraded;
       post({ type: 'status', status: sample, sampledAt: now, generation: context.generation(),
-        catalog: current.catalogState, collisionHp: current.collisionHp });
+        latency: runLatency.snapshot(), catalog: current.catalogState, collisionHp: current.collisionHp });
     };
     const backlog = (now: number, pending: readonly PendingDelivery[]) => engine.deliveryBacklog(
       context.transport().upstreamBackpressure || (pending.length > 0 && now - pending[0].receivedAt > 100));
     return {
-      observe(packet, fromClient, now, observationId) {
+      observe(packet, fromClient, now, observationId, socketReceivedAt) {
         if (closed) return;
         // Snapshots must also see backlog changes between periodic ticks.
         backlog(now, context.pendingDelivery());
         if (fromClient && reports.includes(packet.name)) unpreparedReports.add(observationId);
-        engine.observe(packet, now, observationId);
+        if (socketReceivedAt !== undefined && (reports.includes(packet.name) || dangers.includes(packet.name))) packetTimes.set(observationId, socketReceivedAt);
+        receivedAt = socketReceivedAt;
+        acceptedAt = undefined;
+        try { engine.observe(packet, now, observationId); } finally { receivedAt = undefined; acceptedAt = undefined; }
         if (engine.degraded !== lastDegraded) status(now);
         if (!fromClient && dangers.includes(packet.name)) stalledLosses.set(observationId, engine.stalledDanger(packet, now));
       },
@@ -119,24 +138,36 @@ export const autoNexusModule: WorkerModule = {
         if (closed) return;
         // Once prepared, only writeOutcome owns delivery (a veto also emits dropped).
         if (observationId !== null) unpreparedReports.delete(observationId);
-        const deliveryId = engine.preparePredictionWrite(packet, now, observationId);
-        if (!closed) deliveries.set(token, deliveryId);
+        receivedAt = observationId === null ? undefined : packetTimes.get(observationId);
+        acceptedAt = undefined;
+        if (receivedAt !== undefined) deliveryTimes.set(token, receivedAt);
+        try {
+          const deliveryId = engine.preparePredictionWrite(packet, now, observationId);
+          if (!closed) deliveries.set(token, deliveryId);
+        } finally {
+          if (observationId !== null) packetTimes.delete(observationId);
+          receivedAt = undefined; acceptedAt = undefined;
+        }
       },
       writeOutcome(token, accepted, now) {
         if (closed || !deliveries.has(token)) return;
         const deliveryId = deliveries.get(token)!;
         deliveries.delete(token);
-        engine.reportDelivered(deliveryId, now, accepted);
+        receivedAt = deliveryTimes.get(token); acceptedAt = undefined;
+        deliveryTimes.delete(token);
+        try { engine.reportDelivered(deliveryId, now, accepted); }
+        finally { receivedAt = undefined; acceptedAt = undefined; }
       },
       dropped(observationId, _name, fromClient, now) {
         if (closed) return;
+        packetTimes.delete(observationId);
         stalledLosses.delete(observationId);
         if (!fromClient) engine.retireArea(observationId);
         if (unpreparedReports.delete(observationId)) engine.reportDelivered(observationId, now, false);
       },
       writtenServer(packet, _kind, now, observationId) {
         if (closed) return;
-        if (observationId !== null) stalledLosses.delete(observationId);
+        if (observationId !== null) { stalledLosses.delete(observationId); packetTimes.delete(observationId); }
         if (packet.name === 'RECONNECT') {
           engine.confirmTransition(now);
           context.automation.latchEscape('transfer');
@@ -149,13 +180,19 @@ export const autoNexusModule: WorkerModule = {
         const pending = context.pendingDelivery();
         backlog(now, pending);
         let stalledLoss = 0, stalled = false;
+        receivedAt = undefined; acceptedAt = undefined;
         for (const entry of pending) {
           if (entry.fromClient || entry.generation !== context.generation() || !dangers.includes(entry.name)) continue;
-          stalledLoss += stalledLosses.get(entry.observationId) ?? 0;
+          const loss = stalledLosses.get(entry.observationId) ?? 0;
+          stalledLoss += loss;
+          const time = packetTimes.get(entry.observationId);
+          if (loss > 0 && time !== undefined) receivedAt = Math.min(receivedAt ?? time, time);
           if (now - entry.receivedAt > Math.min(100, current.settings.reactionMs / 4)) stalled = true;
         }
-        if (stalled) engine.deliveryStalled(now, stalledLoss);
-        engine.advance(now);
+        try { if (stalled) engine.deliveryStalled(now, stalledLoss); }
+        finally { receivedAt = undefined; acceptedAt = undefined; }
+        try { engine.advance(now); }
+        finally { acceptedAt = undefined; }
         if (engine.degraded !== lastDegraded || now - lastStatusAt >= 200) status(now);
       },
       connectionChanged(generation) {
@@ -171,7 +208,10 @@ export const autoNexusModule: WorkerModule = {
           engine.request(context.now(), 'manual nexus', true);
         }
       },
-      close() { closed = true; sessions.delete(configure); clear(); engine.attempts.cancel(context.now()); },
+      close() {
+        if (closed) return;
+        if (automaticDecisions) context.post({ type: 'latencySummary', message: runLatency.summary() });
+        closed = true; sessions.delete(configure); clear(); engine.attempts.cancel(context.now()); },
     };
   },
 };

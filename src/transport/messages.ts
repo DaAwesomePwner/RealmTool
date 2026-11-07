@@ -47,6 +47,7 @@ export interface WorkerInit {
 }
 
 export type WorkerEvent =
+  | { type: 'loopLag'; lag: import('./latency.ts').LoopLag }
   | ModuleHealthEvent
   | ModuleConfigEvent
   | { type: 'listening'; port: number }

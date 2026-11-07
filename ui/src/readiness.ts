@@ -63,6 +63,9 @@ export class Readiness {
   update(state: AppState): void {
     this.state = state;
     for (const child of [...this.status.children]) if (child !== this.protectionItem) child.remove();
+    for (const [name, lag] of Object.entries(state.loopLag ?? {})) {
+      if (lag) this.status.append(el('div', `${name === 'worker' ? 'Network' : 'Main (informational)'} loop: p99 ${lag.p99.toFixed(1)} ms / max ${lag.max.toFixed(1)} ms`));
+    }
     const protection = state.protection;
     this.protectionItem.dataset.value = protection?.state ?? 'unknown';
     const labels = { idle: 'Idle', protected: 'Protected', degraded: 'Degraded', unprotected: 'Not protected' };

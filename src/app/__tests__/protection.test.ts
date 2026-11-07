@@ -85,3 +85,12 @@ describe('computeProtection', () => {
     expect(computeProtection(input)).toEqual(result); expect(input).toEqual(original);
   });
 });
+
+it('degrades and recovers with sustained worker lag, never main-thread lag', () => {
+  const input = ready();
+  expect(computeProtection({ ...input, mainLag: { degraded: true } }).state).toBe('protected');
+  const result = computeProtection({ ...input, workerLag: { degraded: true } });
+  expect(result.state).toBe('degraded');
+  expect(result.reasons[0].message).toBe('network worker lagging');
+  expect(computeProtection({ ...input, workerLag: { degraded: false } }).state).toBe('protected');
+});

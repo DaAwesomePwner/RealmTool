@@ -39,6 +39,7 @@ export interface ModuleStatusEvent {
 }
 
 export interface HostEvents {
+  loopLag: [lag: import('./latency.ts').LoopLag];
   /** Emitted once per transition, including timer-driven recovery; no polling required. */
   moduleStatus: [event: ModuleStatusEvent];
   /** Incremental reports; query getModuleHealth() for the aggregate snapshot. */
@@ -232,6 +233,7 @@ export class ProxyHost extends EventEmitter<HostEvents> {
 
   private handle(event: WorkerEvent): void {
     switch (event.type) {
+      case 'loopLag': this.emit('loopLag', event.lag); return;
       case 'moduleHealth': {
         const now = performance.now();
         const previous = this.health.get(event.moduleId);

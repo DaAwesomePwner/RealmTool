@@ -54,6 +54,8 @@ export interface WorkerSessionContext {
   generation(): number;
   /** Milliseconds on the worker's monotonic clock (performance.now()). Every timestamp in this file — hook `now` arguments and `HeldPacket.receivedAt` — uses this same clock. */
   now(): number;
+  /** Timestamp immediately after the most recent socket write returned. */
+  lastWriteAcceptedAt?(): number;
   /** Encrypt and write now, ahead of anything awaiting a main-thread verdict. False if the socket can't take it.
    * `origin` (a module id) is reported back to `written` so a module can recognise its own writes. */
   writePriority(data: Buffer, toClient: boolean, done?: (error?: Error | null) => void, origin?: string): boolean;
@@ -92,7 +94,8 @@ export interface WorkerSessionModule {
    * Frames still pending when the session closes get neither. `close()` is the signal to release every
    * outstanding observation. (Collision HP must not charge a withheld report twice; this lifecycle is how it tells.)
    */
-  observe?(packet: Packet, fromClient: boolean, now: number, observationId: number): void;
+  /** receivedAt is first-byte socket data delivery, before framing and decoding. */
+  observe?(packet: Packet, fromClient: boolean, now: number, observationId: number, receivedAt?: number): void;
   /** Before module vetoes and output RC4. May write priority frames reentrantly (e.g. ESCAPE). */
   prepareWrite?(write: PreparedWrite): void;
   /** accepted = the socket writer took the frame; false = vetoed, malformed, socket gone, or session closed. */
@@ -112,6 +115,8 @@ export interface WorkerSessionModule {
 }
 
 export interface WorkerModule {
+  /** Once per worker run, before configuring modules or opening sessions. */
+  start?(): void;
   readonly id: string;
   /** Lower runs first. Auto Nexus = 0, Auto Drink = 10. */
   readonly priority: number;
