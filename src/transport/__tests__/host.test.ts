@@ -11,6 +11,30 @@ const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(); });
 
 describe('ProxyHost', () => {
+  it('expires verdicts on the production worker tick with no modules registered', async () => {
+    const server = new FakeServer();
+    await server.listen();
+    cleanups.push(() => server.close());
+    const host = new ProxyHost({ schema: loadSchema(), listenPort: 0,
+      interest: { verdict: { server: ['TEXT'] } },
+      resolveTarget: () => ({ host: '127.0.0.1', port: server.port }),
+      workerUrl: new URL('./fixtures/no-modules-worker.ts', import.meta.url) });
+    cleanups.push(() => host.stop());
+    const diagnostics: string[] = [];
+    host.on('diagnostic', event => diagnostics.push(event.message));
+    host.on('packet', () => {}); // An interested main thread that never sends a verdict.
+    const game = await connectGame(await host.start());
+    cleanups.push(() => game.destroy());
+    game.send(helloBytes(factory, Buffer.alloc(0)));
+    await until(() => server.peers[0]?.frames.length === 1, 'HELLO');
+    const original = frame(factory.getPacketId('TEXT')!, Buffer.from('held original'));
+    server.peers[0].send(original);
+    // No forward() call and no module tick can rescue this packet.
+    await until(() => game.frames.length === 1 && diagnostics.length === 1, 'transport deadline');
+    expect(game.frames[0]).toEqual(original);
+    expect(diagnostics).toEqual(['Plugin verdict deadlines expired: 1; released original packets']);
+  });
+
   function moduleHost(moduleConfig: Record<string, unknown> = {}) {
     const host = new ProxyHost({ schema: loadSchema(), listenPort: 0, moduleConfig,
       workerUrl: new URL('./fixtures/modules-worker.ts', import.meta.url) });

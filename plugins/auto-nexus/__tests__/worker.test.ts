@@ -108,7 +108,6 @@ describe('Auto Nexus session adapter', () => {
     writable.mockRestore();
     expect(h.held()[0].observeOnly).toBe(true);
     h.advance(400); await until(() => h.escapes().length === 2, 'writer-rejected retry');
-    const first = h.held()[0]; h.session.forward(first.sequence, first.generation, null);
     expect(h.session.inject(reconnectBytes(factory, { host: 'bad host', port: h.server.port, key: Buffer.alloc(0) }), true)).toBe(false);
     h.advance(400); await until(() => h.escapes().length === 3, 'dropped retry');
     h.upstream.send(reconnect); await until(() => h.held().length === 2, 'accepted transfer');

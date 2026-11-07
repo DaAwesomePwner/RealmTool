@@ -127,6 +127,42 @@ describe('Session', () => {
     expect(receiver.frames.at(-1)).toEqual(middle);
   });
 
+  it.each(['close', 'tick'] as const)('retains rate-limited expiry and critical override counts until %s', async finish => {
+    let now = 0;
+    const h = await harness({ now: () => now, interest: new Interest({ verdict: { server: ['TEXT'] } }) });
+    const server = await fakeServer();
+    const { upstream, game, session } = await connected(h, server);
+    const text = frame(id('TEXT'));
+    const critical = frame(id('MAPINFO'));
+    const diagnostics = () => h.events.filter(e => e.type === 'diagnostic');
+    upstream.send(text); upstream.send(critical);
+    await until(() => game.frames.length === 2, 'first critical override');
+    expect(diagnostics()).toEqual([expect.objectContaining({
+      message: 'Critical-packet verdict overrides: 1; released original packets',
+    })]);
+    upstream.send(text); upstream.send(text);
+    await until(() => packets(h).length === 3, 'two expiry holds');
+    now = 250; session.tick(now);
+    await until(() => game.frames.length === 4, 'expired originals');
+    upstream.send(text); upstream.send(text); upstream.send(critical);
+    await until(() => game.frames.length === 7, 'two more overrides');
+    now = 4999; session.tick(now);
+    expect(diagnostics()).toHaveLength(1); // Both paths share one per-session limiter.
+    if (finish === 'tick') {
+      now = 5000; session.tick(now);
+      expect(diagnostics()).toHaveLength(2);
+      expect(diagnostics()[1]).toMatchObject({ message:
+        'Plugin verdict deadlines expired: 2; Critical-packet verdict overrides: 2; released original packets' });
+    }
+    session.close();
+    const summary = h.events.find(e => e.type === 'note' && e.message.startsWith('Session summary'));
+    expect(summary).toBeDefined();
+    if (finish === 'close') expect(summary).toMatchObject({ message: expect.stringContaining(
+      'unreported verdict releases: 2 expired, 2 overridden') });
+    else expect(summary).toMatchObject({ message: expect.not.stringContaining('unreported verdict releases') });
+    expect(diagnostics()).toHaveLength(finish === 'close' ? 1 : 2);
+  });
+
   it('uses the configured deadline and aggregates diagnostics at most once per five seconds', async () => {
     let now = 0;
     const h = await harness({ now: () => now, verdictDeadlineMs: 10,

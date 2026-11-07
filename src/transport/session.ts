@@ -105,7 +105,8 @@ export class Session {
   private writeTokens = 0;
   private pendingBytes = 0;
   private expiredVerdicts = 0;
-  private lastExpiryDiagnostic = -Infinity;
+  private overriddenVerdicts = 0;
+  private lastVerdictDiagnostic = -Infinity;
   private beforeConnect: Queued[] = [];
   private beforeConnectBytes = 0;
   private closed = false;
@@ -218,7 +219,10 @@ export class Session {
       const { name, fromClient } = pending.observation;
       held.push({ name, fromClient, ageMs: now - pending.receivedAt });
     }
-    return this.trace.summary(now, held, { game: this.client.writableLength, server: this.server?.writableLength ?? 0 });
+    const summary = this.trace.summary(now, held, { game: this.client.writableLength, server: this.server?.writableLength ?? 0 });
+    return this.expiredVerdicts || this.overriddenVerdicts
+      ? `${summary}; unreported verdict releases: ${this.expiredVerdicts} expired, ${this.overriddenVerdicts} overridden`
+      : summary;
   }
 
   private notifyDropped(observation: Observation): void {
@@ -313,10 +317,12 @@ export class Session {
       for (const pending of this.pending.values()) {
         if (pending.observation.fromClient === fromClient && pending.result === undefined) {
           pending.result = pending.original;
+          ++this.overriddenVerdicts;
         }
       }
       this.flush(fromClient);
       if (this.closed) return;
+      this.reportVerdictReleases(now);
     }
     const kind = this.env.interest.classify(name, fromClient);
     const sequence = ++this.sequence;
@@ -347,12 +353,18 @@ export class Session {
     }
     if (client) this.flush(true);
     if (server) this.flush(false);
-    if (this.expiredVerdicts > 0 && now - this.lastExpiryDiagnostic >= 5000) {
-      this.env.post({ type: 'diagnostic', id: this.id,
-        message: `Plugin verdict deadlines expired: ${this.expiredVerdicts}; released original packets` });
-      this.expiredVerdicts = 0;
-      this.lastExpiryDiagnostic = now;
-    }
+    if (!this.closed) this.reportVerdictReleases(now);
+  }
+
+  private reportVerdictReleases(now: number): void {
+    if ((!this.expiredVerdicts && !this.overriddenVerdicts) || now - this.lastVerdictDiagnostic < 5000) return;
+    const counts = [];
+    if (this.expiredVerdicts) counts.push(`Plugin verdict deadlines expired: ${this.expiredVerdicts}`);
+    if (this.overriddenVerdicts) counts.push(`Critical-packet verdict overrides: ${this.overriddenVerdicts}`);
+    this.env.post({ type: 'diagnostic', id: this.id, message: `${counts.join('; ')}; released original packets` });
+    this.expiredVerdicts = 0;
+    this.overriddenVerdicts = 0;
+    this.lastVerdictDiagnostic = now;
   }
 
   private routeHello(frame: Buffer): void {
