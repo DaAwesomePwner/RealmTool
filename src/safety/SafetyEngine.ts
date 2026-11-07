@@ -470,7 +470,8 @@ export class SafetyEngine {
       enabled: this.settings.enabled, protectionState: this.protectionState, automaticEligible: this.automaticEligible,
       attemptOrigin: attempt?.origin ?? null, attemptPhase: attempt?.phase ?? null,
       epoch: this.epoch, objectId: this.player.ownerObjectId, map: this.map, phase: this.phase,
-      confirmedHp: this.lastHp, maxHp: this.maxHp, lastReason: this.lastReason, reactionMs: this.settings.reactionMs,
+      confirmedHp: this.lastHp, maxHp: this.maxHp, lastReason: this.attempts.retryDeferred
+        ? `${this.lastReason}; retry deferred (backpressure)` : this.lastReason, reactionMs: this.settings.reactionMs,
       healthAgeMs: this.lastHpAt === null ? null : now - this.lastHpAt,
       streamAgeMs: this.lastServerAt === null ? null : now - this.lastServerAt };
   }

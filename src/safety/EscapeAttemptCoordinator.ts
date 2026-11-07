@@ -23,6 +23,8 @@ interface Write { id: number; attempt: Attempt; at: number; accepted: boolean; c
  * One initial ESCAPE may enqueue behind ordinary traffic when no ESCAPE is
  * pending. Backpressure gates retries/recovery, not the first emergency write.
  * Only successful local writes may be retried (at most retryCount, one per tick).
+ * Blocked retries retain their budget until lastWriteAt + retryMs +
+ * 2 * reactionMs; a still-blocked write at that deadline fails backpressure.
  * Each write gets retryMs + reactionMs to await a server transition after the
  * final write; a pending callback gets 2 * reactionMs before being unconfirmed.
  *
@@ -39,6 +41,7 @@ export class EscapeAttemptCoordinator {
   private attemptSequence = 0;
   private writeSequence = 0;
   private current: Attempt | null = null;
+  private deferredAttempt: Attempt | null = null;
   private pending: Write | null = null;
   private recovery: { failedAt: number; until: number; freshnessMs: number } | null = null;
 
@@ -48,6 +51,9 @@ export class EscapeAttemptCoordinator {
     this.transport = transport; this.observeWrite = observeWrite;
   }
 
+  get retryDeferred(): boolean {
+    return this.current !== null && this.current === this.deferredAttempt && this.current.phase === 'written';
+  }
   get available(): boolean { return this.transport?.available() ?? true; }
   get status(): EscapeAttemptStatus | null {
     if (!this.current) return null;
@@ -139,7 +145,14 @@ export class EscapeAttemptCoordinator {
     if (!this.transport) return false;
     const now = this.transport.now(); // Actual write start, independent of decision/previous write time.
     if (!this.available) { this.fail(a, now, 'unavailable'); return false; }
-    if (this.pending || (!initial && this.transport.blocked())) { this.fail(a, now, 'backpressure'); return false; }
+    if (this.pending || (!initial && this.transport.blocked())) {
+      const lastWriteAt = a.lastWriteAt ?? a.sharedWrite?.at;
+      if (initial || lastWriteAt == null || now >= lastWriteAt + a.retryMs + 2 * a.reactionMs)
+        this.fail(a, now, 'backpressure');
+      if (!initial && a.phase !== 'failed') this.deferredAttempt = a;
+      return false; // Deferral neither consumes a retry nor releases another write's slot.
+    }
+    this.deferredAttempt = null;
     const write: Write = { id: ++this.writeSequence, attempt: a, at: now, accepted: false, completedAt: null, error: null };
     a.sharedWrite = null; a.ownWrite = write;
     this.pending = write; a.writeId = write.id; a.lastWriteAt = now; a.phase = 'queued';
@@ -191,7 +204,7 @@ export class EscapeAttemptCoordinator {
     const lastWriteAt = a.lastWriteAt ?? a.sharedWrite?.at;
     if (a.phase !== 'written' || lastWriteAt == null) return;
     if (a.retries > 0 && now >= lastWriteAt + a.retryMs) {
-      --a.retries; this.write(a);
+      if (this.write(a)) --a.retries;
     } else if (a.retries === 0 && now >= lastWriteAt + a.retryMs + a.reactionMs) {
       this.fail(a, now, 'unconfirmed');
     }
