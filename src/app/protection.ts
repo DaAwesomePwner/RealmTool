@@ -5,6 +5,8 @@ export interface ProtectionReason { code: string; source: string; severity: 'err
 export interface Protection { state: ProtectionState; reasons: ProtectionReason[] }
 export interface ModuleProtection { failing?: boolean; rejected?: boolean }
 export interface ProtectionInputs {
+  workerLag?: { degraded: boolean };
+  mainLag?: { degraded: boolean };
   proxy: string; gameRunning: boolean; routing?: string; routingReason?: string; helper: string;
   data: { state: string; gameBuild: string | null; catalogBuild: string | null }; dataInvalidated?: boolean;
   plugins: readonly Pick<PluginSnapshot, 'id' | 'enabled' | 'failed' | 'data'>[];
@@ -24,6 +26,7 @@ export function computeProtection(input: ProtectionInputs): Protection {
   if (input.gameRunning && input.routing === 'not-routed') add('not-routed', 'routing', 'error', input.routingReason || 'The game is not routed through RealmTool');
   if (input.helper !== 'installed') add('helper-unavailable', 'helper', input.gameRunning ? 'error' : input.helper === 'unknown' ? 'info' : 'warning', `Helper is ${input.helper}; restart the game after installing the current helper`);
   if (input.proxy === 'running') {
+    if (input.workerLag?.degraded) add('worker-lag', 'proxy', 'warning', 'network worker lagging');
     if (!input.gameRunning) add('waiting-for-game', 'game', 'info', 'Waiting for the game');
     if (input.gameRunning && input.routing !== 'routed' && input.routing !== 'not-routed') add('routing-unknown', 'routing', 'warning', 'Game routing has not been verified');
     const nexus = input.plugins.find(p => p.id === 'auto-nexus');

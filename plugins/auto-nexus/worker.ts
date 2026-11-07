@@ -1,3 +1,4 @@
+import { LatencySamples } from '../../src/transport/latency.ts';
 // Adapted from realm-engine-client client/src/proxy/network-worker.ts @ 88a66b2 (MIT, see NOTICE).
 import type { PendingDelivery, WorkerModule } from '../../src/transport/modules.ts';
 import { SafetyEngine } from '../../src/safety/SafetyEngine.ts';
@@ -66,6 +67,9 @@ export const autoNexusModule: WorkerModule = {
     for (const configure of sessions) configure(next);
   },
   createSession(context) {
+    const latency = new LatencySamples();
+    let receivedAt: number | undefined;
+    let acceptedAt: number | undefined;
     let closed = false;
     let guard = new AutoEscapeReportGuard(context.generation());
     let lastStatusAt = -Infinity;
@@ -76,16 +80,21 @@ export const autoNexusModule: WorkerModule = {
     const deliveries = new Map<number, number | null>();
     const clear = () => { stalledLosses.clear(); unpreparedReports.clear(); deliveries.clear(); };
     const post = (event: AutoNexusEvent) => context.post(event);
-    const engine = new SafetyEngine(decision => {
+    const engine = new SafetyEngine((decision, accepted) => {
+      if (decision.origin === 'automatic' && accepted && receivedAt !== undefined && acceptedAt !== undefined) latency.add(acceptedAt - receivedAt);
       context.automation.latchEscape(decision.origin === 'manual' ? 'manual escape' : 'auto escape');
       guard.activate(decision, engine.attempts);
       post({ type: 'decision', decision, status: engine.status(context.now()), writeDelayMs: context.now() - decision.at,
-        catalog: current.catalogState, collisionHp: current.collisionHp });
+        latency: latency.snapshot(), catalog: current.catalogState, collisionHp: current.collisionHp });
     }, {
       now: () => context.now(),
       available: () => context.transport().available,
       blocked: () => context.transport().upstreamBackpressure,
-      write: done => context.writePriority(context.factory.serialize(context.factory.createByName('ESCAPE')), false, done, 'auto-nexus'),
+      write: done => {
+        const accepted = context.writePriority(context.factory.serialize(context.factory.createByName('ESCAPE')), false, done, 'auto-nexus');
+        acceptedAt = accepted ? (context.lastWriteAcceptedAt?.() ?? context.now()) : undefined;
+        return accepted;
+      },
     }, receipt => { guard.activate(receipt, engine.attempts); });
     // SafetyEngine owns its ServerPlayerState and EscapeAttemptCoordinator.
     engine.connectionChanged(context.generation());
@@ -101,17 +110,19 @@ export const autoNexusModule: WorkerModule = {
       const sample = engine.status(now);
       lastDegraded = sample.degraded;
       post({ type: 'status', status: sample, sampledAt: now, generation: context.generation(),
-        catalog: current.catalogState, collisionHp: current.collisionHp });
+        latency: latency.snapshot(), catalog: current.catalogState, collisionHp: current.collisionHp });
     };
     const backlog = (now: number, pending: readonly PendingDelivery[]) => engine.deliveryBacklog(
       context.transport().upstreamBackpressure || (pending.length > 0 && now - pending[0].receivedAt > 100));
     return {
-      observe(packet, fromClient, now, observationId) {
+      observe(packet, fromClient, now, observationId, socketReceivedAt) {
         if (closed) return;
         // Snapshots must also see backlog changes between periodic ticks.
         backlog(now, context.pendingDelivery());
         if (fromClient && reports.includes(packet.name)) unpreparedReports.add(observationId);
-        engine.observe(packet, now, observationId);
+        receivedAt = socketReceivedAt;
+        acceptedAt = undefined;
+        try { engine.observe(packet, now, observationId); } finally { receivedAt = undefined; }
         if (engine.degraded !== lastDegraded) status(now);
         if (!fromClient && dangers.includes(packet.name)) stalledLosses.set(observationId, engine.stalledDanger(packet, now));
       },
@@ -171,7 +182,12 @@ export const autoNexusModule: WorkerModule = {
           engine.request(context.now(), 'manual nexus', true);
         }
       },
-      close() { closed = true; sessions.delete(configure); clear(); engine.attempts.cancel(context.now()); },
+      close() {
+        const sample = latency.snapshot();
+        context.post({ type: 'latencySummary', message: sample.count
+          ? `Auto Nexus receive → write: n=${sample.count}, p50=${sample.p50}ms, p99=${sample.p99}ms, max=${sample.max}ms`
+          : 'Auto Nexus receive → write: no samples' });
+        closed = true; sessions.delete(configure); clear(); engine.attempts.cancel(context.now()); },
     };
   },
 };

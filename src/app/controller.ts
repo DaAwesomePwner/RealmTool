@@ -1,3 +1,4 @@
+import { LoopLagSampler, type LoopLag } from '../transport/latency.ts';
 import { computeProtection, type Protection, type ModuleProtection } from './protection.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -32,6 +33,7 @@ import type { ResourcePaths } from './resources.ts';
 export type ProxyState = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
 export interface AppState {
   /** Always present in controller output; optional for older API state producers. */
+  loopLag?: { worker?: LoopLag; main?: LoopLag };
   protection?: Protection & { since: number };
   data: DataState;
   proxy: { state: ProxyState; port: number | null; error: string | null };
@@ -125,6 +127,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private processEpoch = 0;
   private stoppedFlight: Promise<void> | null = null;
   private stoppedTimer: ReturnType<typeof setInterval>;
+  private lagTimer: ReturnType<typeof setInterval>;
   private freshnessTimer: ReturnType<typeof setInterval>;
   private nexusStatuses = new Map<string, { status: Record<string, unknown>; at: number }>();
   private connectedAt = new Map<string, number>();
@@ -179,13 +182,22 @@ export class AppController extends EventEmitter<ControllerEvents> {
     void this.checkStoppedGame();
     this.stoppedTimer = setInterval(() => { void this.checkStoppedGame(); }, 30_000);
     this.freshnessTimer = setInterval(() => { if (this.connected.size) this.protectionChanged(); }, 1_000);
+    const lag = new LoopLagSampler(performance.now());
+    this.lagTimer = setInterval(() => {
+      const sample = lag.sample(performance.now());
+      if (!sample) return;
+      this.current.loopLag = { ...this.current.loopLag, main: sample };
+      if (sample.max > 50) log.info('Main loop', `Timer drift p99=${sample.p99.toFixed(1)}ms max=${sample.max.toFixed(1)}ms (informational)`);
+      this.changed();
+    }, 100);
+    this.lagTimer.unref();
     this.stoppedTimer.unref(); this.freshnessTimer.unref();
   }
 
   state(): AppState { return structuredClone(this.current); }
   plugins(): PluginSnapshot[] { return this.pluginHost?.snapshot() ?? []; }
   private updateProtection(): boolean {
-    const next = computeProtection({ proxy: this.current.proxy.state,
+    const next = computeProtection({ workerLag: this.current.loopLag?.worker, mainLag: this.current.loopLag?.main, proxy: this.current.proxy.state,
       gameRunning: this.gameDetected || this.observedPids.length > 0 || this.sessions.size > 0,
       routing: this.current.game.routing, routingReason: this.current.game.routingReason,
       helper: this.current.game.helper.state, data: this.current.data, dataInvalidated: this.catalogsInvalidated,
@@ -469,6 +481,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     if (this.current.proxy.state === 'running') return;
     this.processEpoch++; this.stoppedFlight = null;
     this.moduleProtection = {};
+    if (this.current.loopLag) delete this.current.loopLag.worker;
     this.current.proxy = { state: 'starting', port: null, error: null }; this.changed();
     let stage = 'Game';
     try {
@@ -547,11 +560,18 @@ export class AppController extends EventEmitter<ControllerEvents> {
       this.moduleProtection[event.moduleId] = { ...this.moduleProtection[event.moduleId], rejected: !event.ok };
       this.protectionChanged();
     });
+    const loopLag = guard((sample: LoopLag) => {
+      this.current.loopLag = { ...this.current.loopLag, worker: sample };
+      this.changed();
+    });
+    host.on('loopLag', loopLag);
+    this.detachHost.push(() => host.off('loopLag', loopLag));
     host.on('moduleStatus', status); host.on('moduleConfig', config);
     this.detachHost.push(() => { host.off('moduleStatus', status); host.off('moduleConfig', config); });
     const exit = ({ code, expected }: { code: number; expected: boolean }) => {
       if (this.host !== host) return;
       this.moduleProtection = {};
+      if (this.current.loopLag) delete this.current.loopLag.worker;
       if (expected) { this.protectionChanged(); return; }
       const error = `Network worker stopped unexpectedly (code ${code})`;
       log.error('Proxy', error);
@@ -581,7 +601,9 @@ export class AppController extends EventEmitter<ControllerEvents> {
   }
   private async cleanup(): Promise<void> {
     this.processEpoch++; this.stoppedFlight = null;
-    this.moduleProtection = {}; this.nexusStatuses.clear(); this.connectedAt.clear();
+    this.moduleProtection = {};
+    if (this.current.loopLag) delete this.current.loopLag.worker;
+    this.nexusStatuses.clear(); this.connectedAt.clear();
     if (this.routingTimer) clearInterval(this.routingTimer);
     this.routingTimer = null;
     this.observedPids = []; this.routedPids.clear(); this.unboundSession = false;
@@ -724,7 +746,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     if (!this.shutdownPromise) {
       this.shuttingDown = true;
       this.cancelRestart();
-      clearInterval(this.stoppedTimer); clearInterval(this.freshnessTimer);
+      clearInterval(this.lagTimer); clearInterval(this.stoppedTimer); clearInterval(this.freshnessTimer);
       this.dataAbort?.abort(new Error('Game data refresh cancelled'));
       this.shutdownPromise = (async () => {
         await this.pending;

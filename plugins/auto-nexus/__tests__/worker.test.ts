@@ -72,11 +72,29 @@ async function harness(over = {}, options: { catalog?: SafetyCatalogFile | null;
   };
   return { session, upstream, game, context, events, order, server, port, escapes, held, send, packets, sample,
     tick: async (hp: number | undefined, tickId = 1, maxHp = 707) => send('NEWTICK', hpData(hp, tickId, maxHp)),
+    elapse: (delta: number) => { now += delta; },
     advance: (delta: number) => { now += delta; session.tick(now); },
   };
 }
 
 describe('Auto Nexus session adapter', () => {
+  it('measures receive through decode to accepted escape, and logs the session summary', async () => {
+    const h = await harness();
+    expect(h.sample().latency.count).toBe(0);
+    const decode = factory.createFromBytes.bind(factory);
+    vi.spyOn(factory, 'createFromBytes').mockImplementation((...args) => {
+      const packet = decode(...args);
+      if (packet.name === 'NEWTICK') h.elapse(7);
+      return packet;
+    });
+    await h.tick(1);
+    await until(() => h.escapes().length === 1, 'escape');
+    expect(h.sample().latency).toEqual({ count: 1, samples: 1, p50: 7, p99: 7, max: 7 });
+    h.session.close();
+    expect(h.events.some(e => e.type === 'module' && (e.message as any).type === 'latencySummary'
+      && (e.message as any).message.includes('p99=7ms'))).toBe(true);
+  });
+
   it('uses the unrounded 707 HP threshold and writes before the triggering main-thread event', async () => {
     const h = await harness(); await h.tick(177); expect(h.escapes()).toHaveLength(0);
     h.order.length = 0; await h.tick(176, 2); await until(() => h.escapes().length === 1, 'ESCAPE');
@@ -190,6 +208,19 @@ describe('Collision HP worker wiring', () => {
   const hit = (bulletId = 1) => bytes('PLAYERHIT', { objectId: 2, bulletId });
   const shoot = (bulletId = 1) => bytes('ENEMYSHOOT', { ownerId: 2, bulletId, bulletType: 0,
     damage: 300, numShots: 1, startingPos: { x: 0, y: 0 } });
+
+  it('measures the triggering client collision report through decode to write', async () => {
+    const h = await harness(); await h.tick(500);
+    h.game.send(hit(1)); await until(() => h.packets('PLAYERHIT').length === 1, 'first hit');
+    const decode = factory.createFromBytes.bind(factory);
+    vi.spyOn(factory, 'createFromBytes').mockImplementation((...args) => {
+      const p = decode(...args);
+      if (p.name === 'PLAYERHIT') h.elapse(13);
+      return p;
+    });
+    h.game.send(hit(2)); await until(() => h.escapes().length === 1, 'escape');
+    expect(h.sample().latency).toEqual({ count: 1, samples: 1, p50: 13, p99: 13, max: 13 });
+  });
 
   it('defaults ON and escapes on receipt while a PLAYERHIT verdict is blocked, without posting or writing the crossing report', async () => {
     const h = await harness({}, { clientVerdict: ['PLAYERHIT'] }); await h.tick(500);

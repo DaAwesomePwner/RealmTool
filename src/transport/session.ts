@@ -199,6 +199,7 @@ export class Session {
       automation: this.automation,
       generation: () => this.generation,
       now: () => this.env.now(),
+      lastWriteAcceptedAt: () => this.lastWriteAcceptedAt,
       writePriority: (data, toClient, done, origin) => this.write(data, toClient, 'priority', done, null, origin),
       transport: () => this.transport(),
       held: () => this.held(),
@@ -278,15 +279,24 @@ export class Session {
     this.close('fault');
   }
 
-  private receive(data: Buffer, fromClient: boolean, frames: FrameDecoder): void {
+  private clientReceivedAt = 0;
+  private serverReceivedAt = 0;
+
+  private receive(data: Buffer, fromClient: boolean, frames: FrameDecoder, receivedAt = this.env.now()): void {
+    const key = fromClient ? 'clientReceivedAt' : 'serverReceivedAt';
+    if (!frames.incomplete) this[key] = receivedAt;
     try {
-      frames.feed(data, frame => this.accept(frame, fromClient));
+      frames.feed(data, frame => {
+        const start = this[key];
+        this[key] = receivedAt;
+        this.accept(frame, fromClient, start);
+      });
     } catch (error) {
       this.fault(error as Error);
     }
   }
 
-  private accept(frame: Buffer, fromClient: boolean): void {
+  private accept(frame: Buffer, fromClient: boolean, receivedAt: number): void {
     if (this.closed) return;
     const direction = fromClient ? 'client' : 'server';
     const name = this.env.factory.getPacketName(frame[4], direction);
@@ -308,7 +318,7 @@ export class Session {
     const observationId = ++this.observations;
     for (const module of this.modules) {
       if ((fromClient ? module.client : module.server).has(name)) {
-        this.call(module, 'observe', () => module.hooks.observe?.(decode(), fromClient, now, observationId), undefined);
+        this.call(module, 'observe', () => module.hooks.observe?.(decode(), fromClient, now, observationId, receivedAt), undefined);
       }
       if (this.closed) return;
     }
@@ -459,11 +469,12 @@ export class Session {
       this.connect(destination, this.helloForRetry, true);
     };
     server.on('data', data => {
+      const receivedAt = this.env.now();
       if (this.closed || this.server !== server) return;
       this.serverResponded = true;
       this.helloForRetry = null;
       if (this.helloTimer) { clearTimeout(this.helloTimer); this.helloTimer = null; }
-      this.receive(data, false, frames);
+      this.receive(data, false, frames, receivedAt);
     });
     server.on('error', error => retryHello(error));
     server.on('close', () => { if (this.server === server) this.close('server'); });
@@ -586,6 +597,8 @@ export class Session {
     return true;
   }
 
+  private lastWriteAcceptedAt = 0;
+
   private writeRaw(data: Buffer, toClient: boolean, done?: (error?: Error | null) => void, byRealmTool = false): boolean {
     const socket = toClient ? this.client : this.server;
     if (!socket || socket.destroyed || !socket.writable) return false;
@@ -593,6 +606,7 @@ export class Session {
     const encrypted = Buffer.from(data);
     (toClient ? this.toClientCipher : this.toServerCipher).cipher(encrypted);
     socket.write(encrypted, done);
+    this.lastWriteAcceptedAt = this.env.now();
     if (socket.writableLength > this.env.maxPendingBytes) {
       this.fault(new Error(`${toClient ? 'Game' : 'Server'} is not reading; output backlog exceeded the limit`));
     }

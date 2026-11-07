@@ -12,4 +12,4 @@ export type AutoNexusCommand = { type: 'escape' };
 export type AutoNexusEvent = (
   | { type: 'decision'; decision: SafetyDecision; status: SafetyStatus; writeDelayMs: number }
   | { type: 'status'; status: SafetyStatus; sampledAt: number; generation: number }
-) & { catalog: SafetyCatalogState; collisionHp: 'on' | 'off' | 'fallback' };
+) & { latency?: import('../../src/transport/latency.ts').LatencySummary; catalog: SafetyCatalogState; collisionHp: 'on' | 'off' | 'fallback' };

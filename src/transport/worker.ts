@@ -1,3 +1,4 @@
+import { LoopLagSampler } from './latency.ts';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -74,6 +75,11 @@ if (init.host !== '127.0.0.1') {
   });
 
   // Transport verdict deadlines must advance even without realtime modules.
+  const lag = new LoopLagSampler(performance.now());
+  const lagTimer = setInterval(() => {
+    const sample = lag.sample(performance.now());
+    if (sample) post({ type: 'loopLag', lag: sample });
+  }, 100);
   const timer = setInterval(() => {
     const now = performance.now();
     tickSessions(sessions.values(), now, post);
@@ -82,7 +88,7 @@ if (init.host !== '127.0.0.1') {
 
   port.on('message', (command: WorkerCommand) => guardWorkerCall(post, `Worker command ${command.type}`, () => {
     if (command.type === 'stop') {
-      clearInterval(timer);
+      clearInterval(timer); clearInterval(lagTimer);
       for (const session of [...sessions.values()]) guardWorkerCall(post, 'Session close', () => session.close('proxy'), session.id);
       listener.close(() => port.close());
       return;

@@ -145,7 +145,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
       ? { state: catalog.state, gameBuild: catalog.gameBuild, projectiles: catalog.projectiles, tiles: catalog.tiles }
       : { state: catalog.state, reason: catalog.reason };
     publication.lastPublished = now;
-    publish({ clientId: client.clientId, collisionHp, catalog: safeCatalog,
+    publish({ clientId: client.clientId, latency: sample.latency, collisionHp, catalog: safeCatalog,
       protectionState: status.protectionState, degraded: status.degraded, automaticEligible: status.automaticEligible,
       confirmedHp: status.confirmedHp, maxHp: status.maxHp, lowerHp: status.lowerHp,
       pendingDamage: status.prediction?.pendingDamage ?? 0, pendingCount: status.prediction?.pendingCount ?? 0,
@@ -182,6 +182,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
       lastMessageRetry = performance.now();
       try { if (refreshCatalog()) sync(); } catch { /* Retry transient disk failures on a later message. */ }
     }
+    if (message.type === 'latencySummary' && 'message' in message && typeof message.message === 'string') { ctx.log(message.message); return; }
     const event = message as AutoNexusEvent;
     if (event.type === 'status') {
       if (!Number.isInteger(event.generation) || event.generation < 0) return;
