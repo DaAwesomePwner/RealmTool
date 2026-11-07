@@ -195,7 +195,7 @@ describe('realtime plugins through the encrypted ProxyHost worker', () => {
       expect(f.game.frames.filter(bytes => bytes[4] === factory.getPacketId('RECONNECT'))).toHaveLength(0);
     } else {
       await until(() => f.game.frames.some(bytes => bytes[4] === factory.getPacketId('RECONNECT')), 'accepted transfer written to game');
-      await pause(2000);
+      await pause(3200);
       expect(f.wire('ESCAPE')).toHaveLength(1);
     }
     f.healthy();

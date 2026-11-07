@@ -90,19 +90,20 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
 
   const degradation = new WeakMap<ClientConnection, {
     reason: AutoNexusEvent['status']['degraded'];
-    notifiedAt: Map<string, number>;
   }>();
+  // Plugin lifetime spans map hops, whose new ClientConnection must not reset the limit.
+  const degradedNotifiedAt = new Map<string, number>();
   function notifyDegraded(client: ClientConnection, event: Extract<AutoNexusEvent, { type: 'status' }>): void {
     const now = performance.now();
     const age = now - event.sampledAt;
     if (!client.connected || !Number.isFinite(age) || age < 0 || age > 2000) return;
-    const state = degradation.get(client) ?? { reason: null, notifiedAt: new Map<string, number>() };
+    const state = degradation.get(client) ?? { reason: null };
     const reason = ctx.enabled ? event.status.degraded : null;
     if (reason && reason !== state.reason) {
       const text = `Auto Nexus degraded: ${reason}; protection may be incomplete.`;
-      log.warn('auto-nexus', text);
-      if (now - (state.notifiedAt.get(reason) ?? -Infinity) >= DEGRADED_NOTICE_MS) {
-        state.notifiedAt.set(reason, now);
+      if (now - (degradedNotifiedAt.get(reason) ?? -Infinity) >= DEGRADED_NOTICE_MS) {
+        degradedNotifiedAt.set(reason, now);
+        log.warn('auto-nexus', text);
         ctx.sendNotification(client, 'AutoNexus', text);
       }
     }

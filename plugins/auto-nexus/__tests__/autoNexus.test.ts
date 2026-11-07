@@ -344,24 +344,44 @@ describe('Collision HP facade', () => {
   });
 });
 
-it('publishes degraded reasons and warns only on transitions, rate limited per reason and client', () => {
+it('publishes degraded reasons and warns only on transitions, rate limited per reason across reconnects', () => {
   let now = 1000; vi.spyOn(performance, 'now').mockImplementation(() => now);
   const f = fixture();
   const send = (degraded: string | null, client = f.client) => f.h.workerMessage(client, 'auto-nexus', {
     type: 'status', generation: 1, sampledAt: now,
-    status: { ...status(), objectId: 1, enabled: true, protectionState: degraded ? 'degraded' : 'monitoring', degraded },
+    status: { ...status(), objectId: 1, enabled: true, protectionState: degraded ? 'monitoring-degraded' : 'monitoring', degraded },
     collisionHp: 'on', catalog: ready,
   });
   send('server-hp-stale');
-  expect(f.h.host.data('auto-nexus')!.get('status')).toMatchObject({ degraded: 'server-hp-stale', protectionState: 'degraded' });
+  expect(f.h.host.data('auto-nexus')!.get('status')).toMatchObject({ degraded: 'server-hp-stale', protectionState: 'monitoring-degraded' });
   expect(f.reply().text).toContain('server-hp-stale');
   const count = f.h.proxy.injected.length;
   send('server-hp-stale'); send(null); send('server-hp-stale');
   expect(f.h.proxy.injected).toHaveLength(count);
   send('hp-stream-unreadable'); expect(f.h.proxy.injected).toHaveLength(count + 1);
+  for (let i = 0; i < 10; ++i) { send(null); send('hp-stream-unreadable'); }
+  expect(records.filter(r => r.message.includes('degraded'))).toHaveLength(2);
+  now += 29999; f.h.close(f.client);
   const other = f.h.connect('other'); send('server-hp-stale', other);
+  expect(f.h.proxy.injected).toHaveLength(count + 1);
+  now += 1; send(null, other); send('server-hp-stale', other);
   expect(f.h.proxy.injected).toHaveLength(count + 2);
-  now += 30000; send('server-hp-stale');
-  expect(f.h.proxy.injected).toHaveLength(count + 3);
-  expect(records.filter(r => r.message.includes('degraded'))).toHaveLength(5);
+  expect(records.filter(r => r.message.includes('degraded'))).toHaveLength(3);
+});
+
+it('notifies each new HP-stream reason while map decoding remains unreadable', () => {
+  vi.spyOn(performance, 'now').mockReturnValue(1000);
+  const f = fixture();
+  for (const degraded of ['map-unreadable', 'server-hp-stale', 'hp-stream-unreadable']) {
+    f.h.workerMessage(f.client, 'auto-nexus', {
+      type: 'status', generation: 1, sampledAt: 1000, collisionHp: 'on', catalog: ready,
+      status: { ...status(), objectId: 1, enabled: true, mapUnreadable: true, degraded },
+    });
+  }
+  const texts = f.h.proxy.injected.map(p => f.h.factory.createFromBytes(p.data, 'server').data.text);
+  expect(texts).toEqual([
+    'Auto Nexus degraded: map-unreadable; protection may be incomplete.',
+    'Auto Nexus degraded: server-hp-stale; protection may be incomplete.',
+    'Auto Nexus degraded: hp-stream-unreadable; protection may be incomplete.',
+  ]);
 });

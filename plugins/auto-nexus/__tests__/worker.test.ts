@@ -410,7 +410,7 @@ describe('Auto Nexus module lifecycle', () => {
     expect(f.messages.at(-1).status.degraded).toBeNull();
     f.advance(1);
     expect(f.messages.at(-1)).toMatchObject({ type: 'status', status: {
-      protectionState: 'degraded', degraded: 'server-hp-stale',
+      protectionState: 'monitoring-degraded', degraded: 'server-hp-stale',
     } });
     f.observe('NEWTICK', hpData(600, 2));
     expect(f.messages.at(-1).status.degraded).toBeNull();

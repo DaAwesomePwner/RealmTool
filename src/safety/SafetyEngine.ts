@@ -151,7 +151,7 @@ export class SafetyEngine {
         if (!entity.status) continue;
         this.types.set(entity.status.objectId, entity.objectType);
         if (this.player.ownerObjectId !== 0 && entity.status.objectId === this.player.ownerObjectId) {
-          this.lastServerAt = now; this.hpStreamUnreadable = false;
+          this.lastServerAt = now;
         }
         this.applyStatus(entity.status, now, true);
       }
@@ -159,7 +159,7 @@ export class SafetyEngine {
     }
     if (packet.name === 'NEWTICK') {
       if (!Number.isInteger(d.tickId) || d.tickId <= this.lastTick) return;
-      this.lastTick = d.tickId; this.lastServerAt = now; this.hpStreamUnreadable = false;
+      this.lastTick = d.tickId; this.lastServerAt = now;
       this.predictor.timing(now, d.serverLastRttMs);
       const hasOwnerHp = (d.statuses ?? []).some((status: Parameters<ServerPlayerState['applyStatus']>[0]) =>
         status.objectId === this.player.ownerObjectId && Array.isArray(status.data) && status.data.some(s => s?.id === 1));
@@ -213,6 +213,8 @@ export class SafetyEngine {
     const hp = this.player.applyStatus(status, full);
     if (incoming.some(s => s?.id === 1)) this.hpAnchorContinuous = hp !== null;
     if (hp !== null) {
+      // After a decode gap, an HP-less delta cannot prove the old HP still holds.
+      this.hpStreamUnreadable = false;
       this.lastHp = hp; this.lastHpAt = now; this.lastServerAt = now;
       this.predictor.snapshot(hp, now);
     }
@@ -378,18 +380,16 @@ export class SafetyEngine {
   }
   get degraded(): SafetyStatus['degraded'] {
     if (!this.monitoringReady) return null;
-    if (this.mapUnreadable) return 'map-unreadable';
     if (this.hpStreamUnreadable) return 'hp-stream-unreadable';
     return this.latestNow - (this.lastServerAt ?? this.streamStartedAt) > SERVER_HP_STALE_MS
-      ? 'server-hp-stale' : null;
+      ? 'server-hp-stale' : this.mapUnreadable ? 'map-unreadable' : null;
   }
   private get protectionState(): ProtectionState {
     if (this.terminal) return this.terminal;
     if (!this.settings.enabled) return 'disabled';
     if (this.safe && this.map.trim()) return 'safe';
     if (!this.monitoringReady) return 'waiting';
-    if (this.degraded) return 'degraded';
-    if (this.automaticEligible) return 'monitoring';
+    if (this.automaticEligible) return this.degraded ? 'monitoring-degraded' : 'monitoring';
     return this.attempts.recoveryState(this.latestNow) ?? 'escaping';
   }
   uncertain(now: number, reason: string): void {
