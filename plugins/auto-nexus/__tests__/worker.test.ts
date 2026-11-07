@@ -473,6 +473,8 @@ describe('Auto Nexus module lifecycle', () => {
     f.advance(1600); expect(f.writePriority).toHaveBeenCalledTimes(2);
     f.advance(0); expect(f.writePriority).toHaveBeenCalledTimes(2);
     f.block(); f.advance(400); expect(f.writePriority).toHaveBeenCalledTimes(2);
+    expect(f.messages.at(-1)).toMatchObject({ type: 'status', status: { attemptPhase: 'written' } });
+    f.advance(800); expect(f.writePriority).toHaveBeenCalledTimes(2);
     expect(f.messages.at(-1)).toMatchObject({ type: 'status', status: { attemptPhase: 'failed' } });
   });
 
