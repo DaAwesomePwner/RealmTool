@@ -422,6 +422,23 @@ describe('Auto Nexus module lifecycle', () => {
     expect(f.writePriority).not.toHaveBeenCalled();
   });
 
+  it.each(['written RECONNECT', 'safe map'])('does not report a stalled HP stream after %s', state => {
+    const f = local(); f.observe('NEWTICK', hpData(600, 1));
+    if (state === 'written RECONNECT') {
+      f.module.writtenServer!(packet('RECONNECT'), 'normal', f.ctx.now(), 1);
+    } else {
+      f.observe('MAPINFO', { name: 'Nexus' });
+      f.observe('CREATESUCCESS', { objectId: 1 });
+      f.observe('NEWTICK', hpData(600, 1));
+    }
+    f.advance(3001);
+    expect(f.messages.at(-1)).toMatchObject({ type: 'status', status: {
+      degraded: null, protectionState: state === 'safe map' ? 'safe' : 'transition',
+    } });
+    expect(f.messages.filter(m => m.type === 'status' && m.status.degraded)).toEqual([]);
+    expect(f.writePriority).not.toHaveBeenCalled();
+  });
+
   it('latches rejected decisions before posting but only accepted writes arm the guard', () => {
     const f = local(false); f.observe('NEWTICK', hpData(100, 1));
     expect(f.ctx.automation.latchReason).toBe('auto escape');
