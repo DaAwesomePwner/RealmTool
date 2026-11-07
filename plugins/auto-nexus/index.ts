@@ -87,25 +87,23 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   });
   ctx.registerCleanup(() => { disposed = true; ctx.worker.configure(configuration(false)); });
   let moduleFailing = false, configRejected = false;
-  const healthNotifiedAt = new Map<string, number>();
+  const healthNotified = new WeakMap<ClientConnection, { text: string; at: number }>();
   ctx.worker.onHealth((event, clients) => {
     const wasDegraded = moduleFailing || configRejected;
-    let text: string | undefined;
-    if ('state' in event) {
-      const failing = event.state === 'failing';
-      if (failing && !moduleFailing) text = 'Auto Nexus module failing — protection degraded';
-      moduleFailing = failing;
-    } else {
-      if (!event.configOk && !configRejected) text = 'Auto Nexus settings rejected';
-      configRejected = !event.configOk;
-    }
-    if (wasDegraded && !moduleFailing && !configRejected) text = 'Auto Nexus module recovered — settings accepted';
+    if ('state' in event) moduleFailing = event.state === 'failing';
+    else configRejected = !event.configOk;
+    const text = configRejected ? 'Auto Nexus settings rejected'
+      : moduleFailing ? 'Auto Nexus module failing — protection degraded'
+      : wasDegraded ? 'Auto Nexus module recovered — settings accepted' : undefined;
     if (disposed || !ctx.enabled || !text) return;
-    const connected = clients.filter(client => client.connected);
+    const connected = clients.filter(client => client.connected && client.playerData.ownerObjectId > 0);
     const now = performance.now();
-    if (!connected.length || now - (healthNotifiedAt.get(text) ?? -Infinity) < DEGRADED_NOTICE_MS) return;
-    healthNotifiedAt.set(text, now);
-    for (const client of connected) ctx.sendNotification(client, 'AutoNexus', text);
+    for (const client of connected) {
+      const last = healthNotified.get(client);
+      if (last?.text === text && now - last.at < DEGRADED_NOTICE_MS) continue;
+      ctx.sendNotification(client, 'AutoNexus', text);
+      healthNotified.set(client, { text, at: now });
+    }
   });
   const notified = new WeakSet<ClientConnection>();
   function notifyFallback(client: ClientConnection, event: AutoNexusEvent): void {
@@ -166,7 +164,8 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
       ? { state: catalog.state, gameBuild: catalog.gameBuild, projectiles: catalog.projectiles, tiles: catalog.tiles }
       : { state: catalog.state, reason: catalog.reason };
     publication.lastPublished = now;
-    publish({ clientId: client.clientId, latency: sample.latency, collisionHp, catalog: safeCatalog,
+    publish({ clientId: client.clientId, enabled: status.enabled, phase: status.phase,
+      thresholdPct: sample.thresholdPct, latency: sample.latency, collisionHp, catalog: safeCatalog,
       protectionState: status.protectionState, degraded: status.degraded, automaticEligible: status.automaticEligible,
       confirmedHp: status.confirmedHp, maxHp: status.maxHp, lowerHp: status.lowerHp,
       pendingDamage: status.prediction?.pendingDamage ?? 0, pendingCount: status.prediction?.pendingCount ?? 0,

@@ -538,6 +538,17 @@ describe('Auto Nexus module lifecycle', () => {
     f.advance(199); const count = f.messages.length; f.advance(1); expect(f.messages).toHaveLength(count + 1);
   });
 
+  it('removes the session even if close sampling throws', () => {
+    const f = local();
+    const configure = vi.spyOn(SafetyEngine.prototype, 'configure');
+    const status = vi.spyOn(SafetyEngine.prototype, 'status').mockImplementation(() => { throw new Error('sampling failed'); });
+    expect(() => f.module.close!('fault')).toThrow('sampling failed');
+    status.mockRestore();
+    autoNexusModule.configure!(config({ thresholdPct: 30 }));
+    expect(configure).not.toHaveBeenCalled();
+    expect(() => f.module.close!('fault')).not.toThrow();
+  });
+
   it('applies module configuration to all live sessions and removes closed instances', () => {
     const first = local(); const second = local();
     for (const f of [first, second]) f.observe('NEWTICK', hpData(200, 1));
@@ -565,6 +576,21 @@ describe('Auto Nexus module lifecycle', () => {
 });
 
 describe('low HP disconnect warnings', () => {
+  it.each(['Nexus', 'Vault', 'Pet Yard'])('does not warn on a low HP close in %s', async name => {
+    const h = await harness();
+    await h.send('MAPINFO', { name });
+    await h.send('CREATESUCCESS', { objectId: 1, charId: 1 });
+    await h.tick(100, 1, 500);
+    h.session.close('game');
+    expect(h.events.filter(e => e.type === 'module' && (e.message as any).type === 'lowHpClose')).toHaveLength(0);
+  });
+  it('does not warn when disabled', async () => {
+    const h = await harness({ enabled: false });
+    await h.tick(100, 1, 500);
+    h.session.close('game');
+    expect(h.events.filter(e => e.type === 'module' && (e.message as any).type === 'lowHpClose')).toHaveLength(0);
+  });
+
   it('warns at 18% when an escape decision could not write to the socket', async () => {
     const h = await harness();
     const original = SafetyEngine.prototype.status;
@@ -580,6 +606,7 @@ describe('low HP disconnect warnings', () => {
   it.each([
     { hp: 180, by: 'server' as const, expected: true },
     { hp: 180, by: 'game' as const, expected: true },
+    { hp: 180, by: 'fault' as const, expected: true },
     { hp: 500, by: 'server' as const, expected: false },
     { hp: undefined, by: 'server' as const, expected: false },
     { hp: 180, by: 'proxy' as const, expected: false },
@@ -597,7 +624,11 @@ describe('low HP disconnect warnings', () => {
     await h.tick(180, 1, 500);
     if (cause === 'escape') h.session.command('auto-nexus', { type: 'escape' });
     else if (cause === 'death') await h.send('DEATH', {});
-    else h.context.automation.latchEscape('transfer');
+    else {
+      h.upstream.send(reconnectBytes(factory, { host: 'localhost', port: h.server.port, key: Buffer.alloc(0) }));
+      await until(() => h.game.frames.some(f => f[4] === factory.getPacketId('RECONNECT')), 'written transfer');
+      expect(h.context.automation.latchReason).toBe('transfer');
+    }
     h.session.close('server');
     expect(h.events.filter(e => e.type === 'module' && (e.message as any).type === 'lowHpClose')).toHaveLength(0);
   });

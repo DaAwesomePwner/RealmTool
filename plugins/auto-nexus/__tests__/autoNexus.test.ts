@@ -112,6 +112,7 @@ describe('Auto Nexus UI status', () => {
     const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');
     sendStatus(f, 'on');
     const expected = { clientId: f.client, collisionHp: 'on', catalog: ready,
+      enabled: status().enabled, phase: status().phase, thresholdPct: 25,
       protectionState: status().protectionState, degraded: null, automaticEligible: false,
       confirmedHp: status().confirmedHp, maxHp: status().maxHp, lowerHp: status().lowerHp,
       pendingDamage: 230, pendingCount: 2, attemptPhase: status().attemptPhase, sampledAgeMs: 0 };
@@ -322,7 +323,7 @@ describe('Auto Nexus facade', () => {
 });
 
 function sendStatus(f: ReturnType<typeof fixture>, mode: AutoNexusEvent['collisionHp'] = 'fallback', client = f.client, reason = 'missing', objectId = 1) {
-  f.h.workerMessage(client, 'auto-nexus', { type: 'status', generation: 1, sampledAt: performance.now(),
+  f.h.workerMessage(client, 'auto-nexus', { type: 'status', thresholdPct: 25, generation: 1, sampledAt: performance.now(),
     status: { ...status(), objectId, prediction: { pendingDamage: 230, pendingCount: 2, assumedCount: 1 } },
     collisionHp: mode, catalog: mode === 'fallback' ? { state: 'fallback', reason } : ready });
 }
@@ -459,6 +460,8 @@ it('broadcasts failing, rejected and recovered notices with rate limits and no d
   vi.spyOn(performance, 'now').mockImplementation(() => now);
   const f = fixture();
   f.h.connect('second'); f.h.connect('gone'); f.h.close('gone');
+  f.h.connect('logging-in');
+  for (const id of ['c1', 'second']) f.h.packet(id, 'CREATESUCCESS', { objectId: 1, charId: 1 });
   const health = (state: 'healthy' | 'failing') => f.h.proxy.emit('moduleStatus', { moduleId: 'auto-nexus', state, since: now });
   const config = (ok: boolean) => f.h.proxy.emit('moduleConfig', ok
     ? { type: 'moduleConfig', moduleId: 'auto-nexus', ok: true }
@@ -475,12 +478,34 @@ it('broadcasts failing, rejected and recovered notices with rate limits and no d
     ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus module recovered — settings accepted' })),
   ]);
   health('failing'); config(false); health('healthy'); config(true);
-  expect(notices()).toHaveLength(6);
+  expect(notices()).toHaveLength(12);
   now += 30000;
   health('failing'); config(false); health('healthy'); config(true);
-  expect(notices()).toHaveLength(12);
+  expect(notices()).toHaveLength(18);
   f.h.close('c1'); f.h.close('second');
   now += 30000;
   health('failing'); config(false); health('healthy'); config(true);
-  expect(notices()).toHaveLength(12);
+  expect(notices()).toHaveLength(18);
+});
+
+it('announces rejection again after recovery inside 30 seconds and skips clients logging in', () => {
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const f = fixture();
+  const config = (ok: boolean) => f.h.proxy.emit('moduleConfig', ok
+    ? { type: 'moduleConfig', moduleId: 'auto-nexus', ok: true }
+    : { type: 'moduleConfig', moduleId: 'auto-nexus', ok: false, error: 'invalid' });
+  config(false);
+  expect(f.h.proxy.injected).toHaveLength(0);
+  f.h.packet(f.client, 'CREATESUCCESS', { objectId: 1, charId: 1 });
+  config(false); // The skipped notice did not spend the rate limit.
+  config(false);
+  expect(f.h.proxy.injected).toHaveLength(1);
+  config(true); config(false);
+  expect(f.h.proxy.injected.map(i => f.h.factory.createFromBytes(i.data, 'server').data.text)).toEqual([
+    'Auto Nexus settings rejected', 'Auto Nexus module recovered — settings accepted', 'Auto Nexus settings rejected',
+  ]);
+  config(false); expect(f.h.proxy.injected).toHaveLength(3);
+  now += 29999; config(false); expect(f.h.proxy.injected).toHaveLength(3);
+  now += 1; config(false); expect(f.h.proxy.injected).toHaveLength(4);
 });

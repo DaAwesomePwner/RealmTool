@@ -94,6 +94,11 @@ it('dismisses close warnings without reviving them on updates and expires new wa
     const view = new Readiness({ post: vi.fn() }, () => {});
     view.update(state);
     expect(view.notices.textContent).toContain('18% HP');
+    const dismiss = view.notices.querySelector('button');
+    const content = view.notices.querySelector('.warning')!.firstChild;
+    view.update(structuredClone(state));
+    expect(view.notices.querySelector('button')).toBe(dismiss);
+    expect(view.notices.querySelector('.warning')!.firstChild).toBe(content);
     view.notices.querySelector('button')!.click();
     view.update(state);
     expect(view.notices.textContent).not.toContain('18% HP');

@@ -16,6 +16,7 @@ export class Readiness {
   private readonly safetyWarning = el('div', undefined, 'warning');
   private warningExpiry?: ReturnType<typeof setTimeout>;
   private dismissedWarning = 0;
+  private renderedWarning?: AppState['safetyWarning'];
   private readonly error = el('p', '', 'error');
   private readonly requestError = el('p', '', 'error');
   private readonly folder = el('input');
@@ -66,14 +67,17 @@ export class Readiness {
 
   update(state: AppState): void {
     this.state = state;
-    clearTimeout(this.warningExpiry);
-    this.safetyWarning.replaceChildren();
     const warning = state.safetyWarning;
-    if (warning && warning.expiresAt > Date.now() && warning.expiresAt !== this.dismissedWarning) {
-      this.safetyWarning.append(el('span', warning.message), button('Dismiss', () => {
-        this.dismissedWarning = warning.expiresAt; this.safetyWarning.replaceChildren();
-      }));
-      this.warningExpiry = setTimeout(() => this.safetyWarning.replaceChildren(), warning.expiresAt - Date.now());
+    if (warning?.expiresAt !== this.renderedWarning?.expiresAt || warning?.message !== this.renderedWarning?.message) {
+      this.renderedWarning = warning ? { ...warning } : undefined;
+      clearTimeout(this.warningExpiry);
+      this.safetyWarning.replaceChildren();
+      if (warning && warning.expiresAt > Date.now() && warning.expiresAt !== this.dismissedWarning) {
+        this.safetyWarning.append(el('span', warning.message), button('Dismiss', () => {
+          this.dismissedWarning = warning.expiresAt; this.safetyWarning.replaceChildren();
+        }));
+        this.warningExpiry = setTimeout(() => this.safetyWarning.replaceChildren(), warning.expiresAt - Date.now());
+      }
     }
     for (const child of [...this.status.children]) if (child !== this.protectionItem) child.remove();
     for (const [name, lag] of Object.entries(state.loopLag ?? {})) {

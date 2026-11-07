@@ -11,5 +11,5 @@ export interface AutoNexusConfig {
 export type AutoNexusCommand = { type: 'escape' };
 export type AutoNexusEvent = (
   | { type: 'decision'; decision: SafetyDecision; status: SafetyStatus; writeDelayMs: number }
-  | { type: 'status'; status: SafetyStatus; sampledAt: number; generation: number }
+  | { type: 'status'; thresholdPct?: number; status: SafetyStatus; sampledAt: number; generation: number }
 ) & { latency?: import('../../src/transport/latency.ts').EscapeLatencySummary; catalog: SafetyCatalogState; collisionHp: 'on' | 'off' | 'fallback' };

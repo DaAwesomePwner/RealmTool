@@ -151,14 +151,17 @@ describe('PluginHost', () => {
         channel = ctx.worker;
         channel.configure('before failure');
         channel.onMessage(received);
+        channel.onHealth(received);
         ctx.registerCleanup(() => {
           cleanup();
           channel.configure('cleanup');
           channel.onMessage(received);
+          channel.onHealth(received);
         });
         queueMicrotask(() => {
           channel.configure('delayed');
           channel.onMessage(received);
+          channel.onHealth(received);
           channel.send(client, 'delayed');
         });
         throw new Error('register failed');
@@ -175,6 +178,8 @@ describe('PluginHost', () => {
     expect(h.proxy.configured).toEqual([{ good: 'good' }]);
     expect(h.proxy.commands).toEqual([]);
     h.workerMessage(id, 'bad', 'ignored');
+    h.proxy.emit('moduleStatus', { moduleId: 'bad', state: 'failing', since: 1 });
+    h.proxy.emit('moduleConfig', { moduleId: 'bad', type: 'moduleConfig', ok: false, error: 'invalid' });
     expect(received).not.toHaveBeenCalled();
     h.host.stop();
     expect(cleanup).toHaveBeenCalledTimes(1);
@@ -803,6 +808,7 @@ it('isolates health/config events by plugin and removes callbacks on stop', () =
     plugin('a', ctx => ctx.worker.onHealth(a), { capabilities: ['worker'] }),
     plugin('b', ctx => ctx.worker.onHealth(b), { capabilities: ['worker'] }),
   ]);
+  h.host.setEnabled('a', false); // Health must keep flowing while disabled.
   h.connect('live'); h.connect('gone'); h.close('gone');
   h.proxy.emit('moduleStatus', { moduleId: 'a', state: 'failing', since: 123 });
   h.proxy.emit('moduleConfig', { type: 'moduleConfig', moduleId: 'a', ok: false, error: 'invalid' });
