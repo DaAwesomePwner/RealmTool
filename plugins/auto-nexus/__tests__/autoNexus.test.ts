@@ -470,22 +470,23 @@ it('broadcasts failing, rejected and recovered notices with rate limits and no d
   health('healthy'); config(true);
   expect(notices()).toHaveLength(0);
   health('failing'); health('failing'); config(false); health('healthy');
-  expect(notices()).toHaveLength(4); // Config rejection still blocks recovery.
+  expect(notices()).toHaveLength(6); // Clearing failure announces the rejection that remains.
   config(true);
   expect(notices()).toEqual([
     ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus module failing — protection degraded' })),
+    ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus module failing and settings rejected — protection degraded' })),
     ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus settings rejected' })),
     ...['c1', 'second'].map(id => ({ id, text: 'Auto Nexus module recovered — settings accepted' })),
   ]);
   health('failing'); config(false); health('healthy'); config(true);
-  expect(notices()).toHaveLength(12);
+  expect(notices()).toHaveLength(16);
   now += 30000;
   health('failing'); config(false); health('healthy'); config(true);
-  expect(notices()).toHaveLength(18);
+  expect(notices()).toHaveLength(24);
   f.h.close('c1'); f.h.close('second');
   now += 30000;
   health('failing'); config(false); health('healthy'); config(true);
-  expect(notices()).toHaveLength(18);
+  expect(notices()).toHaveLength(24);
 });
 
 it('announces rejection again after recovery inside 30 seconds and skips clients logging in', () => {
@@ -508,4 +509,35 @@ it('announces rejection again after recovery inside 30 seconds and skips clients
   config(false); expect(f.h.proxy.injected).toHaveLength(3);
   now += 29999; config(false); expect(f.h.proxy.injected).toHaveLength(3);
   now += 1; config(false); expect(f.h.proxy.injected).toHaveLength(4);
+});
+
+
+it.each(['rejected', 'failing'] as const)('announces every combined state starting with %s', first => {
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const f = fixture();
+  f.h.packet(f.client, 'CREATESUCCESS', { objectId: 1, charId: 1 });
+  const health = (state: 'healthy' | 'failing') => f.h.proxy.emit('moduleStatus', { moduleId: 'auto-nexus', state, since: now });
+  const config = (ok: boolean) => f.h.proxy.emit('moduleConfig', ok
+    ? { type: 'moduleConfig', moduleId: 'auto-nexus', ok: true }
+    : { type: 'moduleConfig', moduleId: 'auto-nexus', ok: false, error: 'invalid' });
+  const texts = () => f.h.proxy.injected.map(i => f.h.factory.createFromBytes(i.data, 'server').data.text);
+  const failing = 'Auto Nexus module failing — protection degraded';
+  const rejected = 'Auto Nexus settings rejected';
+  const both = 'Auto Nexus module failing and settings rejected — protection degraded';
+  if (first === 'rejected') { config(false); health('failing'); }
+  else { health('failing'); config(false); }
+  expect(texts()).toEqual([first === 'rejected' ? rejected : failing, both]);
+  health('failing'); config(false);
+  expect(texts()).toHaveLength(2);
+  now += 30000; config(false);
+  expect(texts()).toEqual([first === 'rejected' ? rejected : failing, both, both]);
+  // Both ways of partially recovering must announce the remaining problem immediately.
+  if (first === 'rejected') config(true);
+  else health('healthy');
+  expect(texts().at(-1)).toBe(first === 'rejected' ? failing : rejected);
+  if (first === 'rejected') health('healthy');
+  else config(true);
+  expect(texts()).toHaveLength(5);
+  expect(texts().at(-1)).toBe('Auto Nexus module recovered — settings accepted');
 });

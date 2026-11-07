@@ -92,7 +92,8 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     const wasDegraded = moduleFailing || configRejected;
     if ('state' in event) moduleFailing = event.state === 'failing';
     else configRejected = !event.configOk;
-    const text = configRejected ? 'Auto Nexus settings rejected'
+    const text = moduleFailing && configRejected ? 'Auto Nexus module failing and settings rejected — protection degraded'
+      : configRejected ? 'Auto Nexus settings rejected'
       : moduleFailing ? 'Auto Nexus module failing — protection degraded'
       : wasDegraded ? 'Auto Nexus module recovered — settings accepted' : undefined;
     if (disposed || !ctx.enabled || !text) return;

@@ -599,8 +599,9 @@ export class AppController extends EventEmitter<ControllerEvents> {
       host.off('routed', onRouted); host.off('diagnostic', diagnostic); host.off('note', note); host.off('fault', fault); host.off('exit', exit);
     });
   }
-  private warnLowHp(cause: string, hpPct: number, thresholdPct: number): void {
-    const text = `${cause} at ${Math.round(hpPct)}% HP (threshold ${thresholdPct}%) — Auto Nexus could not act`;
+  private warnLowHp(cause: string, hpPct: number, thresholdPct: number, statusAgeMs = 0): void {
+    const age = statusAgeMs > 5_000 ? ` (last reported ${Math.round(statusAgeMs / 1000)} s before the crash)` : '';
+    const text = `${cause} at ${Math.round(hpPct)}% HP (threshold ${thresholdPct}%) — Auto Nexus could not act${age}`;
     log.warn('Auto Nexus', text);
     this.current.safetyWarning = { message: text, expiresAt: Date.now() + 60_000 };
     this.changed();
@@ -609,15 +610,16 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private warnCrashHp(): void {
     if (!this.plugins().find(plugin => plugin.id === 'auto-nexus')?.enabled) return;
     for (const id of this.connected) {
-      const status = this.nexusStatuses.get(id)?.status;
-      if (!status || status.enabled !== true || status.protectionState === 'safe'
+      const sample = this.nexusStatuses.get(id);
+      const status = sample?.status;
+      if (!sample || !status || status.enabled !== true || status.protectionState === 'safe'
         || ['nexus', 'dead', 'transition'].includes(String(status.phase))) continue;
       const { confirmedHp, lowerHp, maxHp, thresholdPct } = status;
       if (typeof confirmedHp !== 'number' || !Number.isFinite(confirmedHp)
         || typeof maxHp !== 'number' || !Number.isFinite(maxHp) || maxHp <= 0
         || typeof thresholdPct !== 'number' || !Number.isFinite(thresholdPct)) continue;
       const hp = typeof lowerHp === 'number' && Number.isFinite(lowerHp) ? Math.min(confirmedHp, lowerHp) : confirmedHp;
-      if (hp / maxHp * 100 < 2 * thresholdPct) this.warnLowHp('Network worker crashed', hp / maxHp * 100, thresholdPct);
+      if (hp / maxHp * 100 < 2 * thresholdPct) this.warnLowHp('Network worker crashed', hp / maxHp * 100, thresholdPct, Date.now() - sample.at);
     }
   }
 

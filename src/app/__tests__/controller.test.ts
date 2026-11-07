@@ -298,6 +298,23 @@ describe('AppController lifecycle', () => {
     await drain();
   });
 
+  it.each([5000, 12000])('qualifies crash HP when the snapshot is %i ms old', async ageMs => {
+    const host = await protectedSession();
+    const reportedAt = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(reportedAt);
+    contexts.at(-2)!.broadcastData('status', { clientId: 'game', enabled: true, phase: 'armed',
+      protectionState: 'monitoring', confirmedHp: 250, lowerHp: 180, maxHp: 1000, thresholdPct: 25 });
+    clock.mockReturnValue(reportedAt + ageMs);
+    const warn = vi.spyOn(log, 'warn');
+    host.emit('exit', { code: 1, expected: false });
+    const text = 'Network worker crashed at 18% HP (threshold 25%) — Auto Nexus could not act'
+      + (ageMs > 5000 ? ' (last reported 12 s before the crash)' : '');
+    expect(controller.state().safetyWarning?.message).toBe(text);
+    expect(warn).toHaveBeenCalledWith('Auto Nexus', text);
+    clock.mockRestore();
+    await drain();
+  });
+
   it('uses each connected client snapshot on crash and excludes disconnected clients', async () => {
     const host = await protectedSession();
     const notice = vi.fn(); controller.on('state', notice);
