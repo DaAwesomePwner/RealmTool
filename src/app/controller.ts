@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { gameProcessIds } from '../game/gameProcess.ts';
 import { readGameFileStamps, readCatalogSourceSync, sameGameFiles, type CatalogSource } from '../data/catalogSource.ts';
 import { readGameBuildAsync } from '../game/gameBuild.ts';
 import { loadConsumables } from '../data/consumables.ts';
@@ -11,7 +14,7 @@ import { AppConfigStore } from '../config/appConfig.ts';
 import { ProfileStore } from '../config/store.ts';
 import { createProfile, deleteProfile, listProfiles, validProfileName } from '../config/profiles.ts';
 import { findExaltDirs, isExaltDir } from '../game/exaltFinder.ts';
-import { installHelper, uninstallHelper, inspectHelper, type HelperState, type InstallResult, type UninstallStatus } from '../game/helperInstaller.ts';
+import { BACKUP_FILE, HELPER_FILE, HELPER_MARKER, installHelper, uninstallHelper, inspectHelper, type HelperState, type InstallResult, type UninstallStatus } from '../game/helperInstaller.ts';
 import { describeLaunchTarget, findLaunchTarget, openLaunchTarget, type LaunchTarget } from '../game/gameLauncher.ts';
 import type { PluginDefinition } from '../plugins/api.ts';
 import { PluginHost, type ProxyLike } from '../plugins/host.ts';
@@ -30,6 +33,12 @@ export interface AppState {
   data: DataState;
   proxy: { state: ProxyState; port: number | null; error: string | null };
   game: { dir: string | null; candidates: string[]; launcher: string | null;
+    /** Observed proxy participation, not a protection guarantee. Always emitted by the controller; optional for older state producers. */
+    routing?: 'unknown' | 'routed' | 'not-routed';
+    /** Explanation of the current routing observation. */
+    routingReason?: string;
+    /** Unix milliseconds when routing state/reason last changed. */
+    routingUpdatedAt?: number;
     helper: { state: HelperState | 'unknown'; backup: boolean } };
   /** Sessions with an upstream connection; never implies the helper DLL is loaded. */
   sessions: { open: number; connected: number };
@@ -45,6 +54,7 @@ interface CatalogSelection {
   source?: CatalogSource | null;
 }
 export interface ControllerDeps {
+  gameProcessIds(): Promise<number[] | null>;
   readGameBuild: typeof readGameBuildAsync;
   catalogBuilds(gameBuild: string): CatalogSelection;
   readGameFileStamps: typeof readGameFileStamps;
@@ -67,6 +77,22 @@ export class OperationBusyError extends Error {
 }
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
+const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+
+/** One inspector per controller: the bundled helper is immutable during its lifetime. */
+function cachedHelperInspector(): typeof inspectHelper {
+  let bundled: { path: string; hash: string } | undefined;
+  return (gameDir, helperPath) => {
+    const backup = existsSync(join(gameDir, BACKUP_FILE));
+    const target = join(gameDir, HELPER_FILE);
+    if (!existsSync(target)) return { state: 'absent', backup };
+    const bytes = readFileSync(target);
+    if (!bytes.includes(HELPER_MARKER, 0, 'latin1')) return { state: 'foreign', backup };
+    if (bundled?.path !== helperPath) bundled = { path: helperPath, hash: hash(readFileSync(helperPath)) };
+    return { state: hash(bytes) === bundled.hash ? 'installed' : 'outdated', backup };
+  };
+}
+
 export class AppController extends EventEmitter<ControllerEvents> {
   private readonly config: AppConfigStore;
   private readonly resources: ResourcePaths;
@@ -85,6 +111,12 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private dataAbort: AbortController | null = null;
   private dataFlight: Promise<RefreshResult | null> | null = null;
   private dataTimer: ReturnType<typeof setInterval> | null = null;
+  private routingTimer: ReturnType<typeof setInterval> | null = null;
+  private routingFlight: Promise<void> | null = null;
+  private observedPids: number[] = [];
+  private routedPids = new Set<number>();
+  private unboundSession = false;
+  private unroutedSince: number | null = null;
   private catalogBuilds: CatalogSelection | null = null;
   private catalogsInvalidated = false;
   private waitingBuilds = new Set<string>();
@@ -94,7 +126,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     super();
     this.config = options.config; this.resources = options.resources; this.fallback = options.fallback;
     this.deps = {
-      readGameBuild: readGameBuildAsync, readGameFileStamps, refreshCatalogs,
+      gameProcessIds, readGameBuild: readGameBuildAsync, readGameFileStamps, refreshCatalogs,
       catalogBuilds: gameBuild => {
         const options = { appDataDir: this.config.dir, gameBuild };
         const consumables = loadConsumables({ ...options, bundledPath: join(this.resources.dataDir, 'catalogs/consumables.json') });
@@ -107,7 +139,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
       },
       createHost: options => new ProxyHost(options), plugins: BUILTIN_PLUGINS,
       nativeModuleError: tcpOwnerSourceError, findGameDirs: findExaltDirs, isGameDir: isExaltDir,
-      installHelper, uninstallHelper, inspectHelper,
+      installHelper, uninstallHelper, inspectHelper: cachedHelperInspector(),
       findLauncher: override => findLaunchTarget(undefined, override), openLauncher: openLaunchTarget,
       launch: (onError, override) => {
         const target = this.deps.findLauncher(override);
@@ -123,7 +155,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.current = {
       data: { state: 'idle', gameBuild: null, catalogBuild: null, lastResult: null, error: null },
       proxy: { state: 'stopped', port: null, error: null },
-      game: { dir: config.gameDir ?? candidates[0] ?? null, candidates, launcher: config.launcher, helper: { state: 'unknown', backup: false } },
+      game: { dir: config.gameDir ?? candidates[0] ?? null, candidates, launcher: config.launcher, routing: 'unknown', routingReason: 'Proxy is stopped', routingUpdatedAt: Date.now(), helper: { state: 'unknown', backup: false } },
       sessions: { open: 0, connected: 0 }, profile: { active: config.activeProfile, available: listProfiles(this.config.dir) },
       operation: null, revision: 0,
     };
@@ -137,6 +169,60 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private refreshHelper(): void {
     try { this.current.game.helper = this.current.game.dir ? this.deps.inspectHelper(this.current.game.dir, this.resources.helperDll) : { state: 'unknown', backup: false }; }
     catch { this.current.game.helper = { state: 'unknown', backup: false }; }
+  }
+  private routing(state: NonNullable<AppState['game']['routing']>, reason: string): void {
+    if (this.current.game.routing === state && this.current.game.routingReason === reason) return;
+    Object.assign(this.current.game, { routing: state, routingReason: reason, routingUpdatedAt: Date.now() });
+    this.changed();
+  }
+  private recordRoutedSession(): void {
+    this.unroutedSince = null;
+    if (this.observedPids.length) {
+      for (const pid of this.observedPids) this.routedPids.add(pid);
+    } else this.unboundSession = true;
+    this.routing('routed', 'Game session observed through the proxy');
+  }
+  private checkRouting(): void {
+    if (this.current.proxy.state !== 'running') return;
+    // A live session is stronger evidence than process enumeration.
+    if (this.sessions.size) { this.recordRoutedSession(); return; }
+    if (this.routingFlight) return;
+    const host = this.host;
+    this.routingFlight = (async () => {
+      let pids: number[] | null;
+      try { pids = await this.deps.gameProcessIds(); } catch { pids = null; }
+      if (this.host !== host || this.current.proxy.state !== 'running') return;
+      if (this.sessions.size) {
+        if (pids) this.observedPids = pids;
+        this.recordRoutedSession();
+        return;
+      }
+      if (pids === null) {
+        // Failed enumeration cannot disprove a previously observed session.
+        if (this.current.game.routing !== 'routed') this.routing('unknown', 'Game process could not be checked');
+        return;
+      }
+      const changed = pids.length !== this.observedPids.length || pids.some(pid => !this.observedPids.includes(pid));
+      this.observedPids = pids;
+      this.routedPids = new Set([...this.routedPids].filter(pid => pids.includes(pid)));
+      if (this.unboundSession) {
+        for (const pid of pids) this.routedPids.add(pid);
+        this.unboundSession = false;
+      }
+      if (!pids.length) {
+        this.unroutedSince = null;
+        this.routing('unknown', 'Game is not running');
+      } else if (this.routedPids.size) {
+        this.unroutedSince = null;
+        this.routing('routed', 'Game session observed through the proxy');
+      } else {
+        if (changed) this.unroutedSince = null;
+        this.unroutedSince ??= Date.now();
+        if (Date.now() - this.unroutedSince > 15_000) {
+          this.routing('not-routed', "Game is running but has not connected through RealmTool; if you're in game, restart it so the helper loads.");
+        } else this.routing('unknown', 'Waiting for a game session');
+      }
+    })().finally(() => { this.routingFlight = null; });
   }
   private refreshProfiles(): void {
     this.current.profile = { active: this.config.get().activeProfile, available: listProfiles(this.config.dir) };
@@ -290,7 +376,6 @@ export class AppController extends EventEmitter<ControllerEvents> {
       const stale = removeStaleTargetFiles();
       if (stale) log.info('Helper', `Removed ${stale} stale target file(s)`);
       this.catalogBuilds = null;
-      await this.automaticDataCheck();
       if (this.shuttingDown) return;
       stage = 'Proxy';
       const schema = loadSchema(pathToFileURL(this.resources.dataDir + sep));
@@ -311,7 +396,11 @@ export class AppController extends EventEmitter<ControllerEvents> {
       log.info('Proxy', `Listening on 127.0.0.1:${port}`);
       stage = 'Helper'; this.install(gameDir);
       this.current.proxy = { state: 'running', port, error: null }; this.changed();
-      this.dataTimer = setInterval(() => { void this.automaticDataCheck(); }, 60_000);
+      void this.automaticDataCheck();
+      this.checkRouting();
+      this.routingTimer = setInterval(() => this.checkRouting(), 10_000);
+      this.routingTimer.unref();
+      this.dataTimer = setInterval(() => { this.refreshHelper(); this.changed(); void this.automaticDataCheck(); }, 60_000);
       this.dataTimer.unref();
     } catch (error) {
       log.error(stage, message(error));
@@ -324,6 +413,8 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private watchHost(host: ReturnType<ControllerDeps['createHost']>): void {
     // Retain exact listener references so an old worker cannot affect a subsequent start.
     const onSession = ({ id, remotePort }: { id: string; remotePort: number }) => {
+      this.refreshHelper();
+      this.recordRoutedSession();
       void this.automaticDataCheck();
       this.sessions.add(id); this.sessionState(); log.info('Proxy', `Game connected (${id.slice(0, 8)}, port ${remotePort})`);
     };
@@ -363,6 +454,11 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.current.sessions = { open: this.sessions.size, connected: this.connected.size }; this.changed();
   }
   private async cleanup(): Promise<void> {
+    if (this.routingTimer) clearInterval(this.routingTimer);
+    this.routingTimer = null;
+    this.observedPids = []; this.routedPids.clear(); this.unboundSession = false;
+    this.unroutedSince = null;
+    this.routing('unknown', 'Proxy is stopped');
     this.dataAbort?.abort(new Error('Game data refresh cancelled'));
     await this.dataFlight?.catch(() => {});
     if (this.dataTimer) clearInterval(this.dataTimer);

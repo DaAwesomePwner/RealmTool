@@ -31,6 +31,7 @@ describe('AppController lifecycle', () => {
     config = new AppConfigStore(join(root, 'config')); config.update({ gameDir: game });
     hosts = []; contexts = [];
     deps = {
+      gameProcessIds: vi.fn(async () => []),
       readGameFileStamps: async () => ({ resourcesAssets: { size: 1, mtimeMs: 0 }, bootConfig: { size: 2, mtimeMs: 0 } }),
       findGameDirs: () => [game], nativeModuleError: () => null,
       createHost: vi.fn(options => {
@@ -52,6 +53,7 @@ describe('AppController lifecycle', () => {
     log.setConsole(false); detach = log.addSink(() => {});
     controller = make();
   });
+  async function drain() { for (let i = 0; i < 40; i++) await Promise.resolve(); }
   function selection(build: string, files = { resourcesAssets: { size: 1, mtimeMs: 0 }, bootConfig: { size: 2, mtimeMs: 0 } }) {
     return { consumables: build, safety: build, usesAppData: true, source: { schemaVersion: 1 as const, gameBuild: build, ...files } };
   }
@@ -64,7 +66,106 @@ describe('AppController lifecycle', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('waits for mismatched data before loading plugins, shares refreshes, then reloads live', async () => {
+  it('re-inspects helper on polls and sessions and detects missing routing with a grace period', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let pids = [123];
+      deps.gameProcessIds = vi.fn(async () => pids);
+      controller = make(); await controller.startProxy(); await drain();
+      expect(controller.state().game.routing).toBe('unknown');
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(controller.state().game.routing).toBe('not-routed');
+      rmSync(join(game, HELPER_FILE));
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.helper.state).toBe('absent');
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(7);
+      writeFileSync(join(game, HELPER_FILE), 'RealmTool-Helper/current');
+      hosts[0].emit('session', { id: 'game', remotePort: 123 });
+      expect(controller.state().game).toMatchObject({ routing: 'routed', helper: { state: 'installed' } });
+      hosts[0].emit('closed', { id: 'game', by: 'game' });
+      pids = []; await vi.advanceTimersByTimeAsync(60_000);
+      expect(controller.state().game.routing).toBe('unknown');
+      pids = [456]; await vi.advanceTimersByTimeAsync(30_000);
+      expect(controller.state().game.routing).toBe('not-routed');
+      await controller.stopProxy();
+      const count = vi.mocked(deps.gameProcessIds!).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(controller.state().game.routing).toBe('unknown');
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(count);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('retains routing at character select, but a new game PID needs a new session', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let pids = [123];
+      deps.gameProcessIds = vi.fn(async () => pids);
+      controller = make(); await controller.startProxy(); await drain();
+      hosts[0].emit('session', { id: 'game', remotePort: 123 });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(1); // No enumeration with open sessions.
+      hosts[0].emit('closed', { id: 'game', by: 'game' });
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe('routed');
+      pids = [456]; // Restart between polls, without observing an empty list.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(controller.state().game.routing).toBe('not-routed');
+      expect(controller.state().game.routingReason).toContain("if you're in game");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('binds fresh PIDs when a restarted game connects during enumeration', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      const enumerate = vi.fn(async () => [123]);
+      deps.gameProcessIds = enumerate;
+      controller = make(); await controller.startProxy(); await drain();
+      let finish!: (pids: number[]) => void;
+      enumerate.mockImplementationOnce(() => new Promise<number[]>(resolve => { finish = resolve; }));
+      await vi.advanceTimersByTimeAsync(10_000);
+      hosts[0].emit('session', { id: 'restarted', remotePort: 123 });
+      finish([456]); await drain();
+      enumerate.mockResolvedValue([456]);
+      hosts[0].emit('closed', { id: 'restarted', by: 'game' });
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe('routed');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('prioritizes an open session over a late empty process result', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    try {
+      let finish!: (pids: number[]) => void;
+      deps.gameProcessIds = vi.fn(() => new Promise<number[]>(resolve => { finish = resolve; }));
+      controller = make(); await controller.startProxy(); await drain();
+      hosts[0].emit('session', { id: 'game', remotePort: 123 });
+      finish([]); await drain();
+      expect(controller.state().game.routing).toBe('routed');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(controller.state().game.routing).toBe('routed');
+      expect(deps.gameProcessIds).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('caches the bundled helper hash while re-reading installed bytes on sessions', async () => {
+    await controller.startProxy(); await drain();
+    expect(controller.state().game.helper.state).toBe('installed');
+    rmSync(helper);
+    hosts[0].emit('session', { id: 'one', remotePort: 123 });
+    expect(controller.state().game.helper.state).toBe('installed');
+    writeFileSync(join(game, HELPER_FILE), 'RealmTool-Helper/old');
+    writeFileSync(join(game, BACKUP_FILE), 'backup');
+    hosts[0].emit('session', { id: 'two', remotePort: 124 });
+    expect(controller.state().game.helper).toEqual({ state: 'outdated', backup: true });
+    writeFileSync(join(game, HELPER_FILE), 'foreign');
+    hosts[0].emit('session', { id: 'three', remotePort: 125 });
+    expect(controller.state().game.helper.state).toBe('foreign');
+    rmSync(join(game, HELPER_FILE));
+    hosts[0].emit('session', { id: 'four', remotePort: 126 });
+    expect(controller.state().game.helper.state).toBe('absent');
+  });
+
+  it('listens before mismatched data finishes, shares refreshes, then reloads live', async () => {
     await controller.shutdown();
     deps.readGameBuild = vi.fn(async () => 'new');
     let published = 'old'; deps.catalogBuilds = () => selection(published);
@@ -73,7 +174,9 @@ describe('AppController lifecycle', () => {
     controller = make();
     const started = controller.startProxy();
     await vi.waitFor(() => expect(deps.refreshCatalogs).toHaveBeenCalledOnce());
-    expect(controller.state().data.state).toBe('refreshing'); expect(contexts).toHaveLength(0);
+    expect(controller.state().data.state).toBe('refreshing'); expect(contexts).toHaveLength(1);
+    await started; expect(hosts[0].start).toHaveBeenCalledOnce();
+    expect(controller.state().proxy.state).toBe('running');
     const manual = controller.refreshData();
     published = 'new'; finish({ gameBuild: 'new', items: 1, projectiles: 2, tiles: 3, ms: 4 });
     await Promise.all([started, manual]);
@@ -92,7 +195,7 @@ describe('AppController lifecycle', () => {
     try {
       deps.readGameBuild = vi.fn(async () => 'new'); deps.catalogBuilds = () => ({ consumables: 'old', safety: 'old' });
       deps.refreshCatalogs = vi.fn(async () => { throw new Error('fixture extraction failure'); });
-      controller = make(); await controller.startProxy();
+      controller = make(); await controller.startProxy(); await drain();
       expect(controller.state().proxy.state).toBe('running'); expect(controller.state().data.state).toBe('failed');
       hosts[0].emit('session', { id: 'one', remotePort: 123 });
       await vi.advanceTimersByTimeAsync(240_000);
@@ -112,7 +215,7 @@ describe('AppController lifecycle', () => {
       let build = 'A'; deps.readGameBuild = async () => build;
       deps.catalogBuilds = () => ({ consumables: null, safety: null });
       deps.refreshCatalogs = vi.fn(async () => { throw new Error('fixture update in progress'); });
-      controller = make(); await controller.startProxy();
+      controller = make(); await controller.startProxy(); await drain();
       await vi.advanceTimersByTimeAsync(240_000);
       await expect(controller.refreshData()).rejects.toThrow('fixture update in progress');
       await vi.advanceTimersByTimeAsync(60_000);
@@ -140,7 +243,7 @@ describe('AppController lifecycle', () => {
       let build = 'A'; deps.readGameBuild = async () => build;
       let published = 'A'; deps.catalogBuilds = () => selection(published);
       deps.refreshCatalogs = vi.fn(async () => { published = build; return { gameBuild: build, items: 1, projectiles: 2, tiles: 3, ms: 4 }; });
-      controller = make(); await controller.startProxy(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+      controller = make(); await controller.startProxy(); await drain(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
       build = 'B'; hosts[0].emit('session', { id: 'one', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
       expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
       build = 'C'; await vi.advanceTimersByTimeAsync(60_000);
@@ -166,7 +269,7 @@ describe('AppController lifecycle', () => {
       writeFileSync(join(out, 'source.json'), JSON.stringify(source));
       return { gameBuild: 'same', items: 1, projectiles: 2, tiles: 3, ms: 4 };
     });
-    controller = make(); await controller.startProxy();
+    controller = make(); await controller.startProxy(); await drain();
     expect(deps.refreshCatalogs).toHaveBeenCalledTimes(kind === 'matching' ? 0 : 1);
     expect(controller.state().data.state).toBe('idle');
   });
@@ -177,7 +280,7 @@ describe('AppController lifecycle', () => {
       const build = JSON.parse(readFileSync(join(resourcePaths().dataDir, 'catalogs/safety.json'), 'utf8')).gameBuild;
       deps.readGameBuild = vi.fn(async () => build); deps.refreshCatalogs = vi.fn();
       const stats = deps.readGameFileStamps = vi.fn(deps.readGameFileStamps!);
-      controller = make(); await controller.startProxy();
+      controller = make(); await controller.startProxy(); await drain();
       expect(deps.refreshCatalogs).not.toHaveBeenCalled(); expect(controller.state().data.catalogBuild).toBe(build);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(stats).toHaveBeenCalledTimes(2); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
@@ -194,7 +297,7 @@ describe('AppController lifecycle', () => {
       deps.readGameBuild = async () => 'new'; deps.readGameFileStamps = async () => stamps;
       let published = 'old'; deps.catalogBuilds = vi.fn(() => selection(published, stamps));
       deps.refreshCatalogs = vi.fn(async () => { published = 'new'; return { gameBuild: 'new', items: 1, projectiles: 2, tiles: 3, ms: 4 }; });
-      controller = make(); await controller.startProxy();
+      controller = make(); await controller.startProxy(); await drain();
       expect(controller.state().proxy.state).toBe('running'); expect(controller.state().data.state).toBe('idle');
       hosts[0].emit('session', { id: 'quiet', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
       expect(deps.refreshCatalogs).not.toHaveBeenCalled();
@@ -213,7 +316,7 @@ describe('AppController lifecycle', () => {
     deps.readGameFileStamps = async () => files;
     let published = 'old'; deps.catalogBuilds = () => selection(published, files);
     deps.refreshCatalogs = vi.fn(async () => { published = 'new'; return { gameBuild: 'new', items: 1, projectiles: 2, tiles: 3, ms: 4 }; });
-    controller = make(); await controller.startProxy(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+    controller = make(); await controller.startProxy(); await drain(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
     await controller.refreshData(); expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
   });
 
@@ -226,7 +329,7 @@ describe('AppController lifecycle', () => {
       deps.catalogBuilds = vi.fn(() => ({ consumables: 'new', safety: 'new', usesAppData: true,
         source: { schemaVersion: 1 as const, gameBuild: 'new', ...original } }));
       deps.refreshCatalogs = vi.fn(async () => { throw new Error('fixture extraction failure'); });
-      controller = make(); await controller.startProxy(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
+      controller = make(); await controller.startProxy(); await drain(); expect(deps.refreshCatalogs).not.toHaveBeenCalled();
       const invalidated = vi.fn(); contexts[0].onDataInvalidated(invalidated);
       current = { ...current, resourcesAssets: { size: 3, mtimeMs: 1 } };
       await vi.advanceTimersByTimeAsync(60_000);
@@ -243,7 +346,7 @@ describe('AppController lifecycle', () => {
     deps.readGameFileStamps = async () => { if (failStats) throw new Error('fixture files temporarily unavailable'); return files; };
     deps.catalogBuilds = () => ({ consumables: 'A', safety: 'A', usesAppData: kind === 'unreadable fingerprint',
       source: { schemaVersion: 1, gameBuild: 'A', ...files } });
-    deps.refreshCatalogs = vi.fn(); controller = make(); await controller.startProxy();
+    deps.refreshCatalogs = vi.fn(); controller = make(); await controller.startProxy(); await drain();
     const invalidate = vi.fn(); contexts[0].onDataInvalidated(invalidate);
     if (kind === 'build mismatch') build = 'B'; failStats = true;
     await expect(controller.refreshData()).rejects.toThrow('temporarily unavailable');
@@ -268,7 +371,7 @@ describe('AppController lifecycle', () => {
         return files;
       };
       deps.refreshCatalogs = vi.fn(async () => ({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 }));
-      controller = make(); await controller.startProxy();
+      controller = make(); await controller.startProxy(); await drain();
       const invalidate = vi.fn(); contexts[0].onDataInvalidated(invalidate);
       const reload = vi.fn(); contexts[0].onDataRefreshed(reload);
       failRead = true;
@@ -297,7 +400,7 @@ describe('AppController lifecycle', () => {
       deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => selection('A', files);
       deps.readGameFileStamps = async () => { if (failStats) throw new Error('fixture locked file'); return files; };
       deps.refreshCatalogs = vi.fn(async () => ({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 }));
-      controller = make(); await controller.startProxy();
+      controller = make(); await controller.startProxy(); await drain();
       failStats = true; await expect(controller.refreshData()).rejects.toThrow('locked file');
       failStats = false;
       hosts[0].emit('session', { id: 'recovery', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
@@ -318,7 +421,7 @@ describe('AppController lifecycle', () => {
       deps.readGameFileStamps = async () => { if (failStats) throw new Error('fixture locked file'); return selection('A').source; };
       const result = { gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 };
       deps.refreshCatalogs = vi.fn(async () => result);
-      controller = make(); await controller.startProxy();
+      controller = make(); await controller.startProxy(); await drain();
       await controller.refreshData(); expect(deps.refreshCatalogs).toHaveBeenCalledOnce();
       const invalidate = vi.fn(); contexts[0].onDataInvalidated(invalidate);
       const reload = vi.fn(); contexts[0].onDataRefreshed(reload);
@@ -343,7 +446,7 @@ describe('AppController lifecycle', () => {
         return { ...selection(build), source: kind === 'missing fingerprint' ? null : selection('old').source };
       };
       deps.refreshCatalogs = vi.fn(async () => { published = true; return { gameBuild: build, items: 1, projectiles: 2, tiles: 3, ms: 4 }; });
-      controller = make(); await controller.startProxy();
+      controller = make(); await controller.startProxy(); await drain();
       const reload = vi.fn(); contexts[0].onDataRefreshed(reload);
       build = 'B'; hosts[0].emit('session', { id: 'new', remotePort: 123 }); await vi.advanceTimersByTimeAsync(0);
       expect(controller.state().data).toMatchObject({ state: 'failed', catalogBuild: kind === 'missing' ? null : kind === 'old' ? 'A' : 'B', lastResult: null });
@@ -358,7 +461,7 @@ describe('AppController lifecycle', () => {
     deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => ({ consumables: 'A', safety: 'A' });
     let finish!: (result: import('../refreshData.ts').RefreshResult) => void, signal: AbortSignal | undefined;
     deps.refreshCatalogs = vi.fn((_game, _out, input) => { signal = input; return new Promise<import('../refreshData.ts').RefreshResult>(resolve => { finish = resolve; }); });
-    controller = make(); await controller.startProxy();
+    controller = make(); await controller.startProxy(); await drain();
     const reload = vi.fn(); contexts[0].onDataRefreshed(reload);
     const refresh = controller.refreshData().catch(error => error);
     await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
@@ -394,7 +497,7 @@ describe('AppController lifecycle', () => {
       return installHelper(dir, path);
     });
     controller = make();
-    await controller.startProxy();
+    await controller.startProxy(); await drain();
     expect(save.mock.invocationCallOrder[0]).toBeLessThan(install.mock.invocationCallOrder[0]);
     expect(new AppConfigStore(config.dir).get()).toMatchObject({ gameDir: game, helperDirs: [game] });
   });
@@ -442,19 +545,19 @@ describe('AppController lifecycle', () => {
   it('retains previously installed folders when switching game folders', async () => {
     const other = join(root, 'other'); mkdirSync(other);
     writeFileSync(join(other, 'RotMG Exalt.exe'), 'fixture');
-    await controller.startProxy(); await controller.stopProxy();
+    await controller.startProxy(); await drain(); await controller.stopProxy();
     await controller.setGameDir(other);
     expect(config.get().helperDirs).toEqual([game]);
     expect(existsSync(join(game, HELPER_FILE))).toBe(true);
-    await controller.startProxy();
+    await controller.startProxy(); await drain();
     expect(new AppConfigStore(config.dir).get().helperDirs).toEqual([game, other]);
   });
 
   it('preserves a target recorded by another store when restarting the proxy', async () => {
     const other = join(root, 'other');
-    await controller.startProxy(); await controller.stopProxy();
+    await controller.startProxy(); await drain(); await controller.stopProxy();
     new AppConfigStore(config.dir).addHelperDir(other);
-    await controller.startProxy();
+    await controller.startProxy(); await drain();
     expect(new AppConfigStore(config.dir).get().helperDirs).toEqual([game, other]);
   });
 
@@ -493,7 +596,7 @@ describe('AppController lifecycle', () => {
   });
 
   it('disables modules, flushes settings before worker stop, and starts a fresh plugin host', async () => {
-    await controller.startProxy();
+    await controller.startProxy(); await drain();
     expect(controller.updatePluginSetting('fixture', 'value', 9)).toEqual({ ok: true });
     const path = new ProfileStore({ dir: config.dir }).path;
     hosts[0].stop.mockImplementation(async () => {
@@ -501,7 +604,7 @@ describe('AppController lifecycle', () => {
       expect(JSON.parse(readFileSync(path, 'utf8')).plugins.fixture.settings.value).toBe(9);
     });
     await controller.stopProxy(); expect(controller.state().proxy.state).toBe('stopped');
-    await controller.startProxy();
+    await controller.startProxy(); await drain();
     expect(contexts).toHaveLength(2); expect(contexts[1]).not.toBe(contexts[0]);
     expect(contexts[1].getSetting('value')).toBe(9);
   });
@@ -512,7 +615,7 @@ describe('AppController lifecycle', () => {
     profile.scheduleSave({ schemaVersion: 1, plugins: { fixture: { settings: { value: 7 } } } }); profile.flush();
     await controller.selectProfile('second'); expect(hosts).toHaveLength(0);
     expect(config.get().activeProfile).toBe('second');
-    await controller.selectProfile('default'); await controller.startProxy();
+    await controller.selectProfile('default'); await controller.startProxy(); await drain();
     controller.updatePluginSetting('fixture', 'value', 3);
     await controller.selectProfile('second');
     expect(hosts[0].stop).toHaveBeenCalledOnce(); expect(hosts).toHaveLength(2);
@@ -523,7 +626,7 @@ describe('AppController lifecycle', () => {
   it.each(['default', 'DEFAULT'])('copies pending settings from active profile %s before its debounce expires', async from => {
     const profile = new ProfileStore({ dir: config.dir });
     profile.scheduleSave({ schemaVersion: 1, plugins: { fixture: { settings: { value: 1 } } } }); profile.flush();
-    await controller.startProxy();
+    await controller.startProxy(); await drain();
     expect(controller.updatePluginSetting('fixture', 'value', 9)).toEqual({ ok: true });
     expect(profile.load().plugins.fixture.settings?.value).toBe(1);
     await controller.createProfile('copy', from);
@@ -541,14 +644,14 @@ describe('AppController lifecycle', () => {
   });
 
   it('rejects uninstall while running and leaves installed helper on stop', async () => {
-    await controller.startProxy(); await expect(controller.uninstallHelper()).rejects.toThrow();
+    await controller.startProxy(); await drain(); await expect(controller.uninstallHelper()).rejects.toThrow();
     await controller.stopProxy(); expect(inspectHelper(game, helper).state).toBe('installed');
     expect(await controller.uninstallHelper()).toBe('removed');
   });
 
   it('tracks sessions honestly and reports worker exit with increasing revisions', async () => {
     const states: AppState[] = []; controller.on('state', state => states.push(state));
-    await controller.startProxy();
+    await controller.startProxy(); await drain();
     hosts[0].emit('session', { id: 'c', remotePort: 50 });
     expect(controller.state().sessions).toEqual({ open: 1, connected: 0 });
     hosts[0].emit('connected', { id: 'c', generation: 1 });
@@ -563,7 +666,7 @@ describe('AppController lifecycle', () => {
 
   it('emits plugin snapshots and sanitized data', async () => {
     const snapshots = vi.fn(), data = vi.fn(); controller.on('plugins', snapshots); controller.on('data', data);
-    await controller.startProxy(); controller.setPluginEnabled('fixture', false);
+    await controller.startProxy(); await drain(); controller.setPluginEnabled('fixture', false);
     contexts[0].setData('status', 'ready'); contexts[0].broadcastData('status', { ready: true });
     expect(snapshots).toHaveBeenCalled();
     expect(data).toHaveBeenCalledWith({ pluginId: 'fixture', type: 'status', data: { ready: true } });
@@ -583,7 +686,7 @@ describe('AppController lifecycle', () => {
     await controller.shutdown();
     config.update({ launcher: join(game, 'RotMG Exalt.exe') });
     deps.launch = vi.fn(); controller = make();
-    if (running) await controller.startProxy();
+    if (running) await controller.startProxy(); await drain();
     await expect(controller.launchGame()).rejects.toThrow('Select the RotMG Exalt Launcher');
     expect(controller.state().proxy).toMatchObject({ state: 'failed', port: null, error: expect.stringContaining('Select the RotMG Exalt Launcher') });
     expect(deps.launch).not.toHaveBeenCalled();
@@ -625,7 +728,7 @@ describe('AppController lifecycle', () => {
   });
 
   it('keeps a failed profile restart fully stopped with the new selection saved', async () => {
-    await controller.createProfile('second'); await controller.startProxy();
+    await controller.createProfile('second'); await controller.startProxy(); await drain();
     vi.mocked(deps.installHelper!).mockImplementationOnce(() => { throw new Error('helper locked'); });
     await expect(controller.selectProfile('second')).rejects.toThrow('helper locked');
     expect(config.get().activeProfile).toBe('second');

@@ -57,6 +57,56 @@ describe('Auto Nexus UI status', () => {
     loaded = { ok: false, reason: 'invalid replacement' }; h.host.notifyDataRefreshed();
     expect(h.proxy.configured).toHaveLength(count);
   });
+  it('retries a thrown reload on the next session', () => {
+    let loaded: SafetyCatalogLoad = catalog;
+    const dir = mkdtempSync(join(tmpdir(), 'realmtool-retry-'));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const h = startHost([{ ...plugin, register: ctx => register(ctx, () => loaded, () => 'A') }],
+      { profileDir: dir, gameDir: 'fixture' });
+    cleanups.push(() => h.host.stop());
+    h.host.notifyDataInvalidated('stale');
+    loaded = { ok: false, reason: 'transient failure' };
+    h.host.notifyDataRefreshed();
+    expect(records.some(r => r.message.includes('Catalog reload failed'))).toBe(true);
+    expect(h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalog: null });
+    loaded = catalog; h.connect();
+    expect(h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalogState: ready });
+  });
+  it('retries failed reloads mid-session at most once per 15 seconds, except while invalidated', () => {
+    let now = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const loader = vi.fn((): SafetyCatalogLoad => catalog);
+    const dir = mkdtempSync(join(tmpdir(), 'realmtool-message-retry-'));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const h = startHost([{ ...plugin, register: ctx => register(ctx, loader, () => 'A') }],
+      { profileDir: dir, gameDir: 'fixture' });
+    cleanups.push(() => h.host.stop());
+    const client = h.connect();
+    const send = () => h.workerMessage(client, 'auto-nexus', { type: 'status', generation: 1,
+      sampledAt: now, collisionHp: 'fallback', catalog: { state: 'fallback', reason: 'stale' }, status: status() });
+    h.host.notifyDataInvalidated('stale');
+    const before = loader.mock.calls.length;
+    send(); expect(loader).toHaveBeenCalledTimes(before);
+    loader.mockImplementation(() => { throw new Error('disk busy'); });
+    h.host.notifyDataRefreshed();
+    send();
+    const failed = loader.mock.calls.length;
+    loader.mockReturnValue(catalog);
+    now = 14_999; send(); expect(loader).toHaveBeenCalledTimes(failed);
+    expect(h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalog: null });
+    now = 15_000; send();
+    expect(loader).toHaveBeenCalledTimes(failed + 1);
+    expect(h.proxy.configured.at(-1)?.['auto-nexus']).toMatchObject({ catalogState: ready });
+  });
+  it('does not sync an unchanged catalog retry', () => {
+    let now = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const f = fixture(undefined, true, { ok: false, reason: 'missing' });
+    const before = f.h.proxy.configured.length;
+    sendStatus(f);
+    now = 15_000; sendStatus(f);
+    expect(f.h.proxy.configured).toHaveLength(before);
+  });
   it('publishes only the sanitized fresh status shape', () => {
     vi.spyOn(performance, 'now').mockReturnValue(1000);
     const f = fixture(); const publish = vi.spyOn(f.ctx, 'broadcastData');

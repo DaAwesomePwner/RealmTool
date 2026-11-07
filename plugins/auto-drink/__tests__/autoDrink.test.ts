@@ -29,6 +29,47 @@ describe('Auto Drink facade through the RealmTool host', () => {
     f.loader.mockImplementation(() => { throw new Error('fixture reload failure'); }); f.host.notifyDataRefreshed();
     expect(f.config()).toBe(before);
   });
+  it('retries a thrown reload on the next session', () => {
+    const f = fixture(); f.ctx.enabled = true;
+    f.host.notifyDataInvalidated('stale');
+    f.loader.mockReturnValue({ ok: false, reason: 'transient failure' });
+    f.host.notifyDataRefreshed();
+    expect(records.some(r => r.message.includes('Catalog reload failed'))).toBe(true);
+    expect(f.config().items).toEqual([]);
+    f.loader.mockReturnValue(catalog); f.connect();
+    expect(f.config().items).toEqual([item]);
+  });
+  it('retries failed reloads mid-session at most once per 15 seconds, except while invalidated', () => {
+    let now = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const f = fixture(); f.ctx.enabled = true;
+    const client = f.connect();
+    const send = () => f.workerMessage(client, 'auto-drink', { type: 'status', generation: 1, status: workerStatus });
+    f.host.notifyDataInvalidated('stale');
+    const before = f.loader.mock.calls.length;
+    send(); expect(f.loader).toHaveBeenCalledTimes(before);
+    f.loader.mockImplementation(() => { throw new Error('disk busy'); });
+    f.host.notifyDataRefreshed();
+    send();
+    const failed = f.loader.mock.calls.length;
+    f.loader.mockReturnValue(catalog);
+    now = 14_999; send(); expect(f.loader).toHaveBeenCalledTimes(failed);
+    expect(f.config().items).toEqual([]);
+    now = 15_000; send();
+    expect(f.loader).toHaveBeenCalledTimes(failed + 1);
+    expect(f.config().items).toEqual([item]);
+  });
+  it('does not sync an unchanged catalog retry', () => {
+    let now = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const f = fixture({ catalog: { ok: false, reason: 'missing' } }); f.ctx.enabled = true;
+    const client = f.connect();
+    const before = f.proxy.configured.length, reads = f.loader.mock.calls.length;
+    const send = () => f.workerMessage(client, 'auto-drink', { type: 'status', generation: 1, status: workerStatus });
+    send(); now = 15_000; send();
+    expect(f.loader).toHaveBeenCalledTimes(reads + 2);
+    expect(f.proxy.configured).toHaveLength(before);
+  });
   it('starts disabled before the enable callback, publishes strict defaults and an offline status', () => {
     const timer=vi.spyOn(globalThis,'setInterval');const f=fixture();
     expect(f.ctx.name).toBe('Auto Drink');expect(f.ctx.category).toBe('automation');expect(f.ctx.enabled).toBe(false);
@@ -127,7 +168,8 @@ describe('Auto Drink facade through the RealmTool host', () => {
     expect(f.config().items).toEqual([item]);
     expect(f.data().reason).toBe(workerStatus.reason);
     expect(records.at(-1)?.message).toBe('Loaded 1 verified restorative consumables (game build test-build).');
-    expect(f.loader).toHaveBeenCalledTimes(1);
+    // Fallback connections now re-read disk so transient reload failures can recover.
+    expect(f.loader).toHaveBeenCalledTimes(3);
   });
   it('rechecks on enable after a connection arrived while the host gated disabled plugin events', () => {
     let build = 'test-build';

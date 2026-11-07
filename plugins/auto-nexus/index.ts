@@ -16,6 +16,8 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   buildReader: (gameDir: string) => string = readGameBuild): void {
   ctx.name = 'Auto Nexus'; ctx.category = 'combat';
   let disposed = false;
+  let awaitingVerification = false;
+  let lastMessageRetry = -Infinity;
   function readCatalog() {
     let gameBuild: string | undefined, buildError: unknown;
     try { if (ctx.gameDir) gameBuild = buildReader(ctx.gameDir); } catch (error) { buildError = error; }
@@ -35,7 +37,11 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   }
   logCatalog();
   function refreshCatalog(): boolean {
-    const next = catalogForInstalledBuild(catalog, ctx.gameDir, buildReader);
+    if (awaitingVerification) return false;
+    // A failed reload must not pin the invalidation placeholder for this lifetime.
+    const retry = !loaded.ok ? readCatalog() : null;
+    if (retry) catalog = retry.catalog;
+    const next = retry?.loaded ?? catalogForInstalledBuild(catalog, ctx.gameDir, buildReader);
     if (next.ok === loaded.ok && (next.ok || (!loaded.ok && next.reason === loaded.reason))) return false;
     loaded = next;
     logCatalog();
@@ -57,12 +63,14 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   });
   sync();
   ctx.onDataInvalidated(reason => {
+    awaitingVerification = true;
     if (disposed || (!catalog.ok && catalog.reason === reason)) return;
     catalog = loaded = { ok: false, reason };
     sync();
   });
   ctx.onDataRefreshed(() => {
     if (disposed) return;
+    awaitingVerification = false;
     const { catalog: candidate, loaded: next } = readCatalog();
     if (!next.ok) throw new Error(next.reason);
     const previous = catalog, previousLoaded = loaded;
@@ -168,6 +176,10 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
   ctx.registerCleanup(() => { clearTimeout(publishTimer); publishTimer = undefined; pending = undefined; });
   ctx.worker.onMessage((client, message) => {
     if (disposed || !message || typeof message !== 'object' || !('type' in message)) return;
+    if (!loaded.ok && !awaitingVerification && performance.now() - lastMessageRetry >= 15_000) {
+      lastMessageRetry = performance.now();
+      try { if (refreshCatalog()) sync(); } catch { /* Retry transient disk failures on a later message. */ }
+    }
     const event = message as AutoNexusEvent;
     if (event.type === 'status') {
       if (!Number.isInteger(event.generation) || event.generation < 0) return;
