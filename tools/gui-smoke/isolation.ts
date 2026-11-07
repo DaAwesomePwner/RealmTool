@@ -17,19 +17,27 @@ export function compareSnapshots(before: Snapshot, after: Snapshot): string[] {
   return changes;
 }
 
-export async function snapshotDirectory(root: string): Promise<Snapshot> {
+const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
+
+/** `fs` is injectable so tests can make entries vanish mid-walk. */
+export async function snapshotDirectory(root: string, fs = { lstat, readdir }): Promise<Snapshot> {
   const files: [string, { size: number; mtimeMs: number }][] = [];
   async function walk(path: string, relative: string): Promise<void> {
-    const stat = await lstat(path);
+    // WebView2 removes files such as EBWebView/lockfile while it exits; an entry that vanishes
+    // between readdir and lstat is simply absent from this snapshot (comparisons still see it).
+    let stat;
+    try { stat = await fs.lstat(path); } catch (error) { if (relative && missing(error)) return; throw error; }
     if (stat.isSymbolicLink()) throw new Error(`Cannot safely snapshot profile link: ${path}`);
     if (stat.isDirectory()) {
-      for (const name of (await readdir(path)).sort()) await walk(join(path, name), relative ? `${relative}/${name}` : name);
+      let names: string[];
+      try { names = await fs.readdir(path); } catch (error) { if (relative && missing(error)) return; throw error; }
+      for (const name of names.sort()) await walk(join(path, name), relative ? `${relative}/${name}` : name);
     } else if (stat.isFile()) files.push([relative, { size: stat.size, mtimeMs: stat.mtimeMs }]);
     else throw new Error(`Unexpected profile entry: ${path}`);
   }
-  try { await lstat(root); }
+  try { await fs.lstat(root); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { exists: false, files: {} };
+    if (missing(error)) return { exists: false, files: {} };
     throw error;
   }
   await walk(root, '');

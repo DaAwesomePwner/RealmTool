@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { compareSnapshots, snapshotDirectory, verifyIsolation, type Snapshot } from '../gui-smoke/isolation.ts';
@@ -54,4 +54,23 @@ it('rechecks known folders even after temp data was already verified and removed
   await expect(verifyIsolation(before, root, false)).resolves.toBeUndefined();
   await mkdir(known); await writeFile(join(known, 'bad'), 'oops');
   await expect(verifyIsolation(before, root, false)).rejects.toThrow('created bad');
+});
+
+it('skips entries that vanish mid-walk (WebView2 lockfile) but still fails on other errors', async () => {
+  const { known } = await fixture();
+  await mkdir(join(known, 'EBWebView'), { recursive: true });
+  await writeFile(join(known, 'EBWebView/Local State'), '{}'); await writeFile(join(known, 'EBWebView/lockfile'), '');
+  const enoent = Object.assign(new Error('gone'), { code: 'ENOENT' });
+  const vanishing = { readdir, lstat: async (path: string) => {
+    if (path.endsWith('lockfile')) throw enoent;
+    return lstat(path);
+  } };
+  expect(Object.keys((await snapshotDirectory(known, vanishing as never)).files)).toEqual(['EBWebView/Local State']);
+  const denied = { readdir, lstat: async (path: string) => {
+    if (path.endsWith('lockfile')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    return lstat(path);
+  } };
+  await expect(snapshotDirectory(known, denied as never)).rejects.toThrow('denied');
+  const rootGone = { readdir, lstat: async () => { throw enoent; } };
+  await expect(snapshotDirectory(known, rootGone as never)).resolves.toEqual({ exists: false, files: {} });
 });
