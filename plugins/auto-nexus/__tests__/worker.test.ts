@@ -404,6 +404,41 @@ describe('Auto Nexus module lifecycle', () => {
       replace: () => { automation.reset(++generation); module.connectionChanged!(generation); } };
   }
 
+  it('posts stall and recovery transitions from tick and observe without a precautionary escape', () => {
+    const f = local(); f.observe('NEWTICK', hpData(600, 1));
+    f.advance(3000);
+    expect(f.messages.at(-1).status.degraded).toBeNull();
+    f.advance(1);
+    expect(f.messages.at(-1)).toMatchObject({ type: 'status', status: {
+      protectionState: 'monitoring-degraded', degraded: 'server-hp-stale',
+    } });
+    f.observe('NEWTICK', hpData(600, 2));
+    expect(f.messages.at(-1).status.degraded).toBeNull();
+    const broken = packet('UPDATE'); broken.isDefined = false;
+    f.module.observe!(broken, false, f.ctx.now(), 2);
+    expect(f.messages.at(-1).status.degraded).toBe('hp-stream-unreadable');
+    f.observe('NEWTICK', hpData(600, 3));
+    expect(f.messages.at(-1).status.degraded).toBeNull();
+    expect(f.writePriority).not.toHaveBeenCalled();
+  });
+
+  it.each(['written RECONNECT', 'safe map'])('does not report a stalled HP stream after %s', state => {
+    const f = local(); f.observe('NEWTICK', hpData(600, 1));
+    if (state === 'written RECONNECT') {
+      f.module.writtenServer!(packet('RECONNECT'), 'normal', f.ctx.now(), 1);
+    } else {
+      f.observe('MAPINFO', { name: 'Nexus' });
+      f.observe('CREATESUCCESS', { objectId: 1 });
+      f.observe('NEWTICK', hpData(600, 1));
+    }
+    f.advance(3001);
+    expect(f.messages.at(-1)).toMatchObject({ type: 'status', status: {
+      degraded: null, protectionState: state === 'safe map' ? 'safe' : 'transition',
+    } });
+    expect(f.messages.filter(m => m.type === 'status' && m.status.degraded)).toEqual([]);
+    expect(f.writePriority).not.toHaveBeenCalled();
+  });
+
   it('latches rejected decisions before posting but only accepted writes arm the guard', () => {
     const f = local(false); f.observe('NEWTICK', hpData(100, 1));
     expect(f.ctx.automation.latchReason).toBe('auto escape');

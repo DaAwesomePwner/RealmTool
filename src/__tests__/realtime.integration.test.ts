@@ -122,14 +122,17 @@ async function fixture(options: { drink?: boolean; profile?: Profile; plugins?: 
     }
     expect(notifications()).toEqual(expect.arrayContaining([expect.stringContaining(expected)]));
   };
-  const healthy = () => {
+  const healthy = (expectStaleStream = false) => {
     expect(faults).toEqual([]);
     expect(game.errors).toEqual([]);
     const warnings = records.filter(record => record.level === 'error' || record.level === 'warn');
     if (options.missingSafety) {
       expect(warnings).toHaveLength(1);
       expect(warnings[0].message).toContain('Collision HP FALLBACK: server HP only (safety catalog not found)');
-    } else expect(warnings).toEqual([]);
+    } else expect(warnings).toEqual(expectStaleStream ? [{
+      at: expect.any(Number), level: 'warn', module: 'auto-nexus',
+      message: 'Auto Nexus degraded: server-hp-stale; protection may be incomplete.',
+    }] : []);
   };
   return { proxy, plugins, server, game, item, escapeTimes, send, tick, wire, status, healthy, batches, singles,
     snapshot: () => snapshot, catalog: loaded.catalog, hitCounts, notifications, setHp, assertNexusText };
@@ -175,7 +178,7 @@ describe('realtime plugins through the encrypted ProxyHost worker', () => {
     }
     await pause(2000);
     expect(f.wire('ESCAPE')).toHaveLength(5);
-    f.healthy();
+    f.healthy(true);
   });
 
   it.each([false, true])('only a written RECONNECT stops retries (plugin drops = %s)', async drop => {
@@ -192,7 +195,7 @@ describe('realtime plugins through the encrypted ProxyHost worker', () => {
       expect(f.game.frames.filter(bytes => bytes[4] === factory.getPacketId('RECONNECT'))).toHaveLength(0);
     } else {
       await until(() => f.game.frames.some(bytes => bytes[4] === factory.getPacketId('RECONNECT')), 'accepted transfer written to game');
-      await pause(2000);
+      await pause(3200);
       expect(f.wire('ESCAPE')).toHaveLength(1);
     }
     f.healthy();

@@ -41,7 +41,7 @@ export function safetySettings(value: SafetySettingsInput): SafetySettings {
 }
 
 export type EscapePhase = 'armed' | 'requested' | 'queued' | 'written' | 'transition' | 'nexus' | 'dead' | 'failed';
-export type ProtectionState = 'disabled' | 'waiting' | 'safe' | 'monitoring' | 'escaping' | 'cooldown' | 'degraded' | 'transition' | 'dead';
+export type ProtectionState = 'disabled' | 'waiting' | 'safe' | 'monitoring' | 'monitoring-degraded' | 'escaping' | 'cooldown' | 'degraded' | 'transition' | 'dead';
 /** Monotonic worker times. Physical origin is retained even when a decision shares this write. */
 export interface EscapeWriteReceipt {
   writeId: number;
@@ -95,6 +95,8 @@ export interface SafetyDecision {
   evidence: SafetyDecisionEvidence;
 }
 export interface SafetyStatus {
+  mapUnreadable: boolean;
+  degraded: null | 'server-hp-stale' | 'hp-stream-unreadable' | 'map-unreadable';
   preHitPrediction: boolean;
   lowerHp: number | null;
   prediction: PredictionState | null;
