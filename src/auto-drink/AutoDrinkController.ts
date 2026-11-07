@@ -30,6 +30,7 @@ const QUICK = 1_000_000;
 const STALE_MS = 1500;
 const PENDING_MS = 1500;
 const BACKOFF_MS = 1000;
+const RETRY_DELAY_MS = 4000;
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const int32 = (v: unknown): v is number => finite(v) && Number.isInteger(v) && v >= 0 && v <= 0x7fffffff;
 
@@ -54,8 +55,10 @@ export class AutoDrinkController {
   private unknownStock = new Set<number>();
   private revision = 0;
   private pending: Reservation | null = null;
-  // A timed-out/ambiguous operation cannot be retried against the same stock.
+  // Ambiguous operations wait for stock; unconfirmed automatic uses get one delayed retry.
   private waiting = new Map<number, number>();
+  // A finite deadline permits one retry; Infinity means that retry also failed.
+  private retryAfter = new Map<number, number>();
   private lastTick = -1;
   private lastServerAt: number | null = null;
   private readonly clientClock = new ClientGameClock();
@@ -93,14 +96,14 @@ export class AutoDrinkController {
     this.lastAttemptAt = null; this.lastSlot = this.lastItem = null;
     this.reset('');
   }
-  escape(): void { this.escaped = true; this.setState('blocked', 'escape lifecycle'); }
+  escape(): void { this.pending = null; this.waiting.clear(); this.retryAfter.clear(); this.escaped = true; this.setState('blocked', 'escape lifecycle'); }
   disconnect(): void { this.terminal = 'disconnected'; this.pending = null; this.clientClock.reset(); this.setState('blocked', this.terminal); }
 
   private reset(map: string): void {
     ++this.epoch; this.map = map; this.owner = 0;
     this.hp = this.maxHp = this.mp = this.maxMp = null;
     this.effects = [null, null]; this.position = null; this.backpack = 0; this.legacyBackpack = false;
-    this.stock.clear(); this.unknownStock.clear(); this.waiting.clear(); this.pending = null;
+    this.stock.clear(); this.unknownStock.clear(); this.waiting.clear(); this.retryAfter.clear(); this.pending = null;
     this.lastServerAt = null; this.lastTick = -1;
     this.clientClock.reset();
     this.setState('waiting', 'loading');
@@ -188,6 +191,7 @@ export class AutoDrinkController {
     if (previous?.type === type && previous.qty === qty) return; // repeated snapshots are not ACKs
     const next = { type, qty, revision: ++this.revision };
     this.stock.set(slotId, next);
+    this.retryAfter.delete(slotId);
     const waitingRevision = this.waiting.get(slotId);
     if (waitingRevision !== undefined && next.revision > waitingRevision) this.waiting.delete(slotId);
     const p = this.pending;
@@ -236,6 +240,7 @@ export class AutoDrinkController {
       }
     }
     for (const slotId of slots) {
+      this.retryAfter.delete(slotId);
       this.waiting.set(slotId, this.stock.get(slotId)?.revision ?? this.revision);
       if (this.pending?.slotId === slotId) this.pending.tainted = true;
     }
@@ -245,15 +250,22 @@ export class AutoDrinkController {
     const now = this.boundary.now();
     if (!finite(now) || now < 0) { this.setState('blocked', 'invalid monotonic clock'); return; }
     if (this.pending && now - this.pending.at >= PENDING_MS) {
-      this.waiting.set(this.pending.slotId, this.stock.get(this.pending.slotId)?.revision ?? this.revision);
+      const { slotId, tainted } = this.pending;
+      this.waiting.set(slotId, this.stock.get(slotId)?.revision ?? this.revision);
+      if (tainted) this.retryAfter.delete(slotId);
+      else this.scheduleRetry(slotId, now);
       this.pending = null; this.backoffUntil = now + BACKOFF_MS;
     }
     const time = this.clientClock.time(now);
     const block = this.blockReason(gate, now, time);
     if (block) { this.setState(this.settings.enabled ? 'blocked' : 'disabled', block); return; }
     if (this.pending) { this.setState('pending', 'awaiting stock decrease'); return; }
-    if (now < Math.max(this.nextUseAt, this.backoffUntil)) { this.setState('cooldown', 'shared consume cooldown'); return; }
-    if (time! < this.nextUseTime) { this.setState('cooldown', 'shared consume protocol cooldown'); return; }
+    const warning = [...this.retryAfter.values()].includes(Infinity) ? 'drink not confirmed by server' : '';
+    if (now < Math.max(this.nextUseAt, this.backoffUntil)) { this.setState('cooldown', warning || 'shared consume cooldown'); return; }
+    if (time! < this.nextUseTime) { this.setState('cooldown', warning || 'shared consume protocol cooldown'); return; }
+    for (const [slotId, retryAt] of this.retryAfter) {
+      if (now >= retryAt) this.waiting.delete(slotId);
+    }
     const hpNeeded = this.settings.enableHp && this.settings.hpThresholdPct > 0 && this.hp! <= this.maxHp! * this.settings.hpThresholdPct / 100;
     const mpNeeded = this.settings.enableMp && this.settings.mpThresholdPct > 0 && this.mp !== null && this.maxMp !== null
       && this.mp <= this.maxMp * this.settings.mpThresholdPct / 100;
@@ -278,6 +290,7 @@ export class AutoDrinkController {
         this.lastAttemptAt = this.boundary.wallNow(); this.lastSlot = slotId; this.lastItem = item.type;
         if (!this.boundary.send(use)) {
           this.pending = null; this.waiting.set(slotId, stock.revision); this.backoffUntil = now + BACKOFF_MS;
+          this.scheduleRetry(slotId, now);
           this.setState('blocked', 'write rejected'); return;
         }
         // Anchor the deadline AFTER synchronous socket acceptance, never at an
@@ -291,7 +304,11 @@ export class AutoDrinkController {
         this.setState('pending', 'awaiting stock decrease'); return;
       }
     }
-    this.setState('waiting', this.waiting.size ? 'awaiting fresh stock' : 'no eligible stock');
+    this.setState('waiting', warning || (this.waiting.size ? 'awaiting fresh stock' : 'no eligible stock'));
+  }
+
+  private scheduleRetry(slotId: number, now: number): void {
+    this.retryAfter.set(slotId, this.retryAfter.has(slotId) ? Infinity : now + RETRY_DELAY_MS);
   }
 
   private blockReason(gate: AutoDrinkGate, now: number, time: number | null): string {

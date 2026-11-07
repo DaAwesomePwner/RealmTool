@@ -275,3 +275,13 @@ describe('Auto Drink facade through the RealmTool host', () => {
     expect(f.proxy.configured).toHaveLength(1);expect(f.data()).toEqual(old);expect(f.proxy.listenerCount('module')).toBe(0);
   });
 });
+
+it('logs an unconfirmed-drink warning once per attempt even with diagnostics disabled', () => {
+  const f = fixture(); f.ctx.enabled = true;
+  const status = { ...workerStatus, state: 'waiting', reason: 'drink not confirmed by server', lastAttemptAt: 123 };
+  f.status(status); f.status(status);
+  f.status({ ...status, reason: 'packet backlog' }); f.status(status);
+  expect(records.filter(r => r.message.includes('Warning: drink not confirmed by server'))).toHaveLength(1);
+  f.status({ ...status, lastAttemptAt: 456 });
+  expect(records.filter(r => r.message.includes('Warning: drink not confirmed by server'))).toHaveLength(2);
+});

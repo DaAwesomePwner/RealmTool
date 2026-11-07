@@ -86,6 +86,7 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     if (!disposed && refreshCatalog()) sync();
   });
   const diagnostics = new WeakMap<object, string>();
+  const warnings = new WeakMap<object, string>();
   const generations = new WeakMap<object, number>();
   ctx.worker.onMessage((client, message) => {
     if (disposed || !message || typeof message !== 'object') return;
@@ -99,6 +100,13 @@ export function register(ctx: PluginContext, loader: (options?: { gameBuild?: st
     generations.set(client, event.generation);
     const status = event.status;
     publish(status, client.clientId);
+    if (status.reason === 'drink not confirmed by server') {
+      const warning = JSON.stringify([event.generation, status.epoch, status.slotId, status.lastAttemptAt]);
+      if (warnings.get(client) !== warning) {
+        warnings.set(client, warning);
+        ctx.log(`[${client.clientId}] Warning: drink not confirmed by server; waiting for stock to change.`);
+      }
+    }
     if (!ctx.getSetting('diagnostics')) return;
     const signature = JSON.stringify([status.epoch, status.enabled, status.state, status.reason,
       status.slotId, status.itemType, status.lastAttemptAt, status.pending]);
