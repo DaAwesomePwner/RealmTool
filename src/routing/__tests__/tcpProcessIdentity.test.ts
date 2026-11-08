@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  parseTcpOwnerTable, readTcpProcessIdentity, setTcpOwnerSource, tcpOwnerSourceError, type TcpOwnerRow, type TcpOwnerSource,
+  parseTcpOwnerTable, readProcessIdentity, readTcpProcessIdentity, setTcpOwnerSource, tcpOwnerSourceError, type TcpOwnerRow, type TcpOwnerSource,
 } from '../tcpProcessIdentity.ts';
 
 const LOOPBACK = 0x0100007f;
@@ -27,6 +27,19 @@ const source = (rows: TcpOwnerRow[], created: bigint | null = 133_000_000_000_00
   ({ tcpRows: () => rows, processCreationTime: () => created });
 
 describe('TCP process identity', () => {
+  it('revalidates process creation without a socket and tolerates unavailable processes', () => {
+    expect(readProcessIdentity(4242, source([], 100n))).toEqual({ pid: 4242, processStartTime: '100' });
+    expect(readProcessIdentity(4242, source([], 200n))).toEqual({ pid: 4242, processStartTime: '200' });
+    expect(readProcessIdentity(4242, null)).toBeNull();
+    expect(readProcessIdentity(4242, source([], null))).toBeNull();
+    expect(readProcessIdentity(4242, source([], 0n))).toBeNull();
+    expect(readProcessIdentity(-1, source([]))).toBeNull();
+    expect(readProcessIdentity(4242, {
+      tcpRows: () => { throw new Error('must not read TCP table'); },
+      processCreationTime: () => { throw new Error('access denied'); },
+    })).toBeNull();
+  });
+
   it('parses MIB_TCPTABLE_OWNER_PID rows with network-order ports', () => {
     expect(parseTcpOwnerTable(table([gameRow]))).toEqual([gameRow]);
     expect(parseTcpOwnerTable(Buffer.alloc(2))).toBeNull();

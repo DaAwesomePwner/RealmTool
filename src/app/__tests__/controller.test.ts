@@ -1,3 +1,4 @@
+import { setTcpOwnerSource } from '../../routing/tcpProcessIdentity.ts';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -63,7 +64,7 @@ describe('AppController lifecycle', () => {
     return new AppController({ config, resources: { ...resourcePaths(), helperDll: helper }, logs: new LogRing() }, deps);
   }
   afterEach(async () => {
-    await controller.shutdown(); detach(); log.setConsole(true); vi.unstubAllEnvs();
+    await controller.shutdown(); setTcpOwnerSource(undefined); detach(); log.setConsole(true); vi.unstubAllEnvs();
     expect(root.startsWith(join(tmpdir(), 'realmtool-controller-'))).toBe(true);
     rmSync(root, { recursive: true, force: true });
   });
@@ -501,6 +502,68 @@ describe('AppController lifecycle', () => {
       expect(states.every(state => state === 'protected')).toBe(true); expect(records).toEqual([]);
     } finally { remove(); vi.useRealTimers(); }
   });
+
+  it('keeps an exact identity received during a stale process enumeration', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    setTcpOwnerSource({
+      tcpRows: () => [{ state: 5, localAddr: 0x0100007f, remoteAddr: 0x0100007f,
+        localPort: 32123, remotePort: 2050, pid: 456 }],
+      processCreationTime: () => 100n,
+    });
+    try {
+      const enumerate = vi.fn(async () => [123]);
+      deps.gameProcessIds = enumerate;
+      controller = make(); await controller.startProxy(); await drain();
+      let finish!: (pids: number[]) => void;
+      enumerate.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      await vi.advanceTimersByTimeAsync(10_000);
+      hosts[0].emit('session', { id: 'new', remotePort: 32123 });
+      finish([]); await drain();
+      hosts[0].emit('closed', { id: 'new', by: 'game' });
+      enumerate.mockResolvedValue([456]);
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe('routed');
+    } finally { vi.useRealTimers(); }
+  });
+
+  for (const scenario of ['two clients', 'proxy restart', 'PID reuse', 'live PID reuse', 'process exit', 'lookup failure'] as const) {
+    it(`tracks exact socket ownership: ${scenario}`, async () => {
+      await controller.shutdown(); vi.useFakeTimers();
+      let pids = scenario === 'two clients' ? [123, 456] : [123];
+      let created = 100n;
+      setTcpOwnerSource({
+        tcpRows: () => {
+          if (scenario === 'lookup failure') throw new Error('unavailable');
+          return [{ state: 5, localAddr: 0x0100007f, remoteAddr: 0x0100007f,
+            localPort: 32123, remotePort: 2050, pid: 123 }];
+        },
+        processCreationTime: pid => pid === 123 ? created : 200n,
+      });
+      try {
+        deps.gameProcessIds = async () => pids;
+        controller = make(); await controller.startProxy(); await drain();
+        hosts[0].emit('session', { id: 'game', remotePort: 32123 });
+        if (scenario !== 'two clients' && scenario !== 'lookup failure')
+          hosts[0].emit('closed', { id: 'game', by: 'game' });
+        if (scenario === 'proxy restart' || scenario === 'PID reuse') {
+          await controller.stopProxy();
+          if (scenario === 'PID reuse') created = 300n;
+          await controller.startProxy(); await drain();
+        }
+        if (scenario === 'live PID reuse') created = 300n;
+        if (scenario === 'process exit') pids = [];
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(controller.state().game.routing).toBe(
+          scenario === 'two clients' || scenario === 'PID reuse' || scenario === 'live PID reuse' ? 'not-routed'
+            : scenario === 'process exit' ? 'unknown' : 'routed');
+        if (scenario === 'two clients') {
+          pids = [123];
+          await vi.advanceTimersByTimeAsync(10_000);
+          expect(controller.state().game.routing).toBe('routed');
+        }
+      } finally { vi.useRealTimers(); }
+    });
+  }
 
   it('re-inspects helper on polls and sessions and detects missing routing with a grace period', async () => {
     await controller.shutdown(); vi.useFakeTimers();
