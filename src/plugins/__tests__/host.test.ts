@@ -336,11 +336,17 @@ describe('PluginHost', () => {
     });
     const h = startHost([plugin('p', () => {})]);
     expect(counts).toEqual([0]);
+    expect(h.proxy.interest.commands).toEqual([]);
+    expect(h.proxy.interest.verdict?.client).not.toContain('PLAYERTEXT');
     const ctx = h.host.context('p')!;
     ctx.hookPacket('TEXT', () => {});
     ctx.observePacket('HELLO', () => {});
     ctx.hookCommand('late', () => {});
     expect(counts).toEqual([0, 1, 1, 1]);
+    expect(h.proxy.interest.commands).toEqual(['late']);
+    ctx.hookCommand('/CON', () => {});
+    expect(counts).toEqual([0, 1, 1, 1, 1]);
+    expect(h.proxy.interest.commands).toEqual(['late', 'con']);
     expect(h.proxy.interest.verdict).toEqual({ client: ['PLAYERTEXT'], server: ['TEXT'] });
     expect(h.proxy.interest.observe?.client).toEqual(['HELLO']);
     h.host.stop();

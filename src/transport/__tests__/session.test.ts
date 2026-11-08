@@ -68,6 +68,99 @@ async function connected(h: Harness, server: FakeServer): Promise<{ game: Peer; 
 const packets = (h: Harness) => h.events.filter((e): e is Extract<WorkerEvent, { type: 'packet' }> => e.type === 'packet');
 
 describe('Session', () => {
+  it.each(['/con usw', '/CON ', '/tell bob hi', '/trade bob', 'hello', '/unknown', '/ con'])(
+    'handles expired command interest for %s without leaking dropped frames', async text => {
+      let now = 0;
+      const h = await harness({ now: () => now,
+        interest: new Interest({ commands: ['con'], verdict: { client: ['PLAYERTEXT'] } }) });
+      const { game, upstream, session } = await connected(h, await fakeServer());
+      const packet = factory.createByName('PLAYERTEXT');
+      packet.data.text = text;
+      const original = factory.serialize(packet);
+      game.send(original);
+      await until(() => packets(h).length === 1, 'chat held');
+      now = 249; session.tick(now);
+      expect(session['pending'].size).toBe(1);
+      now = 250; session.tick(now);
+      const event = packets(h)[0];
+      session.forward(event.sequence, event.generation, original); // Late verdict cannot restore a drop.
+      const sentinel = frame(UNKNOWN, Buffer.from('after'));
+      game.send(sentinel);
+      const drop = text === '/con usw' || text === '/CON ';
+      await until(() => upstream.frames.length === (drop ? 2 : 3), 'following frame delivered');
+      expect(upstream.frames.slice(1)).toEqual(drop ? [sentinel] : [original, sentinel]);
+      expect(h.events).toContainEqual(expect.objectContaining({
+        type: 'diagnostic', message: drop ? 'Expired command drops: 1'
+          : 'Plugin verdict deadlines expired: 1; released original packets',
+      }));
+      expect(session['pending'].size).toBe(0);
+    });
+
+  it.each([false, true])('preserves timely command verdicts (drop=%s)', async drop => {
+    let now = 0;
+    const h = await harness({ now: () => now,
+      interest: new Interest({ commands: ['con'], verdict: { client: ['PLAYERTEXT'] } }) });
+    const { game, upstream, session } = await connected(h, await fakeServer());
+    const packet = factory.createByName('PLAYERTEXT');
+    packet.data.text = '/con usw';
+    const original = factory.serialize(packet);
+    game.send(original);
+    await until(() => packets(h).length === 1, 'chat held');
+    const event = packets(h)[0];
+    now = 249;
+    session.forward(event.sequence, event.generation, drop ? null : original);
+    now = 250; session.tick(now);
+    const sentinel = frame(UNKNOWN);
+    game.send(sentinel);
+    await until(() => upstream.frames.length === (drop ? 2 : 3), 'following frame delivered');
+    expect(upstream.frames.slice(1)).toEqual(drop ? [sentinel] : [original, sentinel]);
+    expect(h.events.filter(event => event.type === 'diagnostic')).toEqual([]);
+  });
+
+  it.each(['close', 'tick'] as const)('retains rate-limited command drop counts until %s', async finish => {
+    let now = 0;
+    const h = await harness({ now: () => now,
+      interest: new Interest({ commands: ['con'], verdict: { client: ['PLAYERTEXT'] } }) });
+    const { game, session } = await connected(h, await fakeServer());
+    const packet = factory.createByName('PLAYERTEXT');
+    packet.data.text = '/con private-argument';
+    const original = factory.serialize(packet);
+    game.send(original);
+    await until(() => packets(h).length === 1, 'first held command');
+    now = 250; session.tick(now);
+    game.send(original);
+    await until(() => packets(h).length === 2, 'second held command');
+    now = 500; session.tick(now);
+    const diagnostics = () => h.events.filter(event => event.type === 'diagnostic');
+    expect(diagnostics()).toHaveLength(1);
+    if (finish === 'close') {
+      session.close();
+      expect(h.events).toContainEqual(expect.objectContaining({
+        type: 'note', message: expect.stringContaining('1 expired command drops'),
+      }));
+    } else {
+      now = 5250; session.tick(now);
+      expect(diagnostics()).toHaveLength(2);
+      expect(diagnostics()[1]).toMatchObject({ message: 'Expired command drops: 1' });
+      expect(session['expiredCommandDrops']).toBe(0);
+    }
+    expect(JSON.stringify(h.events.filter(event => event.type === 'note' || event.type === 'diagnostic')))
+      .not.toContain('private-argument');
+  });
+
+  it('forwards undecodable expired PLAYERTEXT unchanged', async () => {
+    let now = 0;
+    const h = await harness({ now: () => now,
+      interest: new Interest({ commands: ['con'], verdict: { client: ['PLAYERTEXT'] } }) });
+    const { game, upstream, session } = await connected(h, await fakeServer());
+    const malformed = frame(id('PLAYERTEXT'));
+    game.send(malformed);
+    await until(() => packets(h).length === 1, 'malformed chat held');
+    now = 250; session.tick(now);
+    await until(() => upstream.frames.length === 2, 'malformed chat forwarded');
+    expect(upstream.frames[1]).toEqual(malformed);
+  });
+
   it('expires each verdict at its own deadline and preserves mixed ordering and RC4', async () => {
     let now = 0;
     const h = await harness({ now: () => now, interest: new Interest({ verdict: { server: ['TEXT'] }, observe: { server: ['*'] } }) });

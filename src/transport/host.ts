@@ -13,7 +13,7 @@ export interface PacketEvent {
   sequence: number;
   generation: number;
   fromClient: boolean;
-  /** True: informational, no verdict accepted. False: forward() may decide within 250 ms; expiry or a critical packet releases the original. */
+  /** True: informational, no verdict accepted. False: forward() may decide within 250 ms; expiry drops registered commands and otherwise releases the original; a critical packet releases the original. */
   observeOnly: boolean;
   data: Buffer;
 }
