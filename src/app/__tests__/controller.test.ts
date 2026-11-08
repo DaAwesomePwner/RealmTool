@@ -529,6 +529,47 @@ describe('AppController lifecycle', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it.each([false, true])('ignores deferred ownership while stop awaits a data flight (lookup succeeds=%s)', async resolves => {
+    await controller.shutdown(); vi.useFakeTimers();
+    const tcpRows = vi.fn(() => resolves ? [{
+      state: 5, localAddr: 0x0100007f, remoteAddr: 0x0100007f,
+      localPort: 32123, remotePort: 2050, pid: 123,
+    }] : null);
+    setTcpOwnerSource({ tcpRows, processCreationTime: () => 100n });
+    let finish!: (result: import('../refreshData.ts').RefreshResult) => void;
+    let stopping: Promise<void> | undefined;
+    try {
+      deps.gameProcessIds = async () => [123, 456];
+      deps.readGameBuild = async () => 'A';
+      let published = 'old';
+      deps.catalogBuilds = () => selection(published);
+      deps.refreshCatalogs = vi.fn(() => new Promise<import('../refreshData.ts').RefreshResult>(resolve => { finish = resolve; }));
+      controller = make(); await controller.startProxy(); await drain();
+      expect(controller.state().data.state).toBe('refreshing');
+      hosts[0].emit('session', { id: 'stopping', remotePort: 32123 });
+      stopping = controller.stopProxy();
+      expect(controller.state().proxy.state).toBe('stopping');
+      expect(hosts[0].stop).not.toHaveBeenCalled();
+      // Run the immediate before the aborted data flight's promise reactions:
+      // cleanup has cleared routing but still retains the host and session.
+      vi.advanceTimersByTime(0);
+      const duringStop = controller.state().game.routing;
+      await stopping;
+      expect(tcpRows).not.toHaveBeenCalled();
+      expect(duringStop).toBe('unknown');
+      expect(controller.state().game.routing).toBe('unknown');
+      published = 'A';
+      finish({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 });
+      await controller.startProxy(); await drain();
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe('not-routed');
+    } finally {
+      finish?.({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 });
+      await stopping;
+      vi.useRealTimers();
+    }
+  });
+
   it('preserves a routed live PID through transient identity-read failures', async () => {
     await controller.shutdown(); vi.useFakeTimers();
     let created: bigint | null = 100n;

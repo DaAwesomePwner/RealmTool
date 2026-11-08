@@ -555,7 +555,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
       // ProxyHost posts the target after emitting session. Let that finish before
       // querying the TCP table so routing diagnostics cannot hold up the hello.
       setImmediate(() => {
-        if (this.host !== host || !this.sessions.has(id)) return;
+        if (this.current.proxy.state !== 'running' || this.host !== host || !this.sessions.has(id)) return;
         this.recordRoutedSession(id, remotePort);
       });
       void this.automaticDataCheck();
@@ -678,6 +678,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     finally {
       try { if (host) await host.stop(); }
       finally {
+        this.unboundSessions.clear(); this.pendingFallbackBinding = false;
         this.sessions.clear(); this.connected.clear(); this.sessionState();
         this.refreshHelper(); this.emit('plugins', this.plugins());
       }
