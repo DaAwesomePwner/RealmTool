@@ -1,6 +1,6 @@
 import net from 'node:net';
 import { performance } from 'node:perf_hooks';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session, type SessionEnv } from '../session.ts';
 import { Interest } from '../interest.ts';
 import { DEFAULTS, type WorkerEvent } from '../messages.ts';
@@ -81,10 +81,80 @@ describe('Session server close safety', () => {
     expect(upstream.frames[1]).toEqual(after);
   });
 
+  it('preserves a decided drop queued behind an undecided verdict at FIN', async () => {
+    const dropped = vi.fn();
+    const h = await harness({
+      interest: new Interest({ verdict: { server: ['TEXT'] } }),
+      modules: [{ id: 'drops', priority: 0, observe: { server: ['TEXT'] },
+        createSession: () => ({ dropped }) }],
+    });
+    const server = await fakeServer();
+    const { game, upstream, session } = await connected(h, server);
+    const held = frame(id('TEXT'), Buffer.from('held'));
+    const drop = frame(id('TEXT'), Buffer.from('drop'));
+    const after = frame(UNKNOWN, Buffer.from('after'));
+    upstream.send(held);
+    upstream.send(drop);
+    upstream.send(after);
+    await until(() => packets(h).length === 2, 'both verdicts held');
+    const verdict = packets(h)[1];
+    session.forward(verdict.sequence, verdict.generation, null);
+    expect(game.frames).toEqual([]);
+    upstream['socket'].end();
+    await until(() => game.closed, 'FIN reaches game');
+    expect(game.errors).toEqual([]);
+    expect(game.frames).toEqual([held, after]);
+    expect(dropped).toHaveBeenCalledTimes(1);
+    expect(dropped).toHaveBeenCalledWith(expect.any(Number), 'TEXT', false, expect.any(Number));
+  });
+
+  for (const ending of ['timeout', 'peer-close', 'fault', 'game'] as const) {
+    it(`closes once and handles game socket teardown: ${ending}`, async () => {
+      const close = vi.fn();
+      const onClosed = vi.fn();
+      const h = await harness({ onClosed, modules: [
+        { id: 'close', priority: 0, createSession: () => ({ close }) },
+      ] });
+      vi.useFakeTimers();
+      const socket = new net.Socket();
+      const end = vi.spyOn(socket, 'end').mockReturnValue(socket);
+      const destroy = vi.spyOn(socket, 'destroy').mockReturnValue(socket);
+      const reset = vi.spyOn(socket, 'resetAndDestroy').mockReturnValue(socket);
+      try {
+        const session = new Session('teardown', socket, h.env);
+        const by = ending === 'fault' || ending === 'game' ? ending : 'server';
+        session.close(by);
+        if (by === 'server') {
+          expect(end).toHaveBeenCalledTimes(1);
+          expect(destroy).not.toHaveBeenCalled();
+          expect(vi.getTimerCount()).toBe(1);
+          vi.advanceTimersByTime(1999);
+          expect(destroy).not.toHaveBeenCalled();
+          if (ending === 'peer-close') socket.emit('close');
+          vi.advanceTimersByTime(1);
+          expect(destroy).toHaveBeenCalledTimes(ending === 'timeout' ? 1 : 0);
+        } else {
+          expect(end).not.toHaveBeenCalled();
+          expect(reset).toHaveBeenCalledTimes(by === 'fault' ? 1 : 0);
+          expect(destroy).toHaveBeenCalledTimes(by === 'game' ? 1 : 0);
+        }
+        socket.emit('close');
+        session.close();
+        expect(close).toHaveBeenCalledExactlyOnceWith(by);
+        expect(onClosed).toHaveBeenCalledExactlyOnceWith('teardown');
+        expect(h.events.filter(e => e.type === 'closed')).toEqual([{ type: 'closed', id: 'teardown', by }]);
+        expect(h.events.filter(e => e.type === 'note')).toHaveLength(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        socket.destroy();
+      }
+    });
+  }
+
   for (const reconnect of [false, true]) {
-    // Known session.ts bug: FIN clears pending verdicts unless RECONNECT released them first.
-    const test = reconnect ? it : it.fails;
-    test(`delivers queued frames before graceful FIN (RECONNECT: ${reconnect})`, async () => {
+    it(`delivers queued frames before graceful FIN (RECONNECT: ${reconnect})`, async () => {
       const router = new Router({ loopbackPort: 2050 });
       const h = await harness({ router, interest: new Interest({ verdict: { server: ['TEXT'] } }) });
       const server = await fakeServer();
@@ -97,8 +167,11 @@ describe('Session server close safety', () => {
       upstream.send(after);
       if (reconnect) upstream.send(reconnectBytes(factory, { host: 'destination.example', port: 2051, key: Buffer.from('real-key') }));
       // Peer has no FIN helper; end its socket without destroying buffered writes.
+      let framesAtClose: Buffer[] = [];
+      game['socket'].once('close', () => { framesAtClose = [...game.frames]; });
       upstream['socket'].end();
       await until(() => game.closed, 'graceful close reaches game');
+      expect(framesAtClose).toEqual(game.frames);
       expect(game.errors).toEqual([]);
       expect(game.frames.slice(0, 2)).toEqual([held, after]);
       expect(game.frames).toHaveLength(reconnect ? 3 : 2);
