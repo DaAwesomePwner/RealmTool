@@ -306,9 +306,9 @@ export class SafetyEngine {
       this.predictor.impact(`ground:${++this.seq}`, { amount: known ? evidence.tileDamage! : Math.max(200, evidence.tileDamage ?? 0),
         kind: known ? 'mitigated-estimate' : 'assumed', reason: known ? 'raw tile damage estimate' : 'unresolved ground mechanics' }, now, 'ground', now + 12000, observationId);
     } else {
-      // The client acknowledges every AoE, hit or miss, in arrival order (live capture,
-      // issue #20: 155/155 acknowledged, 152 outside the radius), so FIFO is exact and
-      // the position test below separates hits from misses.
+      // Observed client behaviour supports acknowledging every AoE, hit or miss, in arrival
+      // order (live capture, issue #20: 155/155 acknowledged, 152 outside the radius), so FIFO
+      // matching holds and the position test below separates hits from misses.
       const area = this.areas[0];
       this.areas.shift();
       const known = area && now - area.at <= Math.max(1000, 2 * this.settings.reactionMs)
