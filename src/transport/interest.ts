@@ -5,6 +5,8 @@ export interface DirectionalNames {
 
 /** Which packets the main thread must decide on (verdict) or only see (observe). Everything else stays in the worker. */
 export interface InterestSpec {
+  /** Registered lowercase RealmTool command names. */
+  commands?: string[];
   verdict?: DirectionalNames;
   observe?: DirectionalNames;
 }
@@ -26,6 +28,7 @@ export const isCriticalPacket = (name: string, fromClient: boolean): boolean =>
   fromClient ? name === 'ESCAPE' : criticalServer.has(name);
 
 export class Interest {
+  private commands = new Set<string>();
   private verdict: Sides = sides(undefined);
   private observed: Sides = sides(undefined);
 
@@ -34,8 +37,16 @@ export class Interest {
   }
 
   set(spec: InterestSpec): void {
+    this.commands = new Set(spec.commands ?? []);
     this.verdict = sides(spec.verdict);
     this.observed = sides(spec.observe);
+  }
+
+  isCommand(text: unknown): boolean {
+    if (typeof text !== 'string' || !text.startsWith('/')) return false;
+    // Keep command parsing identical to PluginHost.runCommands.
+    const [command] = text.slice(1).trimEnd().toLowerCase().split(/\s+/);
+    return this.commands.has(command);
   }
 
   classify(name: string, fromClient: boolean): InterestKind {

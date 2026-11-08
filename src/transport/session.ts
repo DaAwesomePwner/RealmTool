@@ -108,6 +108,8 @@ export class Session {
   private writeTokens = 0;
   private pendingBytes = 0;
   private expiredVerdicts = 0;
+  private expiredCommandDrops = 0;
+  private overriddenCommandDrops = 0;
   private overriddenVerdicts = 0;
   private lastVerdictDiagnostic = -Infinity;
   private beforeConnect: Queued[] = [];
@@ -227,8 +229,8 @@ export class Session {
       held.push({ name, fromClient, ageMs: now - pending.receivedAt });
     }
     const summary = this.trace.summary(now, held, { game: this.client.writableLength, server: this.server?.writableLength ?? 0 });
-    return this.expiredVerdicts || this.overriddenVerdicts
-      ? `${summary}; unreported verdict releases: ${this.expiredVerdicts} expired, ${this.overriddenVerdicts} overridden`
+    return this.expiredVerdicts || this.overriddenVerdicts || this.expiredCommandDrops || this.overriddenCommandDrops
+      ? `${summary}; unreported verdict releases: ${this.expiredVerdicts} expired, ${this.overriddenVerdicts} overridden, ${this.expiredCommandDrops} expired command drops, ${this.overriddenCommandDrops} critical command drops`
       : summary;
   }
 
@@ -332,8 +334,10 @@ export class Session {
     if (isCriticalPacket(name, fromClient)) {
       for (const pending of this.pending.values()) {
         if (pending.observation.fromClient === fromClient && pending.result === undefined) {
-          pending.result = pending.original;
-          ++this.overriddenVerdicts;
+          const drop = this.isRegisteredCommand(pending);
+          pending.result = drop ? null : pending.original;
+          if (drop) ++this.overriddenCommandDrops;
+          else ++this.overriddenVerdicts;
         }
       }
       this.flush(fromClient);
@@ -362,8 +366,10 @@ export class Session {
     let server = false;
     for (const pending of this.pending.values()) {
       if (pending.result !== undefined || now < pending.deadline) continue;
-      pending.result = pending.original;
-      ++this.expiredVerdicts;
+      const drop = this.isRegisteredCommand(pending);
+      pending.result = drop ? null : pending.original;
+      if (drop) ++this.expiredCommandDrops;
+      else ++this.expiredVerdicts;
       if (pending.observation.fromClient) client = true;
       else server = true;
     }
@@ -372,12 +378,27 @@ export class Session {
     if (!this.closed) this.reportVerdictReleases(now);
   }
 
+  private isRegisteredCommand(pending: Pending): boolean {
+    if (!pending.observation.fromClient || pending.observation.name !== 'PLAYERTEXT') return false;
+    try {
+      const packet = this.env.factory.createFromBytes(pending.original, 'client');
+      return packet.isDefined && this.env.interest.isCommand(packet.data.text);
+    } catch {
+      return false; // Preserve fail-open behaviour when text cannot be decoded.
+    }
+  }
+
   private reportVerdictReleases(now: number): void {
-    if ((!this.expiredVerdicts && !this.overriddenVerdicts) || now - this.lastVerdictDiagnostic < 5000) return;
+    if ((!this.expiredVerdicts && !this.overriddenVerdicts && !this.expiredCommandDrops && !this.overriddenCommandDrops) || now - this.lastVerdictDiagnostic < 5000) return;
     const counts = [];
     if (this.expiredVerdicts) counts.push(`Plugin verdict deadlines expired: ${this.expiredVerdicts}`);
     if (this.overriddenVerdicts) counts.push(`Critical-packet verdict overrides: ${this.overriddenVerdicts}`);
-    this.env.post({ type: 'diagnostic', id: this.id, message: `${counts.join('; ')}; released original packets` });
+    if (counts.length) counts.push('released original packets');
+    if (this.expiredCommandDrops) counts.push(`Expired command drops: ${this.expiredCommandDrops}`);
+    if (this.overriddenCommandDrops) counts.push(`Critical-packet command drops: ${this.overriddenCommandDrops}`);
+    this.env.post({ type: 'diagnostic', id: this.id, message: counts.join('; ') });
+    this.overriddenCommandDrops = 0;
+    this.expiredCommandDrops = 0;
     this.expiredVerdicts = 0;
     this.overriddenVerdicts = 0;
     this.lastVerdictDiagnostic = now;

@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { Interest } from '../interest.ts';
 
 describe('Interest', () => {
+  it('replaces registered command names with every interest update', () => {
+    const interest = new Interest({ commands: ['con'] });
+    expect(interest.isCommand('/CON usw ')).toBe(true);
+    expect(interest.isCommand('/ con')).toBe(false);
+    expect(interest.isCommand('/tell bob hi')).toBe(false);
+    interest.set({ commands: ['other'] });
+    expect(interest.isCommand('/con')).toBe(false);
+    expect(interest.isCommand('/other')).toBe(true);
+    interest.set({});
+    expect(interest.isCommand('/other')).toBe(false);
+  });
+
   it.each([['RECONNECT', false], ['DEATH', false], ['MAPINFO', false], ['ESCAPE', true]] as const)(
     'downgrades critical %s verdict interest to observe', (name, fromClient) => {
       const interest = new Interest();

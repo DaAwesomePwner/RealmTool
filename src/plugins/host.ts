@@ -519,6 +519,7 @@ export class PluginHost {
     for (const name of this.observers.keys()) observe[this.direction(name)].add(name);
     for (const name of IDENTITY_PACKETS) observe[this.direction(name)].add(name);
     return {
+      commands: [...this.commands.keys()],
       verdict: { client: [...verdict.client], server: [...verdict.server] },
       observe: { client: [...observe.client], server: [...observe.server] },
     };
