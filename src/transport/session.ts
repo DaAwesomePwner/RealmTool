@@ -175,17 +175,36 @@ export class Session {
 
   close(by: CloseSide = 'proxy'): void {
     if (this.closed) return;
+    if (by === 'server') {
+      this.releaseVerdicts(false);
+      this.flush(false);
+      // A write may have faulted (for example, if the game output backlog is full).
+      if (this.closed) return;
+    }
     this.closed = true;
     this.env.post({ type: 'note', id: this.id, message: this.summary() });
     if (this.targetTimer) clearTimeout(this.targetTimer);
     if (this.helloTimer) clearTimeout(this.helloTimer);
     this.heldHello = null;
     this.helloForRetry = null;
+    if (by === 'server') {
+      for (const pending of this.pending.values()) this.notifyDropped(pending.observation);
+      for (const queued of this.beforeConnect) {
+        if (queued.observation) this.notifyDropped(queued.observation);
+      }
+    }
     for (const module of this.modules) this.call(module, 'close', () => module.hooks.close?.(by), undefined);
     this.failures.flush(this.env.now(), true);
     // A fault is an abort, so the game gets the reset it would see without us. While it loads
     // a map it ignores a clean FIN and sits on the loading screen with the socket in CLOSE_WAIT.
     if (by === 'fault' && !this.client.destroyed) this.client.resetAndDestroy();
+    else if (by === 'server' && !this.client.destroyed) {
+      // Let buffered frames precede FIN, but bound the wait for games that ignore it.
+      const timer = setTimeout(() => this.client.destroy(), 2000);
+      timer.unref();
+      this.client.once('close', () => clearTimeout(timer));
+      this.client.end();
+    }
     else this.client.destroy();
     this.server?.destroy();
     this.pending.clear();
@@ -332,14 +351,7 @@ export class Session {
       if (this.closed) return;
     }
     if (isCriticalPacket(name, fromClient)) {
-      for (const pending of this.pending.values()) {
-        if (pending.observation.fromClient === fromClient && pending.result === undefined) {
-          const drop = this.isRegisteredCommand(pending);
-          pending.result = drop ? null : pending.original;
-          if (drop) ++this.overriddenCommandDrops;
-          else ++this.overriddenVerdicts;
-        }
-      }
+      this.releaseVerdicts(fromClient);
       this.flush(fromClient);
       if (this.closed) return;
       this.reportVerdictReleases(now);
@@ -359,6 +371,17 @@ export class Session {
       this.env.post({ type: 'packet', id: this.id, sequence, generation: this.generation, fromClient, observeOnly: kind === 'observe', data: frame });
     }
     if (kind !== 'verdict') this.flush(fromClient);
+  }
+
+  private releaseVerdicts(fromClient: boolean): void {
+    for (const pending of this.pending.values()) {
+      if (pending.observation.fromClient === fromClient && pending.result === undefined) {
+        const drop = this.isRegisteredCommand(pending);
+        pending.result = drop ? null : pending.original;
+        if (drop) ++this.overriddenCommandDrops;
+        else ++this.overriddenVerdicts;
+      }
+    }
   }
 
   private expireVerdicts(now: number): void {
