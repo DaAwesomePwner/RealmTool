@@ -12,8 +12,7 @@ export function register(ctx: PluginContext): void {
   ctx.registerSetting('includeAllDamage', { label: 'Include all DAMAGE', type: 'boolean', value: false, advanced: true });
   let writer: CaptureWriter | undefined;
   let records = new Records();
-  let registered = false, disposed = false, loading = true;
-  queueMicrotask(() => { loading = false; });
+  let registered = false, disposed = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   const clients = new Map<string, Correlation>();
   let periodStart = performance.now();
@@ -29,11 +28,6 @@ export function register(ctx: PluginContext): void {
   };
   ctx.onEnabledChange(enabled => {
     if (!enabled || disposed) { stop(); return; }
-    if (loading) {
-      ctx.enabled = false;
-      ctx.log('Capture is off at startup; enable it again to record');
-      return;
-    }
     if (writer) return;
     records = new Records(); clients.clear();
     const currentWriter = new CaptureWriter(join(appDataDir(), 'captures', `capture-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.jsonl`),
@@ -64,4 +58,4 @@ export function register(ctx: PluginContext): void {
   });
   ctx.registerCleanup(() => { disposed = true; stop(); });
 }
-export default definePlugin({ id: 'capture', name: 'Capture (diagnostics)', apiVersion: 1, capabilities: ['packets'], register });
+export default definePlugin({ id: 'capture', name: 'Capture (diagnostics)', apiVersion: 1, capabilities: ['packets'], persistEnabled: false, register });

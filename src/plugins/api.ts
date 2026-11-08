@@ -135,6 +135,9 @@ export interface PluginDefinition {
   capabilities: readonly Capability[];
   register(ctx: PluginContext): void;
   settings?: PluginSettingsPolicy;
+  /** Defaults to true. When false, profiles neither save nor restore enabled;
+   * the initial state set by register is retained. Settings still persist. */
+  persistEnabled?: boolean;
 }
 
 export function definePlugin(definition: PluginDefinition): PluginDefinition {
