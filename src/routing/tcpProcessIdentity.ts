@@ -47,12 +47,23 @@ export function readTcpProcessIdentity(
       && row.localPort === gamePort && row.remotePort === proxyPort);
     if (matches.length !== 1) return null;
     const { pid } = matches[0];
-    const created = source.processCreationTime(pid);
-    if (created === null || created <= 0n || pid <= 0) return null;
-    return Object.freeze({ pid, processStartTime: created.toString() });
+    return readProcessIdentity(pid, source);
   } catch {
     return null;
   }
+}
+
+/** Revalidate a known PID without requiring an active TCP connection. */
+export function readProcessIdentity(
+  pid: number,
+  source: TcpOwnerSource | null = win32TcpOwnerSource(),
+): ProcessIdentity | null {
+  if (!source || !Number.isInteger(pid) || pid <= 0) return null;
+  try {
+    const created = source.processCreationTime(pid);
+    return created !== null && created > 0n
+      ? Object.freeze({ pid, processStartTime: created.toString() }) : null;
+  } catch { return null; }
 }
 
 let win32Source: TcpOwnerSource | null | undefined;

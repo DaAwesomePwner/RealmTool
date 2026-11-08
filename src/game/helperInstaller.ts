@@ -20,11 +20,25 @@ export type UninstallStatus = 'removed' | 'restored' | 'not-installed' | 'foreig
 
 export type HelperState = 'absent' | 'installed' | 'outdated' | 'foreign';
 export function inspectHelper(gameDir: string, helperPath: string): { state: HelperState; backup: boolean } {
+  return inspectWithHash(gameDir, helperPath, sha256);
+}
+
+/** Cache the immutable bundled helper for one controller lifetime. */
+export function createHelperInspector(): typeof inspectHelper {
+  let bundled: { path: string; hash: string } | undefined;
+  return (gameDir, helperPath) => inspectWithHash(gameDir, helperPath, path => {
+    if (bundled?.path !== path) bundled = { path, hash: sha256(path) };
+    return bundled.hash;
+  });
+}
+
+function inspectWithHash(gameDir: string, helperPath: string, bundledHash: (path: string) => string): { state: HelperState; backup: boolean } {
   const target = join(gameDir, HELPER_FILE);
   const backup = existsSync(join(gameDir, BACKUP_FILE));
   if (!existsSync(target)) return { state: 'absent', backup };
-  if (!isRealmToolHelper(target)) return { state: 'foreign', backup };
-  return { state: sha256(target) === sha256(helperPath) ? 'installed' : 'outdated', backup };
+  const bytes = readFileSync(target);
+  if (!bytes.includes(HELPER_MARKER, 0, 'latin1')) return { state: 'foreign', backup };
+  return { state: hash(bytes) === bundledHash(helperPath) ? 'installed' : 'outdated', backup };
 }
 
 export interface InstallerOps {
@@ -93,7 +107,8 @@ function withInstallerLock<T>(gameDir: string, options: InstallerLockOptions, ac
   }
 }
 
-const sha256 = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+const hash = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
+const sha256 = (path: string): string => hash(readFileSync(path));
 
 export function isRealmToolHelper(path: string): boolean {
   try { return readFileSync(path).includes(HELPER_MARKER, 0, 'latin1'); } catch { return false; }

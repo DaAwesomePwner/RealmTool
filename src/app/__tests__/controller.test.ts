@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from 'node:timers/promises';
+import { setTcpOwnerSource } from '../../routing/tcpProcessIdentity.ts';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -63,7 +65,7 @@ describe('AppController lifecycle', () => {
     return new AppController({ config, resources: { ...resourcePaths(), helperDll: helper }, logs: new LogRing() }, deps);
   }
   afterEach(async () => {
-    await controller.shutdown(); detach(); log.setConsole(true); vi.unstubAllEnvs();
+    await controller.shutdown(); setTcpOwnerSource(undefined); detach(); log.setConsole(true); vi.unstubAllEnvs();
     expect(root.startsWith(join(tmpdir(), 'realmtool-controller-'))).toBe(true);
     rmSync(root, { recursive: true, force: true });
   });
@@ -287,6 +289,10 @@ describe('AppController lifecycle', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  async function settleOwnership() {
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+    await nextTurn();
+  }
   async function protectedSession() {
     await controller.shutdown();
     deps.readGameBuild = async () => 'A'; deps.catalogBuilds = () => selection('A');
@@ -297,7 +303,7 @@ describe('AppController lifecycle', () => {
     const host = hosts.at(-1)!;
     host.emit('session', { id: 'game', remotePort: 123 });
     host.emit('connected', { id: 'game', generation: 1 });
-    publishStatus('game'); await drain();
+    publishStatus('game'); await drain(); await settleOwnership();
     expect(controller.state().protection?.state).toBe('protected');
     return host;
   }
@@ -397,7 +403,7 @@ describe('AppController lifecycle', () => {
     expect(controller.state().protection?.reasons.some(r => r.code === 'auto-nexus-failing')).toBe(false);
     await controller.startProxy(); await drain();
     hosts.at(-1)!.emit('session', { id: 'new', remotePort: 124 });
-    hosts.at(-1)!.emit('connected', { id: 'new', generation: 1 }); publishStatus('new'); await drain();
+    hosts.at(-1)!.emit('connected', { id: 'new', generation: 1 }); publishStatus('new'); await drain(); await settleOwnership();
     expect(controller.state().protection?.state).toBe('protected');
     host.emit('moduleStatus', { moduleId: 'auto-nexus', state: 'failing', since: 5 });
     expect(controller.state().protection?.state).toBe('protected');
@@ -468,7 +474,7 @@ describe('AppController lifecycle', () => {
   it('keeps two clients fresh through the real plugin coalescer', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     try {
-      const f = await realNexusSession(); f.connect('one'); f.connect('two'); await drain();
+      const f = await realNexusSession(); f.connect('one'); f.connect('two'); await drain(); await settleOwnership();
       f.send('one'); f.send('two');
       const states: string[] = []; controller.on('state', state => states.push(state.protection!.state));
       // Match worker tick batches: both clients publish back to back every 50ms.
@@ -488,7 +494,7 @@ describe('AppController lifecycle', () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
     const records: string[] = [], remove = log.addSink(record => { if (record.module === 'Protection') records.push(record.message); });
     try {
-      const f = await realNexusSession(); f.connect('one'); await drain(); f.send('one');
+      const f = await realNexusSession(); f.connect('one'); await drain(); await settleOwnership(); f.send('one');
       expect(controller.state().protection?.state).toBe('protected');
       const since = controller.state().protection?.since;
       const states: string[] = []; controller.on('state', state => states.push(state.protection!.state)); records.length = 0;
@@ -501,6 +507,155 @@ describe('AppController lifecycle', () => {
       expect(states.every(state => state === 'protected')).toBe(true); expect(records).toEqual([]);
     } finally { remove(); vi.useRealTimers(); }
   });
+
+  it.each(['open', 'closed', 'retired'] as const)('defers ownership lookup and ignores a %s session when appropriate', async disposition => {
+    await controller.shutdown(); vi.useFakeTimers();
+    const tcpRows = vi.fn(() => null);
+    setTcpOwnerSource({ tcpRows, processCreationTime: () => 100n });
+    try {
+      deps.gameProcessIds = async () => [123];
+      controller = make(); await controller.startProxy(); await drain();
+      hosts[0].emit('session', { id: 'deferred', remotePort: 32123 });
+      expect(tcpRows).not.toHaveBeenCalled();
+      if (disposition === 'closed') hosts[0].emit('closed', { id: 'deferred', by: 'game' });
+      if (disposition === 'retired') {
+        await controller.stopProxy();
+        await controller.startProxy(); await drain();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(tcpRows).toHaveBeenCalledTimes(disposition === 'open' ? 1 : 0);
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe(disposition === 'open' ? 'routed' : 'not-routed');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('ignores deferred ownership while stop awaits a data flight (lookup succeeds=%s)', async resolves => {
+    await controller.shutdown(); vi.useFakeTimers();
+    const tcpRows = vi.fn(() => resolves ? [{
+      state: 5, localAddr: 0x0100007f, remoteAddr: 0x0100007f,
+      localPort: 32123, remotePort: 2050, pid: 123,
+    }] : null);
+    setTcpOwnerSource({ tcpRows, processCreationTime: () => 100n });
+    let finish!: (result: import('../refreshData.ts').RefreshResult) => void;
+    let stopping: Promise<void> | undefined;
+    try {
+      deps.gameProcessIds = async () => [123, 456];
+      deps.readGameBuild = async () => 'A';
+      let published = 'old';
+      deps.catalogBuilds = () => selection(published);
+      deps.refreshCatalogs = vi.fn(() => new Promise<import('../refreshData.ts').RefreshResult>(resolve => { finish = resolve; }));
+      controller = make(); await controller.startProxy(); await drain();
+      expect(controller.state().data.state).toBe('refreshing');
+      hosts[0].emit('session', { id: 'stopping', remotePort: 32123 });
+      stopping = controller.stopProxy();
+      expect(controller.state().proxy.state).toBe('stopping');
+      expect(hosts[0].stop).not.toHaveBeenCalled();
+      // Run the immediate before the aborted data flight's promise reactions:
+      // cleanup has cleared routing but still retains the host and session.
+      vi.advanceTimersByTime(0);
+      const duringStop = controller.state().game.routing;
+      await stopping;
+      expect(tcpRows).not.toHaveBeenCalled();
+      expect(duringStop).toBe('unknown');
+      expect(controller.state().game.routing).toBe('unknown');
+      published = 'A';
+      finish({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 });
+      await controller.startProxy(); await drain();
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe('not-routed');
+    } finally {
+      finish?.({ gameBuild: 'A', items: 1, projectiles: 2, tiles: 3, ms: 4 });
+      await stopping;
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves a routed live PID through transient identity-read failures', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    let created: bigint | null = 100n;
+    setTcpOwnerSource({
+      tcpRows: () => [{ state: 5, localAddr: 0x0100007f, remoteAddr: 0x0100007f,
+        localPort: 32123, remotePort: 2050, pid: 123 }],
+      processCreationTime: () => created,
+    });
+    try {
+      deps.gameProcessIds = async () => [123];
+      controller = make(); await controller.startProxy(); await drain();
+      hosts[0].emit('session', { id: 'game', remotePort: 32123 });
+      await vi.advanceTimersByTimeAsync(0);
+      hosts[0].emit('closed', { id: 'game', by: 'game' });
+      created = null;
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe('routed');
+      created = 200n;
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe('not-routed');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('keeps an exact identity received during a stale process enumeration', async () => {
+    await controller.shutdown(); vi.useFakeTimers();
+    setTcpOwnerSource({
+      tcpRows: () => [{ state: 5, localAddr: 0x0100007f, remoteAddr: 0x0100007f,
+        localPort: 32123, remotePort: 2050, pid: 456 }],
+      processCreationTime: () => 100n,
+    });
+    try {
+      const enumerate = vi.fn(async () => [123]);
+      deps.gameProcessIds = enumerate;
+      controller = make(); await controller.startProxy(); await drain();
+      let finish!: (pids: number[]) => void;
+      enumerate.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      await vi.advanceTimersByTimeAsync(10_000);
+      hosts[0].emit('session', { id: 'new', remotePort: 32123 });
+      await vi.advanceTimersByTimeAsync(0);
+      finish([]); await drain();
+      hosts[0].emit('closed', { id: 'new', by: 'game' });
+      enumerate.mockResolvedValue([456]);
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(controller.state().game.routing).toBe('routed');
+    } finally { vi.useRealTimers(); }
+  });
+
+  for (const scenario of ['two clients', 'proxy restart', 'PID reuse', 'live PID reuse', 'process exit', 'lookup failure'] as const) {
+    it(`tracks exact socket ownership: ${scenario}`, async () => {
+      await controller.shutdown(); vi.useFakeTimers();
+      let pids = scenario === 'two clients' ? [123, 456] : [123];
+      let created = 100n;
+      setTcpOwnerSource({
+        tcpRows: () => {
+          if (scenario === 'lookup failure') throw new Error('unavailable');
+          return [{ state: 5, localAddr: 0x0100007f, remoteAddr: 0x0100007f,
+            localPort: 32123, remotePort: 2050, pid: 123 }];
+        },
+        processCreationTime: pid => pid === 123 ? created : 200n,
+      });
+      try {
+        deps.gameProcessIds = async () => pids;
+        controller = make(); await controller.startProxy(); await drain();
+        hosts[0].emit('session', { id: 'game', remotePort: 32123 });
+        await vi.advanceTimersByTimeAsync(0);
+        if (scenario !== 'two clients' && scenario !== 'lookup failure')
+          hosts[0].emit('closed', { id: 'game', by: 'game' });
+        if (scenario === 'proxy restart' || scenario === 'PID reuse') {
+          await controller.stopProxy();
+          if (scenario === 'PID reuse') created = 300n;
+          await controller.startProxy(); await drain();
+        }
+        if (scenario === 'live PID reuse') created = 300n;
+        if (scenario === 'process exit') pids = [];
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(controller.state().game.routing).toBe(
+          scenario === 'two clients' || scenario === 'PID reuse' || scenario === 'live PID reuse' ? 'not-routed'
+            : scenario === 'process exit' ? 'unknown' : 'routed');
+        if (scenario === 'two clients') {
+          pids = [123];
+          await vi.advanceTimersByTimeAsync(10_000);
+          expect(controller.state().game.routing).toBe('routed');
+        }
+      } finally { vi.useRealTimers(); }
+    });
+  }
 
   it('re-inspects helper on polls and sessions and detects missing routing with a grace period', async () => {
     await controller.shutdown(); vi.useFakeTimers();
@@ -517,6 +672,7 @@ describe('AppController lifecycle', () => {
       expect(deps.gameProcessIds).toHaveBeenCalledTimes(8); // Includes startup while stopped.
       writeFileSync(join(game, HELPER_FILE), 'RealmTool-Helper/current');
       hosts[0].emit('session', { id: 'game', remotePort: 123 });
+      await vi.advanceTimersByTimeAsync(0);
       expect(controller.state().game).toMatchObject({ routing: 'routed', helper: { state: 'installed' } });
       hosts[0].emit('closed', { id: 'game', by: 'game' });
       pids = []; await vi.advanceTimersByTimeAsync(60_000);
@@ -560,6 +716,7 @@ describe('AppController lifecycle', () => {
       enumerate.mockImplementationOnce(() => new Promise<number[]>(resolve => { finish = resolve; }));
       await vi.advanceTimersByTimeAsync(10_000);
       hosts[0].emit('session', { id: 'restarted', remotePort: 123 });
+      await vi.advanceTimersByTimeAsync(0);
       finish([456]); await drain();
       enumerate.mockResolvedValue([456]);
       hosts[0].emit('closed', { id: 'restarted', by: 'game' });
@@ -575,6 +732,7 @@ describe('AppController lifecycle', () => {
       deps.gameProcessIds = vi.fn(() => new Promise<number[]>(resolve => { finish = resolve; }));
       controller = make(); await controller.startProxy(); await drain();
       hosts[0].emit('session', { id: 'game', remotePort: 123 });
+      await vi.advanceTimersByTimeAsync(0);
       finish([]); await drain();
       expect(controller.state().game.routing).toBe('routed');
       await vi.advanceTimersByTimeAsync(30_000);

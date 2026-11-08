@@ -1,7 +1,5 @@
 import { LoopLagSampler, type LoopLag } from '../transport/latency.ts';
 import { computeProtection, type Protection, type ModuleProtection } from './protection.ts';
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
 import { gameProcessIds } from '../game/gameProcess.ts';
 import { readGameFileStamps, readCatalogSourceSync, sameGameFiles, type CatalogSource } from '../data/catalogSource.ts';
 import { readGameBuildAsync } from '../game/gameBuild.ts';
@@ -16,7 +14,7 @@ import { AppConfigStore } from '../config/appConfig.ts';
 import { ProfileStore } from '../config/store.ts';
 import { createProfile, deleteProfile, listProfiles, validProfileName } from '../config/profiles.ts';
 import { findExaltDirs, isExaltDir } from '../game/exaltFinder.ts';
-import { BACKUP_FILE, HELPER_FILE, HELPER_MARKER, installHelper, uninstallHelper, inspectHelper, type HelperState, type InstallResult, type UninstallStatus } from '../game/helperInstaller.ts';
+import { createHelperInspector, installHelper, uninstallHelper, inspectHelper, type HelperState, type InstallResult, type UninstallStatus } from '../game/helperInstaller.ts';
 import { describeLaunchTarget, findLaunchTarget, openLaunchTarget, type LaunchTarget } from '../game/gameLauncher.ts';
 import type { PluginDefinition } from '../plugins/api.ts';
 import { PluginHost, type ProxyLike } from '../plugins/host.ts';
@@ -24,7 +22,7 @@ import { toJsonSafe, type PluginSnapshot } from '../plugins/snapshot.ts';
 import { GAME_PORT } from '../protocol/constants.ts';
 import { createFactory, loadSchema } from '../protocol/schema.ts';
 import { createTargetResolver, removeStaleTargetFiles } from '../routing/targetResolver.ts';
-import { tcpOwnerSourceError } from '../routing/tcpProcessIdentity.ts';
+import { tcpOwnerSourceError, readTcpProcessIdentity, readProcessIdentity } from '../routing/tcpProcessIdentity.ts';
 import { ProxyHost, type ProxyHostOptions } from '../transport/host.ts';
 import { log } from '../util/log.ts';
 import type { LogRing } from '../util/logStore.ts';
@@ -39,7 +37,8 @@ export interface AppState {
   data: DataState;
   proxy: { state: ProxyState; port: number | null; error: string | null };
   game: { dir: string | null; candidates: string[]; launcher: string | null;
-    /** Observed proxy participation, not a protection guarantee. Always emitted by the controller; optional for older state producers. */
+    /** 'not-routed' means at least one observed client is unrouted after the grace period.
+     * Observed proxy participation, not a protection guarantee. Always emitted by the controller; optional for older state producers. */
     routing?: 'unknown' | 'routed' | 'not-routed';
     /** Explanation of the current routing observation. */
     routingReason?: string;
@@ -83,22 +82,6 @@ export class OperationBusyError extends Error {
 }
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
-const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
-
-/** One inspector per controller: the bundled helper is immutable during its lifetime. */
-function cachedHelperInspector(): typeof inspectHelper {
-  let bundled: { path: string; hash: string } | undefined;
-  return (gameDir, helperPath) => {
-    const backup = existsSync(join(gameDir, BACKUP_FILE));
-    const target = join(gameDir, HELPER_FILE);
-    if (!existsSync(target)) return { state: 'absent', backup };
-    const bytes = readFileSync(target);
-    if (!bytes.includes(HELPER_MARKER, 0, 'latin1')) return { state: 'foreign', backup };
-    if (bundled?.path !== helperPath) bundled = { path: helperPath, hash: hash(readFileSync(helperPath)) };
-    return { state: hash(bytes) === bundled.hash ? 'installed' : 'outdated', backup };
-  };
-}
-
 export class AppController extends EventEmitter<ControllerEvents> {
   private readonly config: AppConfigStore;
   private readonly resources: ResourcePaths;
@@ -132,8 +115,11 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private freshnessTimer: ReturnType<typeof setInterval>;
   private nexusStatuses = new Map<string, { status: Record<string, unknown>; at: number }>();
   private connectedAt = new Map<string, number>();
+  private routingSessionRevision = 0;
+  private routedIdentities = new Map<number, string>();
+  private unboundSessions = new Set<string>();
   private routedPids = new Set<number>();
-  private unboundSession = false;
+  private pendingFallbackBinding = false;
   private unroutedSince: number | null = null;
   private catalogBuilds: CatalogSelection | null = null;
   private catalogsInvalidated = false;
@@ -157,7 +143,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
       },
       createHost: options => new ProxyHost(options), plugins: BUILTIN_PLUGINS,
       nativeModuleError: tcpOwnerSourceError, findGameDirs: findExaltDirs, isGameDir: isExaltDir,
-      installHelper, uninstallHelper, inspectHelper: cachedHelperInspector(),
+      installHelper, uninstallHelper, inspectHelper: createHelperInspector(),
       findLauncher: override => findLaunchTarget(undefined, override), openLauncher: openLaunchTarget,
       launch: (onError, override) => {
         const target = this.deps.findLauncher(override);
@@ -259,54 +245,78 @@ export class AppController extends EventEmitter<ControllerEvents> {
     Object.assign(this.current.game, { routing: state, routingReason: reason, routingUpdatedAt: Date.now() });
     this.changed();
   }
-  private recordRoutedSession(): void {
+  private recordRoutedSession(id?: string, remotePort?: number): void {
+    // Socket ownership is read on the host/main thread, never in the network worker.
+    const identity = remotePort === undefined ? null
+      : readTcpProcessIdentity(remotePort, this.current.proxy.port ?? GAME_PORT);
+    if (identity) {
+      this.routingSessionRevision++;
+      this.gameDetected = true;
+      this.routedIdentities.set(identity.pid, identity.processStartTime);
+      if (!this.observedPids.some(pid => !this.routedIdentities.has(pid) && !this.routedPids.has(pid))) {
+        this.unroutedSince = null;
+        this.routing('routed', 'Game session observed through the proxy');
+      }
+      return;
+    }
+    if (id) this.unboundSessions.add(id);
     this.gameDetected = true;
     this.unroutedSince = null;
     if (this.observedPids.length) {
       for (const pid of this.observedPids) this.routedPids.add(pid);
-    } else this.unboundSession = true;
+    } else this.pendingFallbackBinding = true;
     this.routing('routed', 'Game session observed through the proxy');
   }
   private checkRouting(): void {
     if (this.current.proxy.state !== 'running') return;
-    // A live session is stronger evidence than process enumeration.
-    if (this.sessions.size) { this.recordRoutedSession(); return; }
+    // Without socket ownership, preserve the legacy live-session fallback.
+    if (this.unboundSessions.size) { this.recordRoutedSession(); return; }
     if (this.routingFlight) return;
     const host = this.host;
+    const sessionRevision = this.routingSessionRevision;
     this.routingFlight = (async () => {
       let pids: number[] | null;
       try { pids = await this.deps.gameProcessIds(); } catch { pids = null; }
       if (this.host !== host || this.current.proxy.state !== 'running') return;
-      if (this.sessions.size) {
+      if (this.unboundSessions.size) {
         if (pids) this.observedPids = pids;
         this.recordRoutedSession();
         return;
       }
+      // A session observed after enumeration started supersedes that snapshot.
+      if (sessionRevision !== this.routingSessionRevision) return;
       if (pids === null) {
         // Failed enumeration cannot disprove a previously observed session.
         if (this.current.game.routing !== 'routed') this.routing('unknown', 'Game process could not be checked');
         return;
       }
-      const changed = pids.length !== this.observedPids.length || pids.some(pid => !this.observedPids.includes(pid));
+      let changed = pids.length !== this.observedPids.length || pids.some(pid => !this.observedPids.includes(pid));
+      for (const [pid, startTime] of this.routedIdentities) {
+        const current = pids.includes(pid) ? readProcessIdentity(pid) : null;
+        if (!pids.includes(pid) || (current && current.processStartTime !== startTime)) {
+          this.routedIdentities.delete(pid);
+          changed = true;
+        }
+      }
       this.observedPids = pids;
       this.gameDetected = pids.length > 0;
       this.protectionChanged();
       this.routedPids = new Set([...this.routedPids].filter(pid => pids.includes(pid)));
-      if (this.unboundSession) {
+      if (this.pendingFallbackBinding) {
         for (const pid of pids) this.routedPids.add(pid);
-        this.unboundSession = false;
+        this.pendingFallbackBinding = false;
       }
       if (!pids.length) {
         this.unroutedSince = null;
         this.routing('unknown', 'Game is not running');
-      } else if (this.routedPids.size) {
+      } else if (pids.every(pid => this.routedPids.has(pid) || this.routedIdentities.has(pid))) {
         this.unroutedSince = null;
         this.routing('routed', 'Game session observed through the proxy');
       } else {
         if (changed) this.unroutedSince = null;
         this.unroutedSince ??= Date.now();
         if (Date.now() - this.unroutedSince > 15_000) {
-          this.routing('not-routed', "Game is running but has not connected through RealmTool; if you're in game, restart it so the helper loads.");
+          this.routing('not-routed', "One or more game processes have not connected through RealmTool; if you're in game, restart the unrouted client so the helper loads.");
         } else this.routing('unknown', 'Waiting for a game session');
       }
     })().finally(() => { this.routingFlight = null; });
@@ -542,12 +552,18 @@ export class AppController extends EventEmitter<ControllerEvents> {
     // Retain exact listener references so an old worker cannot affect a subsequent start.
     const onSession = ({ id, remotePort }: { id: string; remotePort: number }) => {
       this.refreshHelper();
-      this.recordRoutedSession();
+      // ProxyHost posts the target after emitting session. Let that finish before
+      // querying the TCP table so routing diagnostics cannot hold up the hello.
+      setImmediate(() => {
+        if (this.current.proxy.state !== 'running' || this.host !== host || !this.sessions.has(id)) return;
+        this.recordRoutedSession(id, remotePort);
+      });
       void this.automaticDataCheck();
       this.sessions.add(id); this.sessionState(); log.info('Proxy', `Game connected (${id.slice(0, 8)}, port ${remotePort})`);
     };
     const onConnected = ({ id }: { id: string }) => { if (this.sessions.has(id)) { this.connected.add(id); this.connectedAt.set(id, Date.now()); this.nexusStatuses.delete(id); this.sessionState(); } };
     const onClosed = ({ id, by }: { id: string; by: string }) => {
+      this.unboundSessions.delete(id);
       this.sessions.delete(id); this.connected.delete(id); this.connectedAt.delete(id); this.nexusStatuses.delete(id); this.sessionState(); log.info('Proxy', `${id.slice(0, 8)} closed by ${by}`);
     };
     const onRouted = ({ id, host: server, port, restored }: { id: string; host: string; port: number; restored: boolean }) =>
@@ -648,7 +664,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.nexusStatuses.clear(); this.connectedAt.clear();
     if (this.routingTimer) clearInterval(this.routingTimer);
     this.routingTimer = null;
-    this.observedPids = []; this.routedPids.clear(); this.unboundSession = false;
+    this.observedPids = []; this.routedPids.clear(); this.pendingFallbackBinding = false; this.unboundSessions.clear();
     this.unroutedSince = null;
     this.routing('unknown', 'Proxy is stopped');
     this.dataAbort?.abort(new Error('Game data refresh cancelled'));
@@ -662,6 +678,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     finally {
       try { if (host) await host.stop(); }
       finally {
+        this.unboundSessions.clear(); this.pendingFallbackBinding = false;
         this.sessions.clear(); this.connected.clear(); this.sessionState();
         this.refreshHelper(); this.emit('plugins', this.plugins());
       }

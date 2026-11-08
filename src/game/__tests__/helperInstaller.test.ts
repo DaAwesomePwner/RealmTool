@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameS
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { BACKUP_FILE, HELPER_FILE, LOCK_FILE, installHelper, uninstallHelper, type InstallerOps } from '../helperInstaller.ts';
+import { BACKUP_FILE, HELPER_FILE, LOCK_FILE, createHelperInspector, inspectHelper, installHelper, uninstallHelper, type InstallerOps } from '../helperInstaller.ts';
 
 function failingOps(operation: 'copyFile' | 'rename', failOnCall: number): InstallerOps {
   let calls = 0;
@@ -27,6 +27,24 @@ function setup() {
 }
 
 describe('helper installer', () => {
+  it('caches the immutable bundled hash per inspector, but re-reads the installed helper', () => {
+    const s = setup();
+    copyFileSync(s.helper, s.target);
+    const inspect = createHelperInspector();
+    expect(inspect(s.game, s.helper)).toEqual(inspectHelper(s.game, s.helper));
+    unlinkSync(s.helper); // The cached bundle no longer needs filesystem access.
+    expect(inspect(s.game, s.helper).state).toBe('installed');
+    writeFileSync(s.target, 'RealmTool-Helper/older');
+    expect(inspect(s.game, s.helper).state).toBe('outdated');
+    writeFileSync(s.target, 'foreign');
+    expect(inspect(s.game, s.helper).state).toBe('foreign');
+    unlinkSync(s.target);
+    expect(inspect(s.game, s.helper).state).toBe('absent');
+    const other = setup();
+    copyFileSync(other.helper, other.target);
+    expect(inspect(other.game, other.helper).state).toBe('installed');
+  });
+
   it.each(['EBUSY', 'EPERM', 'EACCES'])('preserves the helper and backup when uninstall unlink fails with %s', code => {
     const s = setup();
     copyFileSync(s.helper, s.target);
