@@ -48,10 +48,11 @@ describe('parseCli', () => {
     expect(parseCli(['start', '--launcher', ' D:\\Launcher.exe ']).launcher).toBe('D:\\Launcher.exe');
   });
 
-  it('rejects the game executable as a launcher argument', () => {
-    expect(() => parseCli(['start', '--launcher', ' D:\\Exalt\\RotMG Exalt.exe ']))
-      .toThrow('Select the RotMG Exalt Launcher');
-  });
+  it.each([' D:\\Exalt\\RotMG Exalt.exe ', 'D:/Exalt/RotMG Exalt.exe', '/games/RotMG Exalt.exe', 'ROTMG EXALT.EXE'])(
+    'rejects the game executable as a launcher argument (%s)', launcher => {
+      expect(() => parseCli(['start', '--launcher', launcher]))
+        .toThrow('Select the RotMG Exalt Launcher');
+    });
 
   it.each(['', '   '])('rejects an empty launcher (%j)', value => {
     expect(() => parseCli(['start', `--launcher=${value}`])).toThrow('--launcher must not be empty');
