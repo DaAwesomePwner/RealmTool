@@ -437,6 +437,19 @@ it('retiring an unknown AoE observation leaves FIFO correspondence unchanged', (
   f.send('AOEACK', { position: { x: 1, y: 1 } }, true);
   expect(f.engine.status().prediction?.pendingDamage).toBe(60);
 });
+it('#20: every AoE is acknowledged in order, so a miss between hits never shifts FIFO matching', () => {
+  const f = fixture();
+  f.send('AOE', { position: { x: 1, y: 1 }, radius: 2, damage: 40 });
+  f.send('AOE', { position: { x: 20, y: 20 }, radius: 2, damage: 300 });
+  f.send('AOE', { position: { x: 1, y: 1 }, radius: 2, damage: 25 });
+  f.send('AOEACK', { position: { x: 1, y: 1 } }, true);
+  expect(f.engine.status().prediction?.pendingDamage).toBe(40);
+  f.send('AOEACK', { position: { x: 1, y: 1 } }, true);
+  expect(f.engine.status().prediction?.pendingDamage).toBe(40);
+  f.send('AOEACK', { position: { x: 1, y: 1 } }, true);
+  expect(f.engine.status().prediction?.pendingDamage).toBe(65);
+  expect(f.escape).not.toHaveBeenCalled();
+});
 it('R9: cleanup prunes areas older than 10 seconds and the next ACK consumes the fresh area', () => {
   const f = fixture();
   f.send('AOE', { position: { x: 1, y: 1 }, radius: 2, damage: 500 });
