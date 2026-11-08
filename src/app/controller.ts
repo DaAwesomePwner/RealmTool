@@ -119,7 +119,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
   private routedIdentities = new Map<number, string>();
   private unboundSessions = new Set<string>();
   private routedPids = new Set<number>();
-  private unboundSession = false;
+  private pendingFallbackBinding = false;
   private unroutedSince: number | null = null;
   private catalogBuilds: CatalogSelection | null = null;
   private catalogsInvalidated = false;
@@ -264,7 +264,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.unroutedSince = null;
     if (this.observedPids.length) {
       for (const pid of this.observedPids) this.routedPids.add(pid);
-    } else this.unboundSession = true;
+    } else this.pendingFallbackBinding = true;
     this.routing('routed', 'Game session observed through the proxy');
   }
   private checkRouting(): void {
@@ -293,7 +293,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
       let changed = pids.length !== this.observedPids.length || pids.some(pid => !this.observedPids.includes(pid));
       for (const [pid, startTime] of this.routedIdentities) {
         const current = pids.includes(pid) ? readProcessIdentity(pid) : null;
-        if (!current || current.processStartTime !== startTime) {
+        if (!pids.includes(pid) || (current && current.processStartTime !== startTime)) {
           this.routedIdentities.delete(pid);
           changed = true;
         }
@@ -302,9 +302,9 @@ export class AppController extends EventEmitter<ControllerEvents> {
       this.gameDetected = pids.length > 0;
       this.protectionChanged();
       this.routedPids = new Set([...this.routedPids].filter(pid => pids.includes(pid)));
-      if (this.unboundSession) {
+      if (this.pendingFallbackBinding) {
         for (const pid of pids) this.routedPids.add(pid);
-        this.unboundSession = false;
+        this.pendingFallbackBinding = false;
       }
       if (!pids.length) {
         this.unroutedSince = null;
@@ -552,7 +552,12 @@ export class AppController extends EventEmitter<ControllerEvents> {
     // Retain exact listener references so an old worker cannot affect a subsequent start.
     const onSession = ({ id, remotePort }: { id: string; remotePort: number }) => {
       this.refreshHelper();
-      this.recordRoutedSession(id, remotePort);
+      // ProxyHost posts the target after emitting session. Let that finish before
+      // querying the TCP table so routing diagnostics cannot hold up the hello.
+      setImmediate(() => {
+        if (this.host !== host || !this.sessions.has(id)) return;
+        this.recordRoutedSession(id, remotePort);
+      });
       void this.automaticDataCheck();
       this.sessions.add(id); this.sessionState(); log.info('Proxy', `Game connected (${id.slice(0, 8)}, port ${remotePort})`);
     };
@@ -659,7 +664,7 @@ export class AppController extends EventEmitter<ControllerEvents> {
     this.nexusStatuses.clear(); this.connectedAt.clear();
     if (this.routingTimer) clearInterval(this.routingTimer);
     this.routingTimer = null;
-    this.observedPids = []; this.routedPids.clear(); this.unboundSession = false; this.unboundSessions.clear();
+    this.observedPids = []; this.routedPids.clear(); this.pendingFallbackBinding = false; this.unboundSessions.clear();
     this.unroutedSince = null;
     this.routing('unknown', 'Proxy is stopped');
     this.dataAbort?.abort(new Error('Game data refresh cancelled'));
