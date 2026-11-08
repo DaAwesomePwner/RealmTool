@@ -102,6 +102,7 @@ class Plugin implements PluginContext {
   set enabled(value: boolean) {
     if (this.failed) return;
     this.enabledValue = value;
+    this.host.refreshInterest();
     for (const callback of this.enabledCallbacks) {
       try { callback(value); } catch (error) { log.error(this.name, 'Enable callback failed', error); }
     }
@@ -458,7 +459,7 @@ export class PluginHost {
       if (!def || def.type === 'button' || def.transient) continue;
       if (!plugin.updateSetting(key, value)) log.warn('Plugins', `${plugin.name}: ignored an invalid saved value for ${key}`);
     }
-    if (typeof entry?.enabled === 'boolean') plugin.enabled = entry.enabled;
+    if (plugin.definition.persistEnabled !== false && typeof entry?.enabled === 'boolean') plugin.enabled = entry.enabled;
   }
 
   private fail(plugin: Plugin): void {
@@ -499,8 +500,13 @@ export class PluginHost {
   private profileSnapshot(): Profile {
     const plugins: Profile['plugins'] = { ...this.loadedProfile.plugins };
     for (const plugin of this.plugins.values()) {
-      if (plugin.failed) continue;
-      plugins[plugin.pluginId] = { enabled: plugin.enabled, settings: plugin.settings.persistable() };
+      if (!plugin.failed) {
+        plugins[plugin.pluginId] = { enabled: plugin.enabled, settings: plugin.settings.persistable() };
+      }
+      if (plugin.definition.persistEnabled === false && plugins[plugin.pluginId]) {
+        plugins[plugin.pluginId] = { ...plugins[plugin.pluginId] };
+        delete plugins[plugin.pluginId].enabled;
+      }
     }
     return { schemaVersion: PROFILE_SCHEMA_VERSION, plugins };
   }
@@ -514,18 +520,24 @@ export class PluginHost {
   private interest(): InterestSpec {
     const verdict = { client: new Set<string>(), server: new Set<string>() };
     const observe = { client: new Set<string>(), server: new Set<string>() };
-    for (const name of this.hooks.keys()) verdict[this.direction(name)].add(name);
-    if (this.commands.size > 0) verdict.client.add('PLAYERTEXT');
-    for (const name of this.observers.keys()) observe[this.direction(name)].add(name);
+    const active = ({ plugin }: Registered<unknown>) => plugin.enabled && !plugin.failed;
+    const commands = [...this.commands].filter(([, list]) => list.some(active)).map(([name]) => name);
+    for (const [name, list] of this.hooks) {
+      if (list.some(active)) verdict[this.direction(name)].add(name);
+    }
+    if (commands.length > 0) verdict.client.add('PLAYERTEXT');
+    for (const [name, list] of this.observers) {
+      if (list.some(active)) observe[this.direction(name)].add(name);
+    }
     for (const name of IDENTITY_PACKETS) observe[this.direction(name)].add(name);
     return {
-      commands: [...this.commands.keys()],
+      commands,
       verdict: { client: [...verdict.client], server: [...verdict.server] },
       observe: { client: [...observe.client], server: [...observe.server] },
     };
   }
 
-  private refreshInterest(): void {
+  refreshInterest(): void {
     if (this.started) this.proxy.setInterest(this.interest());
   }
 

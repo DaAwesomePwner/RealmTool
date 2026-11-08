@@ -28,10 +28,10 @@ it('refuses saved enabled=true on every host/profile load, then permits a manual
       try {
         expect(f.host.snapshot()[0].enabled).toBe(false);
         expect(f.proxy.interest.observe?.server).not.toContain('AOE');
-        await Promise.resolve();
-        expect(f.host.snapshot()[0].enabled).toBe(false);
         f.host.setEnabled('capture', true);
         expect(f.host.snapshot()[0].enabled).toBe(true);
+        f.host.flush();
+        expect(f.profile.load().plugins.capture).toEqual({ settings: { maxFileMB: 50, includeAllDamage: false } });
       } finally { f.host.stop(); }
     }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
@@ -66,7 +66,7 @@ it('logs write error codes, and an old writer failure cannot disable a new captu
   const spy = vi.spyOn(fs, 'open').mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOpen = reject; }));
   const f = fixture();
   try {
-    await Promise.resolve(); f.ctx.enabled = true;
+    f.ctx.enabled = true;
     f.hooks.get('NEWTICK')!(client, status(0));
     await vi.waitFor(() => expect(rejectOpen).toBeTypeOf('function'));
     f.ctx.enabled = false; f.ctx.enabled = true;
@@ -93,7 +93,7 @@ it('periodic summaries omit idle clients and disconnect prunes both maps without
   vi.spyOn(CaptureWriter.prototype, 'write').mockImplementation(() => {});
   const f = fixture();
   try {
-    await Promise.resolve(); f.ctx.enabled = true;
+    f.ctx.enabled = true;
     f.hooks.get('NEWTICK')!(client, status(0));
     vi.advanceTimersByTime(60_000);
     expect(f.logs.filter(s => s.includes('heuristic'))).toHaveLength(1);

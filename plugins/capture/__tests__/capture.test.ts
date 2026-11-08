@@ -69,16 +69,16 @@ it('counts ACKs, near and unknown unacked AOEs with pending separately', () => {
   const unknown = new Correlation(); unknown.add(r('AOE', 0, 0));
   expect(unknown.summary('c2', 1600)).toContain('position unknown=1');
 });
-it('defaults off with no observer interest until first enable (known host limitation after disable)', async () => {
+it('defaults off and removes observer interest again when disabled', () => {
   const f = startHost([plugin]);
   try {
     expect(f.proxy.interest.observe?.server).toEqual(expect.arrayContaining(['CREATESUCCESS', 'NEWTICK', 'UPDATE']));
     expect(f.proxy.interest.observe?.server).not.toContain('AOE');
-    await Promise.resolve();
     f.host.setEnabled('capture', true);
     expect(f.proxy.interest.observe?.server).toContain('AOE');
     f.host.setEnabled('capture', false);
-    // Host API currently has no unregister: document rather than conceal this limitation.
+    expect(f.proxy.interest.observe?.server).not.toContain('AOE');
+    f.host.setEnabled('capture', true);
     expect(f.proxy.interest.observe?.server).toContain('AOE');
   } finally { f.host.stop(); }
 });
@@ -92,7 +92,7 @@ it('disable and cleanup drain writes; re-enable creates a fresh file without dup
     onEnabledChange: (fn: typeof enabledChanged) => { enabledChanged = fn; }, registerCleanup: (fn: typeof cleanup) => { cleanup = fn; }, log: (s: string) => logs.push(s),
   } as unknown as PluginContext;
   try {
-    plugin.register(ctx); await Promise.resolve(); expect(ctx.enabled).toBe(false); expect(hooks.size).toBe(0);
+    plugin.register(ctx); expect(ctx.enabled).toBe(false); expect(hooks.size).toBe(0);
     for (let i = 0; i < 2; i++) {
       ctx.enabled = true; enabledChanged(true);
       hooks.get('AOE')!(client, packet('AOE', { radius: 1 }));
