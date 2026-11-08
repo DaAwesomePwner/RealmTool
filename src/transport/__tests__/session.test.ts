@@ -190,6 +190,40 @@ describe('Session', () => {
     expect(game.frames).toEqual([first, middle, last, middle]);
   });
 
+  it.each(['/con', '/tell bob hi'])('releases %s safely before ESCAPE and preserves frame order', async text => {
+    let now = 0;
+    const h = await harness({ now: () => now, interest: new Interest({
+      commands: ['con'], verdict: { client: ['PLAYERTEXT', 'ESCAPE'] }, observe: { client: ['*'] },
+    }) });
+    const { game, upstream, session } = await connected(h, await fakeServer());
+    const packet = factory.createByName('PLAYERTEXT');
+    packet.data.text = text;
+    const original = factory.serialize(packet);
+    const middle = frame(UNKNOWN, Buffer.from('middle'));
+    packet.data.text = 'hello';
+    const chat = factory.serialize(packet);
+    const escape = frame(id('ESCAPE'));
+    game.send(original); game.send(middle); game.send(chat);
+    await until(() => packets(h).filter(event => event.sequence !== 0).length === 3, 'held queue');
+    expect(upstream.frames).toHaveLength(1);
+    now = 100;
+    game.send(escape);
+    const expected = text === '/con' ? [middle, chat, escape] : [original, middle, chat, escape];
+    await until(() => upstream.frames.length === expected.length + 1, 'ESCAPE delivered without tick');
+    expect(upstream.frames.slice(1)).toEqual(expected);
+    expect(packets(h).at(-1)?.observeOnly).toBe(true);
+    expect(session['pending'].size).toBe(0);
+    expect(h.events).toContainEqual(expect.objectContaining({
+      type: 'diagnostic', message: text === '/con'
+        ? 'Critical-packet verdict overrides: 1; released original packets; Critical-packet command drops: 1'
+        : 'Critical-packet verdict overrides: 2; released original packets',
+    }));
+    for (const event of packets(h)) session.forward(event.sequence, event.generation, Buffer.from(event.data));
+    game.send(middle);
+    await until(() => upstream.frames.length === expected.length + 2, 'cipher remains aligned');
+    expect(upstream.frames.slice(1)).toEqual([...expected, middle]);
+  });
+
   it.each(['RECONNECT', 'DEATH', 'MAPINFO', 'ESCAPE'])('releases queued originals immediately before %s, which is observe-only', async name => {
     const fromClient = name === 'ESCAPE';
     const heldName = fromClient ? 'PLAYERTEXT' : 'TEXT';

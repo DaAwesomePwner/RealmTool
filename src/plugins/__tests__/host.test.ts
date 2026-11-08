@@ -298,6 +298,7 @@ describe('PluginHost', () => {
     }).not.toThrow();
     expect(migrate.mock.calls).toEqual([[{ n: 3 }, true], [undefined, false]]);
     expect(h.host.loaded()).toEqual(['later']);
+    expect(h.proxy.interest.commands).toEqual([]);
     expect(h.host.context('bad')).toBeUndefined();
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(h.proxy.interest.verdict?.server).toEqual([]);
@@ -349,6 +350,18 @@ describe('PluginHost', () => {
     expect(h.proxy.interest.commands).toEqual(['late', 'con']);
     expect(h.proxy.interest.verdict).toEqual({ client: ['PLAYERTEXT'], server: ['TEXT'] });
     expect(h.proxy.interest.observe?.client).toEqual(['HELLO']);
+    h.host.stop();
+  });
+
+  it('refreshes interest when the last command plugin is unregistered', () => {
+    const h = startHost([plugin('commands', ctx => ctx.hookCommand('con', () => {}))]);
+    expect(h.proxy.interest.commands).toEqual(['con']);
+    expect(h.proxy.interest.verdict?.client).toContain('PLAYERTEXT');
+    const interest = vi.spyOn(h.proxy, 'setInterest');
+    h.host['unregister'](h.host['plugins'].get('commands')!);
+    expect(interest).toHaveBeenCalledTimes(1);
+    expect(h.proxy.interest.commands).toEqual([]);
+    expect(h.proxy.interest.verdict?.client).not.toContain('PLAYERTEXT');
     h.host.stop();
   });
 
@@ -739,6 +752,7 @@ describe('PluginHost', () => {
     expect(failedContext.updateSetting('n', 2)).toBe(false);
     expect(interest).not.toHaveBeenCalled();
     expect(h.host.loaded()).toEqual(['later']);
+    expect(h.proxy.interest.commands).toEqual([]);
     expect(h.proxy.interest.verdict).toEqual({ client: [], server: [] });
     expect(h.proxy.interest.observe?.client).toEqual([]);
     const id = h.connect();

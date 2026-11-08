@@ -100,7 +100,7 @@ export interface PluginContext {
    * Verdicts have a 250 ms deadline; expiry forwards the original unchanged (except registered commands) and ignores late answers.
    * RECONNECT/DEATH/MAPINFO/ESCAPE hooks run observe-only; mutations and drops are ignored.
    * PLAYERTEXT has the same deadline: expired registered commands are dropped by the worker.
-   * Dropping expired command text instead is tracked as backlog work.
+   * ESCAPE also drops pending registered commands while releasing other queued frames.
    */
   hookPacket(name: string, fn: PacketHook, options?: { prepend?: boolean }): void;
   /** Read-only observer; mutations are ignored. */
