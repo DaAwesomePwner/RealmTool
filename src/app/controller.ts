@@ -632,7 +632,11 @@ export class AppController extends EventEmitter<ControllerEvents> {
     // over a worker that has not finished stopping. Startup handles its own failure.
     const task = this.pending ? this.pending.then(cleanup) : cleanup();
     this.changed();
-    void task.then(() => afterCleanup?.()).catch(error => log.error('Proxy', `Cleanup failed: ${message(error)}`));
+    void task.then(() => afterCleanup?.()).catch(error => {
+      // A queued user Stop can acquire the lock before this crash cleanup does.
+      if (error instanceof OperationBusyError && (this.current.proxy.state === 'stopping' || this.host !== host)) return;
+      log.error('Proxy', `Cleanup failed: ${message(error)}`);
+    });
   }
   private sessionState(): void {
     this.current.sessions = { open: this.sessions.size, connected: this.connected.size }; this.changed();

@@ -185,6 +185,33 @@ describe('AppController lifecycle', () => {
       expect(controller.state().proxy.state).toBe('running');
     } finally { vi.useRealTimers(); }
   });
+  it('does not log cleanup failure when Stop queues before crash cleanup', async () => {
+    vi.useFakeTimers();
+    const errors = vi.spyOn(log, 'error');
+    try {
+      await controller.startProxy(); await drain();
+      const creating = controller.createProfile('other');
+      const stopping = controller.stopProxy();
+      hosts[0].emit('exit', { code: 1, expected: false });
+      await creating; await stopping; await drain();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(controller.state().proxy.state).toBe('stopped');
+      expect(hosts).toHaveLength(1);
+      expect(hosts[0].stop).toHaveBeenCalledOnce();
+      expect(errors.mock.calls.filter(([, text]) => String(text).includes('Cleanup failed'))).toEqual([]);
+    } finally { errors.mockRestore(); vi.useRealTimers(); }
+  });
+
+  it('still logs genuine crash cleanup failures after the host is cleared', async () => {
+    const errors = vi.spyOn(log, 'error');
+    try {
+      await controller.startProxy(); await drain();
+      hosts[0].stop.mockRejectedValueOnce(new Error('fixture stop failure'));
+      hosts[0].emit('exit', { code: 1, expected: false }); await drain();
+      expect(errors).toHaveBeenCalledWith('Proxy', 'Cleanup failed: fixture stop failure');
+    } finally { errors.mockRestore(); }
+  });
+
   it('logs a failed automatic start and leaves it failed without looping', async () => {
     vi.useFakeTimers();
     const errors = vi.spyOn(log, 'error');

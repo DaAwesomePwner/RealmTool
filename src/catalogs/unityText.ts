@@ -61,10 +61,10 @@ export function extractXmlTextAssets(buf: Buffer): { objects: string[]; tiles: s
     range(textLengthOffset, 4, end);
     const textLength = buf.readInt32LE(textLengthOffset);
     range(textLengthOffset + 4, textLength, end);
-    const text = buf.toString('utf8', textLengthOffset + 4, textLengthOffset + 4 + textLength);
+    const text = buf.toString('utf8', textLengthOffset + 4, textLengthOffset + 4 + textLength).replace(/^\uFEFF/, '');
     if (!text.startsWith('<?xml')) continue;
-    if (text.includes('<Objects>')) objects.push(text);
-    else if (text.includes('<GroundTypes>')) tiles.push(text);
+    if (/<Objects[\s>]/.test(text)) objects.push(text);
+    else if (/<GroundTypes[\s>]/.test(text)) tiles.push(text);
   }
   return { objects, tiles };
 }

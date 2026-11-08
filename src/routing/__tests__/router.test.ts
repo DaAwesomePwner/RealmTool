@@ -62,6 +62,20 @@ describe('Router', () => {
     expect(router.size).toBe(0);
   });
 
+  it('keeps an existing transfer route when a later RECONNECT cannot be decoded', () => {
+    const { router } = clockedRouter();
+    const current = { host: '10.0.0.5', port: 2050 };
+    router.rewriteReconnect(fromServer(reconnectBytes(factory, {
+      host: '10.0.0.9', port: 2051, key: Buffer.from('real-key'),
+    })), current);
+    const malformed = Buffer.from([0, 0, 0, 8, factory.getPacketId('RECONNECT')!, 0, 9, 1]);
+    expect(router.rewriteReconnect(fromServer(malformed), current)).toBeNull();
+    expect(router.size).toBe(1);
+    const route = router.routeHello(fromClient(helloBytes(factory, Buffer.from('token-1'))), null);
+    expect(route?.destination).toEqual({ host: '10.0.0.9', port: 2051 });
+    expect(fromClient(route!.hello).data.key).toEqual(Buffer.from('real-key'));
+  });
+
   it('expires tokens after the TTL', () => {
     const { router, advance } = clockedRouter();
     router.rewriteReconnect(fromServer(reconnectBytes(factory, { host: '10.0.0.9', port: 2050, key: Buffer.from('k') })),
