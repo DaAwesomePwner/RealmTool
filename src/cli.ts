@@ -1,8 +1,8 @@
 import { isMainThread, workerData } from 'node:worker_threads';
 import { parentedRefresh, runCatalogJob } from './catalogs/parentRefresh.ts';
 import { pathToFileURL } from 'node:url';
-import { statSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { realpathSync, statSync } from 'node:fs';
+import { win32, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { BUILTIN_PLUGINS } from '../plugins/index.ts';
 import { appDataDir, ProfileStore } from './config/store.ts';
@@ -64,7 +64,7 @@ Options:
 
 function validateLauncherOption(path: string): void {
   if (!path.trim()) throw new Error('--launcher must not be empty');
-  if (basename(path.trim()).toLowerCase() === 'rotmg exalt.exe') {
+  if (win32.basename(path.trim()).toLowerCase() === 'rotmg exalt.exe') {
     throw new Error('Select the RotMG Exalt Launcher, not the game executable');
   }
 }
@@ -316,8 +316,10 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
+// Node resolves entry-point symlinks (including macOS /var), but argv retains the supplied path.
 if (!isMainThread && workerData?.kind === 'catalog-refresh') {
   void runCatalogJob(workerData);
-} else if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+} else if (process.argv[1] && (import.meta.url === pathToFileURL(process.argv[1]).href
+  || import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href)) {
   main(process.argv.slice(2)).then(code => { process.exitCode = code; });
 }

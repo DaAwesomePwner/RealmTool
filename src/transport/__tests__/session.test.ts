@@ -55,11 +55,13 @@ type Harness = Awaited<ReturnType<typeof harness>>;
 /** Game connects, sends HELLO, the main thread answers with `server` as the target. */
 async function connected(h: Harness, server: FakeServer): Promise<{ game: Peer; upstream: Peer; session: Session }> {
   const peersBefore = server.peers.length;
+  const sessionsBefore = h.all.length;
   const game = await connectGame(h.port);
   cleanups.push(() => game.destroy());
   game.send(helloBytes(factory, Buffer.alloc(0)));
-  await until(() => h.all.length > 0 && !!h.all.at(-1), 'session accepted');
-  const session = h.all.at(-1)!;
+  // The client connect callback can run before the listener accepts this connection.
+  await until(() => h.all.length > sessionsBefore, 'session accepted');
+  const session = h.all[sessionsBefore];
   session.setTarget({ host: '127.0.0.1', port: server.port });
   await until(() => (server.peers[peersBefore]?.frames.length ?? 0) >= 1, 'HELLO upstream');
   return { game, upstream: server.peers[peersBefore], session };
