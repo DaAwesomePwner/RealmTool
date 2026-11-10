@@ -34,6 +34,19 @@ it('snapshots every built-in in order, current values and transient settings, ex
   snapshots[0].settings[0].value = 'mutated';
   expect(host.snapshot()[0].settings[0].value).not.toBe('mutated');
 });
+it('carries a registered setting group through to the snapshot and leaves ungrouped settings without one', () => {
+  const { host } = fixture([definePlugin({
+    id: 'grouped', name: 'Grouped', apiVersion: 1, capabilities: [],
+    register(ctx) {
+      ctx.registerSetting('a', { label: 'A', type: 'boolean', value: true, group: 'Section' });
+      ctx.registerSetting('b', { label: 'B', type: 'boolean', value: false });
+    },
+  })]);
+  const settings = host.snapshot()[0].settings;
+  expect(settings.map(s => s.key)).toEqual(['a', 'b']);
+  expect(settings[0].group).toBe('Section');
+  expect(settings[1]).not.toHaveProperty('group');
+});
 it('retains registration and API failures and rejects enabling them', () => {
   const { host } = fixture([
     definePlugin({ id: 'bad', name: 'Bad', apiVersion: 1, capabilities: [], register() { throw new Error('broken'); } }),

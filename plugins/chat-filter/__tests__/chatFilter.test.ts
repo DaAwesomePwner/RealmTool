@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import chatFilter from '../index.ts';
 import { evaluate } from '../engine.ts';
 import { advertisingText, readableText } from '../normalize.ts';
-import { compileSettings, DEFAULTS, normalizeChatProfile } from '../settings.ts';
+import { compileSettings, DEFAULTS, normalizeChatProfile, SETTING_DEFS } from '../settings.ts';
 import { SenderState } from '../sender-state.ts';
 import { definePlugin } from '../../../src/plugins/api.ts';
 import { startHost, textData, type Harness } from '../../../src/testing/pluginHarness.ts';
@@ -390,5 +390,30 @@ describe('Bounded sender state', () => {
     state.clone().forget('b');
     expect(state.isMuted('b')).toBe(true);
     expect(state.mutes()).toHaveLength(2);
+  });
+});
+
+describe('settings groups', () => {
+  it('assigns every Chat Filter setting its section and leaves schemaVersion, whitelist and blacklist ungrouped', () => {
+    const expected: Record<string, string[]> = {
+      'What to hide': ['enabled', 'trade', 'advertising', 'repetition', 'repeatCount', 'repeatWindowSeconds'],
+      'Custom words': ['blockedWordsEnabled', 'blockedWords', 'wordMatch'],
+      'Repeat advertisers': ['autoMute', 'muteMinutes'],
+      'Where to filter': ['publicChat', 'whispers', 'guildChat', 'partyChat', 'unknownChat'],
+      'Senders': ['allowedSenders', 'blockedSenders', 'selectedSender', 'unmuteSender', 'blockSender', 'allowSender', 'clearMutes'],
+      'Test and diagnostics': ['previewMessage', 'previewSender', 'previewChannel', 'captureMessages', 'testMessage', 'refreshStatus'],
+    };
+    const h = startHost([chatFilter]);
+    try {
+      // The snapshot omits hidden settings (schemaVersion); the rest are exactly what registerSetting stored.
+      const snapshot = h.host.snapshot()[0].settings;
+      const groups = new Map<string, string | undefined>(snapshot.map(def => [def.key, def.group]));
+      for (const [group, keys] of Object.entries(expected)) {
+        for (const key of keys) expect([key, groups.get(key)]).toEqual([key, group]);
+      }
+      expect(snapshot.filter(def => def.group === undefined).map(def => def.key).sort()).toEqual(['blacklist', 'whitelist']);
+      expect(snapshot.length).toBe(Object.values(expected).flat().length + 2);
+      expect(SETTING_DEFS.find(def => def.key === 'schemaVersion')?.group).toBeUndefined();
+    } finally { h.host.stop(); }
   });
 });

@@ -2,7 +2,7 @@
 import { definePlugin, type ClientConnection, type PluginContext } from '../../src/plugins/api.ts';
 import { evaluate } from './engine.ts';
 import { textViews } from './normalize.ts';
-import { SETTING_DEFS, DEFAULTS, compileSettings, literalLines, validateChatSetting, normalizeChatProfile, type ChatSettings } from './settings.ts';
+import { SETTING_DEFS, DEFAULTS, groupOf, compileSettings, literalLines, validateChatSetting, normalizeChatProfile, type ChatSettings } from './settings.ts';
 import { SenderState } from './sender-state.ts';
 import type { Decision } from './rules.ts';
 
@@ -44,7 +44,7 @@ export function register(ctx: PluginContext): void {
   for (const { key, ...def } of SETTING_DEFS) {
     ctx.registerSetting(key, def, def.transient ? undefined : configure);
   }
-  ctx.registerSetting('testMessage', { label: 'Test message rules (does not change sender history)', type: 'button', value: undefined }, () => {
+  ctx.registerSetting('testMessage', { label: 'Test message rules (does not change sender history)', type: 'button', value: undefined, ...groupOf('testMessage') }, () => {
     const channel = ctx.getSetting<string>('previewChannel');
     const self = '__preview_self__';
     const data = {
@@ -54,9 +54,9 @@ export function register(ctx: PluginContext): void {
     preview = { ...evaluate(data, self, { ...settings, enabled: settings.enabled && ctx.enabled }, new SenderState()), normalized: textViews(data) };
     publish();
   });
-  ctx.registerSetting('refreshStatus', { label: 'Refresh filter status / mute countdowns', type: 'button', value: undefined }, publish);
-  ctx.registerSetting('clearMutes', { label: 'Clear all temporary mutes and history', type: 'button', value: undefined }, reset);
-  ctx.registerSetting('unmuteSender', { label: 'Unmute selected sender on all local connections', type: 'button', value: undefined }, () => {
+  ctx.registerSetting('refreshStatus', { label: 'Refresh filter status / mute countdowns', type: 'button', value: undefined, ...groupOf('refreshStatus') }, publish);
+  ctx.registerSetting('clearMutes', { label: 'Clear all temporary mutes and history', type: 'button', value: undefined, ...groupOf('clearMutes') }, reset);
+  ctx.registerSetting('unmuteSender', { label: 'Unmute selected sender on all local connections', type: 'button', value: undefined, ...groupOf('unmuteSender') }, () => {
     for (const state of sessions.values()) state.forget(ctx.getSetting<string>('selectedSender'));
     actionResult = 'Temporary history cleared for selected sender.';
     publish();
@@ -72,8 +72,8 @@ export function register(ctx: PluginContext): void {
     actionResult = allow ? 'Sender bypass added. Legacy block patterns still take precedence.' : 'Sender added to saved block list.';
     publish();
   }
-  ctx.registerSetting('blockSender', { label: 'Always block selected sender', type: 'button', value: undefined }, () => manageSender(false));
-  ctx.registerSetting('allowSender', { label: 'Bypass filtering for selected sender', type: 'button', value: undefined }, () => manageSender(true));
+  ctx.registerSetting('blockSender', { label: 'Always block selected sender', type: 'button', value: undefined, ...groupOf('blockSender') }, () => manageSender(false));
+  ctx.registerSetting('allowSender', { label: 'Bypass filtering for selected sender', type: 'button', value: undefined, ...groupOf('allowSender') }, () => manageSender(true));
 
   ctx.onEnabledChange(reset);
   ctx.on('clientDisconnected', client => { sessions.delete(client); publish(); });

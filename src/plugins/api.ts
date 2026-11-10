@@ -18,6 +18,8 @@ export interface SettingDef {
   rows?: number;
   maxLength?: number;
   help?: string;
+  /** Display-only section heading: settings sharing a group show together in registration order; ungrouped ones share one unnamed section. Never affects validation, storage or profiles. */
+  group?: string;
   /** Runtime-only input (e.g. a message preview); never saved to a profile. */
   transient?: boolean;
   min?: number;
