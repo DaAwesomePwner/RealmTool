@@ -23,7 +23,7 @@ it('shows the stopped/failed recovery path and honest helper/session state', asy
   expect(api.post).toHaveBeenCalledWith('/api/proxy/start', {});
   view.update({ ...state, proxy: { state: 'running', port: 2050, error: null }, game: { ...state.game, dir: 'C:\\Games\\Exalt', helper: { state: 'installed', backup: true } } });
   expect(buttons.find(button => button.textContent === 'Uninstall helper')!.disabled).toBe(true);
-  expect(view.status.textContent).toContain('0 connected / 0 open');
+  expect(view.status.textContent).toContain('0 connected of 0 open');
   expect(view.status.textContent).toContain('installed');
   const cards = new PluginCards(api, changed); cards.update([]);
   expect(cards.element.textContent).toBe('Start the proxy to view and edit plugin settings');

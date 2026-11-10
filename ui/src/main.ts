@@ -4,12 +4,15 @@ import type { PluginSnapshot } from '../../src/plugins/snapshot.ts';
 import type { StoredLog } from '../../src/util/logStore.ts';
 import { ApiClient, backendInfo, type AppState } from './api.ts';
 import { button, el, message } from './dom.ts';
+import { StatusFooter } from './footer.ts';
 import { PluginCards } from './plugins.ts';
 import { Readiness } from './readiness.ts';
 import { LogPanel } from './logs.ts';
 import { ProfilePicker } from './profiles.ts';
 import { Tabs } from './tabs.ts';
 import './styles.css';
+import './plugins.css';
+import './panels.css';
 
 const TAB_KEY = 'realmtool.tab';
 
@@ -18,11 +21,11 @@ type BackendEvent = { type: 'state'; state: AppState } | { type: 'plugins'; plug
 
 async function main(): Promise<void> {
   const root = document.querySelector<HTMLElement>('#app')!;
-  const connection = el('p', 'Connecting to backend…', 'connection'); connection.setAttribute('role', 'status');
-  const brand = el('div', undefined, 'brand'); brand.append(el('h1', 'RealmTool'), connection);
+  // Connection, profile, operation and loop timings live in the footer; `.connection` is its status text.
+  const footer = new StatusFooter();
   // Status and launch controls; inert together with the tabs while the backend is unreachable.
   const live = el('div', undefined, 'topbar-live');
-  const header = el('header', undefined, 'topbar'); header.append(brand, live);
+  const header = el('header', undefined, 'topbar'); header.append(live);
   const error = el('p', '', 'error'); error.setAttribute('role', 'alert');
   const restart = button('Restart', () => {
     restart.disabled = true;
@@ -31,7 +34,7 @@ async function main(): Promise<void> {
   restart.hidden = true;
   const retry = button('Retry connection', () => location.reload()); retry.hidden = true;
   const notices = el('div', undefined, 'notices'); notices.append(error, restart, retry);
-  root.replaceChildren(header, notices);
+  root.replaceChildren(header, notices, footer.element);
   let stopEvents: (() => void) | undefined;
   let cards: PluginCards | undefined;
   let stopped = false;
@@ -41,7 +44,7 @@ async function main(): Promise<void> {
   try {
     if (isTauri()) unlisten = await listen('backend-exited', () => {
       stopped = true; stopEvents?.(); cards?.dispose(); setInert(true);
-      connection.textContent = 'Backend stopped'; restart.hidden = false;
+      footer.setConnection('Backend stopped', 'bad'); restart.hidden = false;
     });
     const api = new ApiClient(await backendInfo());
     if (stopped) return;
@@ -61,7 +64,7 @@ async function main(): Promise<void> {
       activeProfile = state.profile.active;
       if (state.operation) cards!.cancelDrafts();
       cards!.element.inert = !!state.operation;
-      readiness.update(state); profiles.update(state.profile, state.sessions.connected, !!state.operation);
+      readiness.update(state); footer.update(state); profiles.update(state.profile, state.sessions.connected, !!state.operation);
     };
     const refresh = async () => {
       const version = ++refreshVersion; const stateAtStart = stateVersion; const pluginsAtStart = pluginsVersion;
@@ -100,10 +103,10 @@ async function main(): Promise<void> {
       if (id === 'logs') { unseen = 0; tabs.badge('logs', ''); logs.shown(); }
     };
     live.append(readiness.status, readiness.actions); notices.append(readiness.notices);
-    content.append(tabs.element); root.append(content);
+    content.append(tabs.element); notices.after(content);
     api.onConnection = connected => {
       if (stopped) return;
-      connection.textContent = connected ? 'Backend connected' : 'Connection lost. Reconnecting…';
+      footer.setConnection(connected ? 'Backend connected' : 'Connection lost. Reconnecting…', connected ? 'ok' : 'pending');
       setInert(!connected);
       if (!connected) cards!.cancelDrafts();
       if (connected) { retry.hidden = true; void refresh(); }
@@ -125,7 +128,7 @@ async function main(): Promise<void> {
     if (stopped) stopEvents(); else await refresh();
     window.addEventListener('beforeunload', () => { stopEvents?.(); unlisten?.(); cards?.dispose(); }, { once: true });
   } catch (failure) {
-    error.textContent = message(failure); connection.textContent = stopped ? 'Backend stopped' : 'Backend unavailable';
+    error.textContent = message(failure); footer.setConnection(stopped ? 'Backend stopped' : 'Backend unavailable', 'bad');
     if (isTauri()) restart.hidden = false; else retry.hidden = false;
   }
 }

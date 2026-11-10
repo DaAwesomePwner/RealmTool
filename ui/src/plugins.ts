@@ -1,11 +1,21 @@
 import type { PluginSnapshot } from '../../src/plugins/snapshot.ts';
 import type { ApiClient } from './api.ts';
-import { el, message, textValue } from './dom.ts';
+import { el, message } from './dom.ts';
+import { renderStatus } from './pluginStatus.ts';
 import { SettingsView } from './settings.ts';
 
 interface Card {
-  element: HTMLElement; link: HTMLButtonElement; state: HTMLElement; toggle: HTMLInputElement; error: HTMLElement; failure: HTMLElement;
-  status: HTMLElement; settings: SettingsView; signature: string;
+  element: HTMLElement; item: HTMLElement; link: HTMLButtonElement; state: HTMLElement;
+  /** The list switch and the detail switch; both always go through `setEnabled`. */
+  toggles: HTMLInputElement[]; error: HTMLElement; listError: HTMLElement; failure: HTMLElement;
+  status: HTMLElement; settings: SettingsView; signature: string; pending: boolean;
+}
+
+/** Real switch styling for an enable checkbox. */
+function enableSwitch(name: string, className: string): HTMLInputElement {
+  const toggle = el('input', undefined, `switch ${className}`); toggle.type = 'checkbox';
+  toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-label', `Enable ${name}`);
+  return toggle;
 }
 
 /** Plugin list beside the selected plugin's card; unselected cards stay mounted but hidden. */
@@ -44,13 +54,14 @@ export class PluginCards {
         this.cards.set(plugin.id, card);
       }
       // Re-appending keeps both lists in snapshot order; existing nodes simply move.
-      this.nav.append(card.link); this.detail.append(card.element);
-      card.toggle.checked = plugin.enabled; card.toggle.disabled = !!plugin.failed;
-      card.state.textContent = plugin.failed ? 'Failed' : plugin.enabled ? 'On' : 'Off';
-      card.link.dataset.state = plugin.failed ? 'failed' : plugin.enabled ? 'on' : 'off';
+      this.nav.append(card.item); this.detail.append(card.element);
+      const state = plugin.failed ? 'failed' : plugin.enabled ? 'on' : 'off';
+      card.item.dataset.state = card.link.dataset.state = state;
+      card.state.textContent = plugin.failed ? 'Failed' : '';
       card.failure.textContent = plugin.failed ?? ''; card.failure.hidden = !plugin.failed;
+      this.sync(plugin.id, card);
       card.settings.update(plugin, snapshots);
-      this.renderStatus(card.status, plugin.data);
+      renderStatus(card.status, plugin.data);
     }
     // An empty update (proxy stopped, profile switch) keeps the choice for when plugins return.
     if (snapshots.length) this.select(this.selected !== undefined && this.cards.has(this.selected) ? this.selected : snapshots[0].id);
@@ -66,7 +77,7 @@ export class PluginCards {
   }
 
   private remove(id: string, card: Card): void {
-    card.settings.dispose(); card.element.remove(); card.link.remove(); this.cards.delete(id);
+    card.settings.dispose(); card.element.remove(); card.item.remove(); this.cards.delete(id);
   }
 
   data(pluginId: string, type: string, data: unknown): void {
@@ -75,30 +86,44 @@ export class PluginCards {
     const key = pluginId === 'chat-filter' && type === 'chatFilterStatus' ? 'status' : type;
     plugin.data = { ...plugin.data, [key]: data };
     const card = this.cards.get(pluginId);
-    if (card) this.renderStatus(card.status, plugin.data);
+    if (card) renderStatus(card.status, plugin.data);
+  }
+
+  /** Both switches show the last known server value and stay disabled while a change is in flight or the plugin failed. */
+  private sync(id: string, card: Card): void {
+    const plugin = this.snapshots.find(p => p.id === id);
+    for (const toggle of card.toggles) {
+      if (!card.pending) toggle.checked = plugin?.enabled ?? false;
+      toggle.disabled = card.pending || !!plugin?.failed;
+    }
+  }
+
+  private async setEnabled(id: string, card: Card, enabled: boolean): Promise<void> {
+    if (card.pending) return;
+    card.pending = true;
+    for (const toggle of card.toggles) toggle.checked = enabled;
+    this.sync(id, card);
+    card.error.textContent = card.listError.textContent = '';
+    try {
+      await this.track(async () => {
+        await this.api.post(`/api/plugins/${encodeURIComponent(id)}/enabled`, { enabled });
+        this.update(await this.api.get<PluginSnapshot[]>('/api/plugins'));
+      });
+      this.changed();
+    } catch (failure) {
+      const current = this.cards.get(id) ?? card;
+      current.error.textContent = current.listError.textContent = message(failure);
+    } finally { card.pending = false; this.sync(id, card); }
   }
 
   private create(plugin: PluginSnapshot, signature: string): Card {
     const element = el('article', undefined, 'plugin-card');
     const header = el('header', undefined, 'card-heading');
-    const name = el('div'); name.append(el('h2', plugin.name), el('p', plugin.category, 'muted'));
-    const label = el('label', 'Enabled', 'toggle'); const toggle = el('input'); toggle.type = 'checkbox';
-    toggle.setAttribute('aria-label', `Enable ${plugin.name}`); label.append(toggle); header.append(name, label);
+    const label = el('label', 'Enabled', 'toggle'); const toggle = enableSwitch(plugin.name, 'plugin-toggle'); label.append(toggle);
+    header.append(el('h2', plugin.name), el('span', plugin.category, 'tag'), label);
     const failure = el('p', '', 'error'); failure.setAttribute('role', 'alert');
-    const error = el('p', '', 'error'); error.setAttribute('role', 'alert');
-    toggle.addEventListener('change', async () => {
-      toggle.disabled = true; error.textContent = '';
-      try {
-        await this.track(async () => {
-          await this.api.post(`/api/plugins/${encodeURIComponent(plugin.id)}/enabled`, { enabled: toggle.checked });
-          this.update(await this.api.get<PluginSnapshot[]>('/api/plugins'));
-        });
-        this.changed();
-      } catch (failure) {
-        error.textContent = message(failure);
-        toggle.checked = this.snapshots.find(p => p.id === plugin.id)?.enabled ?? false;
-      } finally { toggle.disabled = !!this.snapshots.find(p => p.id === plugin.id)?.failed; }
-    });
+    // The list row announces enable failures (it is always visible); this copy explains them in the detail pane.
+    const error = el('p', '', 'error');
     const settings = new SettingsView(plugin, this.snapshots, (key, value) => this.track(async () => {
       await this.api.post(`/api/plugins/${encodeURIComponent(plugin.id)}/settings/${encodeURIComponent(key)}`, { value });
       const snapshots = await this.api.get<PluginSnapshot[]>('/api/plugins');
@@ -109,40 +134,18 @@ export class PluginCards {
     }));
     const status = el('div', undefined, 'plugin-status');
     element.append(header, failure, error, settings.element, status);
+    // Select button and switch are siblings: neither interactive element is nested in the other.
+    const item = el('div', undefined, 'plugin-item');
     const link = el('button', undefined, 'plugin-link'); link.type = 'button';
     const state = el('span', '', 'plugin-state');
     link.append(el('span', plugin.name, 'plugin-link-name'), state);
     link.addEventListener('click', () => this.select(plugin.id));
-    return { element, link, state, toggle, error, failure, settings, status, signature };
-  }
-
-  private renderStatus(target: HTMLElement, data: Record<string, unknown>): void {
-    target.replaceChildren();
-    let recent: unknown;
-    if (data.status !== undefined) {
-      target.append(el('h3', 'Status'));
-      if (data.status && typeof data.status === 'object' && !Array.isArray(data.status)) {
-        const list = el('dl');
-        for (const [key, value] of Object.entries(data.status)) {
-          if (key === 'recent') { recent = value; continue; }
-          list.append(el('dt', key), el('dd', textValue(value)));
-        }
-        target.append(list);
-      } else target.append(el('p', textValue(data.status)));
-    }
-    if (Array.isArray(recent)) {
-      const details = el('details'); details.append(el('summary', 'Recent messages'));
-      const list = el('ul');
-      for (const item of recent) {
-        if (!item || typeof item !== 'object') continue;
-        const parts = [item.sender, item.channel, item.verdict, item.reason]
-          .filter((value): value is string => typeof value === 'string' && value.length > 0);
-        const row = el('li', parts.join(' · '));
-        if (typeof item.message === 'string') row.append(el('p', item.message));
-        list.append(row);
-      }
-      details.append(list); target.append(details);
-    }
+    const listToggle = enableSwitch(plugin.name, 'plugin-list-toggle');
+    const listError = el('p', '', 'error plugin-item-error'); listError.setAttribute('role', 'alert');
+    item.append(link, listToggle, listError);
+    const card: Card = { element, item, link, state, toggles: [listToggle, toggle], error, listError, failure, settings, status, signature, pending: false };
+    for (const control of card.toggles) control.addEventListener('change', () => void this.setEnabled(plugin.id, card, control.checked));
+    return card;
   }
 
   cancelDrafts(): void { for (const card of this.cards.values()) card.settings.cancelDrafts(); }
