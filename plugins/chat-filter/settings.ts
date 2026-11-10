@@ -50,9 +50,23 @@ const labels: Record<ChatSettingKey, string> = {
   previewMessage: 'Test message (not saved)', previewSender: 'Test sender (not saved)',
   previewChannel: 'Test channel', selectedSender: 'Sender to manage (exact name, not saved)',
 };
+/** Display sections for every Chat Filter setting, including the button settings registered in index.ts. */
+const GROUPS: Record<string, readonly string[]> = {
+  'What to hide': ['enabled', 'trade', 'advertising', 'repetition', 'repeatCount', 'repeatWindowSeconds'],
+  'Custom words': ['blockedWordsEnabled', 'blockedWords', 'wordMatch'],
+  'Repeat advertisers': ['autoMute', 'muteMinutes'],
+  'Where to filter': ['publicChat', 'whispers', 'guildChat', 'partyChat', 'unknownChat'],
+  'Senders': ['allowedSenders', 'blockedSenders', 'selectedSender', 'unmuteSender', 'blockSender', 'allowSender', 'clearMutes'],
+  'Test and diagnostics': ['previewMessage', 'previewSender', 'previewChannel', 'captureMessages', 'testMessage', 'refreshStatus'],
+};
+/** The `group` field for a setting key, or an empty object when the key is ungrouped. */
+export function groupOf(key: string): { group?: string } {
+  const group = Object.keys(GROUPS).find(name => GROUPS[name]!.includes(key));
+  return group ? { group } : {};
+}
 const lists = new Set(['blockedWords', 'allowedSenders', 'blockedSenders', 'whitelist', 'blacklist']);
 export const SETTING_DEFS: SettingDef[] = (Object.keys(DEFAULTS) as ChatSettingKey[]).map(key => ({
-  key, label: labels[key], value: DEFAULTS[key],
+  key, label: labels[key], value: DEFAULTS[key], ...groupOf(key),
   type: key === 'wordMatch' || key === 'previewChannel' ? 'select' : typeof DEFAULTS[key] === 'boolean' ? 'boolean'
     : typeof DEFAULTS[key] === 'number' ? 'number' : 'text',
   ...(lists.has(key) ? { multiline: true, rows: 4, maxLength: 100_500 } : {}),

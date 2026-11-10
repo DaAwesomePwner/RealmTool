@@ -39,7 +39,10 @@ it('lists plugins beside one visible card and keeps the selection across updates
   cards.update([plugin('a'), plugin('b', false), plugin('c', true, 'broken')]);
   const links = () => [...cards.element.querySelectorAll<HTMLButtonElement>('.plugin-link')];
   const visible = () => [...cards.element.querySelectorAll<HTMLElement>('.plugin-card')].filter(card => !card.hidden).map(card => card.querySelector('h2')!.textContent);
-  expect(links().map(link => link.textContent)).toEqual(['AOn', 'BOff', 'CFailed']);
+  // On/off now lives in each row's switch; only a failure keeps a text marker.
+  expect(links().map(link => link.textContent)).toEqual(['A', 'B', 'CFailed']);
+  const switches = [...cards.element.querySelectorAll<HTMLInputElement>('.plugin-item input')];
+  expect(switches.map(s => [s.checked, s.disabled])).toEqual([[true, false], [false, false], [true, true]]);
   expect(visible()).toEqual(['A']); expect(links()[0].getAttribute('aria-current')).toBe('true');
   links()[1].click(); expect(visible()).toEqual(['B']); expect(links()[0].hasAttribute('aria-current')).toBe(false);
   cards.update([]); expect(cards.element.querySelector<HTMLElement>('.plugin-nav')!.hidden).toBe(true);

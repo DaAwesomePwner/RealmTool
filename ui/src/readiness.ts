@@ -1,17 +1,17 @@
 import type { ApiClient, AppState } from './api.ts';
 import { button, el, message } from './dom.ts';
+import { StatusSummary } from './summary.ts';
 
 export class Readiness {
   /** Game folder, launcher, game data and helper controls. */
   readonly element = el('section', undefined, 'readiness');
-  /** Compact proxy/helper/session summary for the top bar. */
-  readonly status = el('div', undefined, 'readiness-bar');
+  private readonly summary = new StatusSummary();
+  /** Protection block and proxy/helper/session facts for the header. */
+  readonly status = this.summary.element;
   /** Launch and proxy controls for the top bar. */
   readonly actions = el('div', undefined, 'controls');
   /** Proxy and request errors, shown above the tabs so they stay visible. */
   readonly notices = el('div', undefined, 'notices');
-  private readonly protectionItem = el('div', undefined, 'protection');
-  private readonly protectionValue = el('strong');
   private readonly protectionReasons = el('ul', undefined, 'protection-reasons');
   private readonly safetyWarning = el('div', undefined, 'warning');
   private warningExpiry?: ReturnType<typeof setTimeout>;
@@ -36,17 +36,13 @@ export class Readiness {
 
   constructor(api: Pick<ApiClient, 'post'>, changed: () => void) {
     this.api = api; this.changed = changed;
-    this.status.setAttribute('aria-live', 'polite');
-    this.protectionItem.dataset.key = 'protection';
-    this.protectionItem.append(el('span', 'Protection'), this.protectionValue);
-    this.status.append(this.protectionItem);
     this.launch = button('Launch', () => void this.run('/api/game/launch'));
     this.launch.className = 'primary';
     this.proxy = button('Start proxy', () => void this.run(`/api/proxy/${this.state?.proxy.state === 'running' ? 'stop' : 'start'}`));
     this.refresh = button('Refresh game data', () => void this.run('/api/refresh-data'));
     this.dataStatus.setAttribute('aria-live', 'polite');
     this.uninstall = button('Uninstall helper', () => void this.run('/api/helper/uninstall'));
-    this.actions.append(this.launch, this.proxy);
+    this.actions.append(this.proxy, this.launch);
     const label = el('label', 'Game folder'); this.folder.type = 'text'; this.folder.placeholder = 'Path to the RotMG Exalt game folder';
     this.candidates.id = 'game-folders'; this.folder.setAttribute('list', this.candidates.id);
     this.saveFolder = button('Save game folder', () => void this.run('/api/game/dir', { dir: this.folder.value }));
@@ -79,25 +75,11 @@ export class Readiness {
         this.warningExpiry = setTimeout(() => this.safetyWarning.replaceChildren(), warning.expiresAt - Date.now());
       }
     }
-    for (const child of [...this.status.children]) if (child !== this.protectionItem) child.remove();
-    for (const [name, lag] of Object.entries(state.loopLag ?? {})) {
-      if (lag) this.status.append(el('div', `${name === 'worker' ? 'Network' : 'Main (informational)'} loop: p99 ${lag.p99.toFixed(1)} ms / max ${lag.max.toFixed(1)} ms`));
-    }
-    const protection = state.protection;
-    this.protectionItem.dataset.value = protection?.state ?? 'unknown';
-    const labels = { idle: 'Idle', protected: 'Protected', degraded: 'Degraded', unprotected: 'Not protected' };
-    const value = protection ? labels[protection.state] : 'Unknown';
-    if (this.protectionValue.textContent !== value) this.protectionValue.textContent = value;
-    this.protectionReasons.replaceChildren(...(protection?.reasons ?? []).filter(r => r.severity !== 'info').map(reason => el('li', reason.message)));
-
-    for (const [label, value] of [
-      ['Proxy', state.proxy.state], ['Helper', state.game.helper.state],
-      ['Sessions', `${state.sessions.connected} connected / ${state.sessions.open} open`],
-      ['Profile', state.profile.active], ['Operation', state.operation ?? 'Idle'],
-    ]) {
-      const item = el('div'); item.dataset.key = label.toLowerCase(); item.dataset.value = value;
-      item.append(el('span', label, 'muted'), el('strong', value)); this.status.append(item);
-    }
+    this.summary.update(state);
+    const reasons = (state.protection?.reasons ?? []).filter(r => r.severity !== 'info');
+    // The banner takes the colour of its most severe reason.
+    this.protectionReasons.dataset.severity = reasons.some(r => r.severity === 'error') ? 'error' : 'warning';
+    this.protectionReasons.replaceChildren(...reasons.map(reason => el('li', reason.message)));
     this.error.textContent = state.proxy.error ?? '';
     const data = state.data, result = data?.lastResult;
     this.dataStatus.textContent = data?.state === 'refreshing' ? 'Refreshing game data… This may take up to two minutes.'

@@ -1,0 +1,86 @@
+/* Plugins: list beside the selected plugin; each side scrolls on its own. */
+.plugins { height: 100%; display: grid; grid-template-columns: 210px minmax(0, 1fr); }
+.plugins:has(> .plugin-nav[hidden]) { display: block; }
+.plugin-nav {
+  display: flex; flex-direction: column; gap: 2px; overflow: auto; min-height: 0; padding: 12px 8px 12px 12px;
+  border-right: 1px solid var(--rule); scrollbar-width: thin; scrollbar-color: #4b4760 transparent;
+}
+.plugin-item {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 6px;
+  padding-right: 8px; border-radius: 6px;
+}
+.plugin-item:hover { background: color-mix(in srgb, var(--raised) 60%, transparent); }
+.plugin-item:has(.plugin-link[aria-current="true"]) { background: var(--raised); box-shadow: inset 2px 0 0 var(--accent); }
+.plugin-link {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; min-width: 0; text-align: left; white-space: normal;
+  background: none; border: 0; border-radius: 6px; font-weight: 500; padding: 7px 4px 7px 10px;
+}
+.plugin-link:hover:not(:disabled) { background: none; }
+.plugin-link[aria-current="true"] { font-weight: 600; }
+.plugin-link-name { overflow-wrap: break-word; }
+.plugin-item[data-state="off"] .plugin-link-name, .plugin-item[data-state="failed"] .plugin-link-name { color: var(--dim); }
+.plugin-state:empty { display: none; }
+.plugin-state {
+  flex: none; font-size: 11px; font-weight: 600; color: var(--bad); border: 1px solid currentColor;
+  border-radius: 4px; padding: 0 5px; line-height: 16px;
+}
+.plugin-item-error { grid-column: 1 / -1; font-size: 12px; padding: 0 0 6px 10px; }
+
+.plugin-detail { overflow: auto; min-height: 0; padding: 14px 18px 18px; scrollbar-width: thin; scrollbar-color: #4b4760 transparent; }
+.plugin-card { min-width: 0; max-width: 980px; }
+.card-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-bottom: 4px; }
+.card-heading h2 { overflow-wrap: anywhere; min-width: 0; }
+.tag { font-size: 11.5px; color: var(--dim); border: 1px solid var(--rule); border-radius: 4px; padding: 0 6px; white-space: nowrap; }
+.toggle { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--dim); white-space: nowrap; cursor: pointer; }
+.plugin-card > .error:not(:empty) { margin-top: 8px; }
+
+/* Settings: one bordered box of rows per group. */
+.setting-group { margin-top: 14px; }
+.setting-group-title { margin: 0 0 6px; }
+.setting-rows { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+.setting {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, max-content); align-items: center; column-gap: 16px;
+  padding: 9px 12px; min-height: 40px;
+}
+.setting:not([hidden]) ~ .setting:not([hidden]) { border-top: 1px solid var(--rule); }
+.setting-text { min-width: 0; }
+.setting-label { display: block; overflow-wrap: anywhere; cursor: pointer; }
+.setting > input, .setting > select, .setting > button { justify-self: end; }
+.setting .help { max-width: none; overflow-wrap: anywhere; }
+.setting .help > p { margin-top: 1px; }
+.setting .help .warning { margin-top: 3px; }
+.setting .transient { display: inline-block; margin-top: 2px; font-size: 11px; border: 1px solid var(--rule); border-radius: 4px; padding: 0 5px; }
+.setting select { width: 180px; max-width: 100%; }
+.setting input[type="number"] { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
+.setting input[type="text"] { width: 260px; max-width: 100%; }
+.setting-stack { display: block; }
+.setting-stack .setting-text { display: flex; justify-content: space-between; gap: 12px; }
+.setting-stack > input, .setting-stack > textarea { display: block; width: 100%; margin: 7px 0 0; }
+.setting-stack > .help:has(> p, > span, > .warning:not([hidden]), > .error:not(:empty)) { margin-top: 5px; }
+.setting-output { color: var(--accent); font-variant-numeric: tabular-nums; }
+.setting-button { grid-template-columns: auto minmax(0, 1fr); }
+.setting-button > button { justify-self: start; white-space: normal; text-align: left; font-weight: 500; }
+.settings-advanced { margin-top: 16px; }
+.settings-advanced > summary { font-weight: 600; }
+
+/* Plugin status */
+.plugin-status:not(:empty) { margin-top: 18px; }
+.plugin-status h3 { margin: 0 0 6px; }
+.plugin-status dl {
+  display: grid; grid-template-columns: minmax(90px, 1fr) 2fr; gap: 5px 14px; margin: 0; padding: 10px 12px;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 8px;
+}
+.plugin-status dt { color: var(--dim); overflow-wrap: anywhere; }
+.plugin-status dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.plugin-status details { margin-top: 10px; }
+.plugin-status ul { margin: 4px 0 0; padding: 0; list-style: none; background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; }
+.plugin-status li { overflow-wrap: anywhere; white-space: pre-wrap; padding: 7px 12px; }
+.plugin-status li + li { border-top: 1px solid var(--rule); }
+.plugin-status li p { color: var(--dim); }
+.empty { padding: 24px 0; color: var(--dim); }
+
+@media (max-width: 900px) {
+  .plugins { grid-template-columns: 180px minmax(0, 1fr); }
+  .setting input[type="text"] { width: 200px; }
+  .setting select { width: 150px; }
+}
