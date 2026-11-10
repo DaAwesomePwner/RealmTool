@@ -68,3 +68,45 @@ it('sends the same request from both switches and rolls both back with the error
   expect([listSwitch('a').disabled, detailSwitch('a').disabled]).toEqual([true, true]);
   expect(item('a').querySelector('.plugin-state')!.textContent).toBe('Failed');
 });
+
+it('keeps a rebuilt card disabled with the requested value until the pending request settles', async () => {
+  let release!: () => void;
+  const post = vi.fn(async () => { await new Promise<void>(resolve => { release = resolve; }); return {}; });
+  const { cards, changed, listSwitch, detailSwitch } = setup(post, async () => [plugin('a', true), plugin('b', true)]);
+  listSwitch('b').checked = true; listSwitch('b').dispatchEvent(new Event('change'));
+  const old = listSwitch('b');
+  // A new settings signature rebuilds B's card while its enable request is in flight.
+  cards.update([plugin('a', true), { ...plugin('b', false), settings: [{ key: 'x', label: 'X', type: 'boolean', value: false }] }]);
+  expect(listSwitch('b')).not.toBe(old);
+  expect([listSwitch('b').checked, detailSwitch('b').checked]).toEqual([true, true]);
+  expect([listSwitch('b').disabled, detailSwitch('b').disabled]).toEqual([true, true]);
+  listSwitch('b').checked = false; listSwitch('b').dispatchEvent(new Event('change'));
+  expect(post).toHaveBeenCalledTimes(1);
+  release();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+  expect([listSwitch('b').checked, listSwitch('b').disabled, detailSwitch('b').disabled]).toEqual([true, false, false]);
+});
+
+it('keeps focus on a list switch and a setting control across an update with unchanged order', () => {
+  const { cards, listSwitch, card } = setup(async () => ({}), async () => []);
+  const withSetting = (enabled: boolean) => [{ ...plugin('a', enabled), settings: [{ key: 'n', label: 'N', type: 'number' as const, value: 1 }] }, plugin('b', false)];
+  cards.update(withSetting(true));
+  listSwitch('b').focus(); expect(document.activeElement).toBe(listSwitch('b'));
+  cards.update(withSetting(true)); cards.update(withSetting(false));
+  expect(document.activeElement).toBe(listSwitch('b'));
+  const input = card('a').querySelector<HTMLInputElement>('[data-key="n"] input')!;
+  input.focus(); cards.update(withSetting(true));
+  expect(document.activeElement).toBe(input);
+  // A real reorder still moves the nodes into snapshot order.
+  cards.update([...withSetting(true)].reverse());
+  expect([...cards.element.querySelectorAll('.plugin-link-name')].map(n => n.textContent)).toEqual(['B', 'A']);
+  expect([...cards.element.querySelectorAll('.plugin-card h2')].map(n => n.textContent)).toEqual(['B', 'A']);
+});
+
+it('gives the list and detail switches distinct accessible names from visible text', () => {
+  const { listSwitch, detailSwitch } = setup(async () => ({}), async () => []);
+  expect(listSwitch('a').getAttribute('aria-label')).toBe('Enable A');
+  expect(detailSwitch('a').hasAttribute('aria-label')).toBe(false);
+  const name = detailSwitch('a').getAttribute('aria-labelledby')!.split(' ').map(id => document.getElementById(id)!.textContent).join(' ');
+  expect(name).toBe('Enabled A');
+});
