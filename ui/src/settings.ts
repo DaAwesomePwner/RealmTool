@@ -1,80 +1,41 @@
 import type { SettingDef } from '../../src/plugins/api.ts';
 import type { PluginSnapshot } from '../../src/plugins/snapshot.ts';
 import { el, message } from './dom.ts';
+import { createField, type Field } from './settingField.ts';
 
-type Control = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement;
-interface Field {
-  def: SettingDef; row: HTMLElement; control: Control; error: HTMLElement; warning: HTMLElement;
-  output?: HTMLOutputElement; dirty: boolean; pending: boolean; timer?: ReturnType<typeof setTimeout>;
-}
 type Save = (key: string, value: unknown) => Promise<SettingDef[]>;
+interface Group { element: HTMLElement; fields: Field[] }
 
+/** Settings as grouped rows: one box per `group`, ungrouped settings in one unnamed box; advanced ones inside "Advanced". */
 export class SettingsView {
   readonly element = el('div', undefined, 'settings');
   private plugin: PluginSnapshot;
   private all: PluginSnapshot[];
   private readonly save: Save;
   private readonly fields = new Map<string, Field>();
+  private readonly groups: Group[] = [];
+  private readonly advanced = el('details', undefined, 'settings-advanced');
+  private readonly advancedGroups: Group[] = [];
   private disposed = false;
 
   constructor(plugin: PluginSnapshot, all: PluginSnapshot[], save: Save) {
     this.plugin = plugin; this.all = all; this.save = save;
-    const advanced = el('details'); advanced.append(el('summary', 'Advanced'));
+    this.advanced.append(el('summary', 'Advanced'));
+    const main = new Map<string, Group>(), advanced = new Map<string, Group>();
     for (const def of plugin.settings.filter(def => !def.hidden)) {
-      const field = this.createField(def);
+      const field = createField(plugin.id, def, field => void this.submit(field));
       this.fields.set(def.key, field);
-      (def.advanced ? advanced : this.element).append(field.row);
-    }
-    if (advanced.children.length > 1) this.element.append(advanced);
-    this.update(plugin, all);
-  }
-
-  private createField(def: SettingDef): Field {
-    const row = el('div', undefined, 'setting'); row.dataset.key = def.key;
-    const label = el('label'); const title = el('span', def.label, 'setting-label');
-    let control: Control;
-    if (def.type === 'select') {
-      control = el('select');
-      for (const option of def.options ?? []) { const node = el('option', option.label); node.value = option.value; control.append(node); }
-    } else if (def.type === 'button') {
-      control = el('button', def.label); control.type = 'button';
-    } else if (def.type === 'text' && def.multiline) {
-      control = el('textarea'); control.rows = def.rows ?? 3;
-    } else {
-      control = el('input'); control.type = def.type === 'boolean' ? 'checkbox' : def.type;
-      if (def.type === 'number' || def.type === 'range') {
-        if (def.min !== undefined) control.min = String(def.min);
-        if (def.max !== undefined) control.max = String(def.max);
-        control.step = def.step === undefined ? 'any' : String(def.step);
+      const groups = def.advanced ? advanced : main;
+      let group = groups.get(def.group ?? '');
+      if (!group) {
+        group = createGroup(def.group); groups.set(def.group ?? '', group);
+        (def.advanced ? this.advancedGroups : this.groups).push(group);
+        (def.advanced ? this.advanced : this.element).append(group.element);
       }
+      group.fields.push(field); group.element.lastElementChild!.append(field.row);
     }
-    if (def.maxLength !== undefined && (control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement)) control.maxLength = def.maxLength;
-    const id = `setting-${encodeURIComponent(this.plugin.id)}-${encodeURIComponent(def.key)}`;
-    control.id = id;
-    label.htmlFor = id;
-    if (def.type !== 'button') label.append(title);
-    label.append(control); row.append(label);
-    let output: HTMLOutputElement | undefined;
-    if (def.type === 'range') { output = el('output'); output.setAttribute('for', id); label.append(output); }
-    const description = el('div', undefined, 'help'); description.id = `${id}-help`;
-    if (def.help) description.append(el('p', def.help));
-    if (def.transient) description.append(el('span', 'Not saved'));
-    const warning = el('p', def.warnWhen?.message ?? '', 'warning');
-    const error = el('p', '', 'error'); error.setAttribute('role', 'alert');
-    description.append(warning, error); row.append(description); control.setAttribute('aria-describedby', description.id);
-    const field: Field = { def, row, control, output, error, warning, dirty: false, pending: false };
-    const submit = () => { clearTimeout(field.timer); field.timer = undefined; void this.submit(field); };
-    if (def.type === 'button') control.addEventListener('click', () => { field.dirty = true; submit(); });
-    else {
-      control.addEventListener('input', () => {
-        field.dirty = true;
-        if (output) output.value = control.value;
-        if (def.type === 'text') { clearTimeout(field.timer); field.timer = setTimeout(submit, 300); }
-      });
-      control.addEventListener('change', () => { field.dirty = true; submit(); });
-      control.addEventListener('blur', submit);
-    }
-    return field;
+    if (this.advancedGroups.length) this.element.append(this.advanced);
+    this.update(plugin, all);
   }
 
   private value(field: Field): unknown {
@@ -121,6 +82,9 @@ export class SettingsView {
       const other = target?.settings.find(s => s.key === rule?.key);
       field.warning.hidden = !rule || !other || !compare(other.value, def.value, rule.cmp);
     }
+    // A box whose rows are all hidden disappears with them, and so does an empty Advanced section.
+    for (const group of [...this.groups, ...this.advancedGroups]) group.element.hidden = group.fields.every(field => field.row.hidden);
+    this.advanced.hidden = this.advancedGroups.every(group => group.element.hidden);
   }
 
   cancelDrafts(): void {
@@ -138,4 +102,12 @@ function compare(a: unknown, b: unknown, cmp: NonNullable<SettingDef['warnWhen']
   if (cmp === 'neq') return !Object.is(a, b);
   if (typeof a !== 'number' || typeof b !== 'number') return false;
   return cmp === 'gt' ? a > b : cmp === 'gte' ? a >= b : cmp === 'lt' ? a < b : a <= b;
+}
+
+function createGroup(name: string | undefined): Group {
+  const element = el('section', undefined, 'setting-group');
+  if (name) element.append(el('h3', name, 'setting-group-title'));
+  element.dataset.group = name ?? '';
+  element.append(el('div', undefined, 'setting-rows'));
+  return { element, fields: [] };
 }

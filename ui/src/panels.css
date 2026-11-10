@@ -1,0 +1,49 @@
+/* Logs: the record list takes all remaining height and is the only part that scrolls. */
+.log-panel { height: 100%; display: flex; flex-direction: column; padding: 12px 16px 14px; }
+.log-panel > .muted:empty { display: none; }
+.log-panel > .muted { margin-bottom: 8px; }
+.section-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; }
+.section-heading h2 { margin-right: auto; }
+.section-heading label { display: flex; align-items: center; gap: 8px; color: var(--dim); }
+.log-rows {
+  flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; background: var(--sunken); border: 1px solid var(--rule);
+  border-radius: 8px; padding: 6px 12px; scrollbar-width: thin; scrollbar-color: #4b4760 transparent;
+}
+.log-rows:focus-visible { outline-offset: -2px; }
+.log-row {
+  display: grid; grid-template-columns: 84px 44px 130px minmax(0, 1fr); gap: 10px; padding: 3px 0; font-size: 12.5px;
+  border-bottom: 1px solid #22202d; font-variant-numeric: tabular-nums;
+}
+.log-row span { overflow-wrap: anywhere; white-space: pre-wrap; }
+.log-row time, .log-module { color: var(--dim); }
+.log-error .log-level { color: var(--bad); }
+.log-warn .log-level { color: var(--warn); }
+
+/* Setup: game and profiles side by side as surfaces; the panel scrolls as a whole. */
+.setup {
+  overflow: auto; padding: 16px; display: grid; grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr); gap: 16px;
+  align-items: start; align-content: start; scrollbar-width: thin; scrollbar-color: #4b4760 transparent;
+}
+.setup > section { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; min-width: 0; }
+.setup h2 { margin-bottom: 12px; }
+.setup h3 { margin: 18px 0 8px; }
+.setup label { color: var(--dim); }
+.setup label > input, .setup label > select { color: var(--text); }
+.path-row { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin-bottom: 4px; }
+.path-row label { flex: 1 1 220px; min-width: 0; }
+.path-row input { width: 100%; }
+.setup-row { display: flex; align-items: center; gap: 12px; }
+.setup-row button { flex: none; }
+.readiness > .error:not(:empty) { margin-top: 8px; }
+.profiles > label { display: flex; align-items: center; gap: 12px; }
+.profiles > label select { flex: 1; min-width: 0; }
+.profiles details label { margin: 8px 0; }
+.profiles details label:has(input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
+.profiles details button { margin: 6px 0; }
+.profiles .error:not(:empty) { margin-top: 8px; }
+
+@media (max-width: 900px) {
+  .setup { grid-template-columns: 1fr; }
+  .log-row { grid-template-columns: 76px 40px minmax(0, 1fr); }
+  .log-row > span:last-child { grid-column: 1 / -1; }
+}
