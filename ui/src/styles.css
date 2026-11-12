@@ -11,13 +11,17 @@
   --raised: #232325;
   --hover: #2a2a2d;
   --line: rgba(237, 237, 237, .08);
-  --line-strong: rgba(237, 237, 237, .14);
+  --line-strong: rgba(237, 237, 237, .2);
+  --line-hover: rgba(237, 237, 237, .3);
+  --row-line: rgba(237, 237, 237, .05);
+  --wash: rgba(237, 237, 237, .04);
   --text: #ededed;
   --text-2: #a1a1a6;
-  --muted: #85858b;
+  --muted: #8b8b91;
   --accent: #6ea8fe;
   --accent-hover: #8cbaff;
   --on-accent: #0b1424;
+  --on-warn: #1c1407;
   --ok: #4cc38a;
   --warn: #e5a84b;
   --bad: #ec5d62;
@@ -39,11 +43,11 @@ h3 { font-size: 14px; font-weight: 500; margin: 24px 0 8px; }
 .help { color: var(--text-2); }
 button, input, select, textarea { font: inherit; }
 button, input:not([type="checkbox"]):not([type="range"]), select, textarea {
-  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--sunken); color: inherit; padding: 6px 10px;
+  border: 1px solid var(--line-strong); border-radius: 8px; background: var(--sunken); color: inherit; padding: 6px 12px;
   transition: background-color 140ms var(--ease), border-color 140ms var(--ease), color 140ms var(--ease), transform 140ms var(--ease);
 }
 input:not([type="checkbox"]):not([type="range"]), select { min-height: 32px; }
-input:not([type="checkbox"]):not([type="range"]):hover:not(:disabled), select:hover:not(:disabled), textarea:hover:not(:disabled) { border-color: rgba(237, 237, 237, .22); }
+input:not([type="checkbox"]):not([type="range"]):hover:not(:disabled), select:hover:not(:disabled), textarea:hover:not(:disabled) { border-color: var(--line-hover); }
 button { cursor: pointer; background: var(--raised); font-weight: 500; min-height: 32px; padding: 6px 12px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04); }
 button:hover:not(:disabled) { background: var(--hover); }
 button:active:not(:disabled) { transform: scale(.98); }
@@ -54,7 +58,7 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); }
 input[type="checkbox"], input[type="range"] { accent-color: var(--accent); }
 input[type="checkbox"] { width: 16px; height: 16px; vertical-align: middle; margin: 0 4px; }
 input[type="range"] { width: 100%; }
-textarea { resize: vertical; min-height: 72px; padding: 8px 10px; }
+textarea { resize: vertical; min-height: 72px; padding: 8px 12px; }
 label { display: grid; gap: 4px; }
 input.invalid { border-color: var(--bad) !important; }
 .help { font-size: 13px; max-width: 90ch; }
@@ -67,11 +71,11 @@ details > summary:hover { color: var(--text); }
 /* Live-state dot: the one signature, used for protection, the proxy and plugin states only.
    In the top bar it is a background so ::first-letter can still capitalise the value. */
 .readiness-bar .protection strong, .readiness-bar [data-key="proxy"] strong {
-  --dot: var(--muted); --halo: transparent; padding-left: 16px;
-  background: radial-gradient(circle at 4px 50%, var(--dot) 4px, var(--halo) 4.5px, var(--halo) 7px, transparent 7.5px) no-repeat;
+  --dot: var(--muted); --halo: transparent; padding-left: 20px;
+  background: radial-gradient(circle at 7px 50%, var(--dot) 4px, var(--halo) 4.5px, var(--halo) 7px, transparent 7.5px) no-repeat;
 }
 .plugin-state::before {
-  content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 4px; margin-right: 6px;
+  content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 4px; margin-right: 8px;
   background: var(--muted); vertical-align: 1px;
 }
 
@@ -85,7 +89,7 @@ details > summary:hover { color: var(--text); }
 .readiness-bar span { font-size: 12px; }
 .readiness-bar strong { font-size: 14px; line-height: 20px; font-weight: 500; font-variant-numeric: tabular-nums; }
 /* Backend states arrive as lowercase words; show them in sentence case without changing the text. */
-.readiness-bar strong::first-letter { text-transform: uppercase; }
+.readiness-bar :is([data-key="proxy"], [data-key="helper"], [data-key="operation"]) strong::first-letter { text-transform: uppercase; }
 .readiness-bar [data-key="proxy"][data-value="running"] strong { --dot: var(--ok); }
 .readiness-bar [data-key="proxy"][data-value="failed"] strong { --dot: var(--bad); color: var(--bad); }
 .readiness-bar .loop-lag { font-size: 12px; line-height: 16px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -93,8 +97,8 @@ details > summary:hover { color: var(--text); }
 
 /* Protection: the one reading that matters, set apart as a small lit instrument. */
 .readiness-bar .protection {
-  padding: 6px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
-  transition: background-color 180ms var(--ease), border-color 180ms var(--ease);
+  padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  transition: background-color 140ms var(--ease), border-color 140ms var(--ease);
 }
 .readiness-bar .protection span { color: var(--muted); }
 .protection[data-value="protected"] strong { --dot: var(--ok); --halo: rgba(76, 195, 138, .2); }
@@ -120,11 +124,11 @@ details > summary:hover { color: var(--text); }
   display: flex; align-items: center; gap: 8px; background: none; border: 0; border-bottom: 2px solid transparent;
   border-radius: 8px 8px 0 0; padding: 8px 16px; margin-bottom: -1px; color: var(--text-2); min-height: 36px; box-shadow: none;
 }
-.tab:hover:not(:disabled) { background: rgba(237, 237, 237, .04); color: var(--text); }
+.tab:hover:not(:disabled) { background: var(--wash); color: var(--text); }
 .tab:active:not(:disabled) { transform: none; }
 .tab[aria-selected="true"], .tab[aria-selected="true"]:hover { color: var(--text); border-bottom-color: var(--accent); }
 .tab-badge {
-  min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--warn); color: #1c1407;
+  min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--warn); color: var(--on-warn);
   font: 500 11px/18px var(--mono); text-align: center; font-variant-numeric: tabular-nums;
 }
 .tab-panels { flex: 1; min-height: 0; padding-top: 16px; }
@@ -133,13 +137,13 @@ details > summary:hover { color: var(--text); }
 /* Plugins: list beside the selected plugin */
 .plugins { height: 100%; display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; }
 .plugins:has(> .plugin-nav[hidden]) { display: block; }
-.plugin-nav { display: flex; flex-direction: column; gap: 2px; overflow: auto; min-height: 0; }
+.plugin-nav { display: flex; flex-direction: column; gap: 2px; overflow: auto; min-height: 0; padding: 4px; margin: -4px; }
 .plugin-link {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left;
   background: none; border-color: transparent; box-shadow: none; font-weight: 400; color: var(--text-2);
   min-height: 36px; padding: 6px 12px;
 }
-.plugin-link:hover:not(:disabled) { background: rgba(237, 237, 237, .04); color: var(--text); }
+.plugin-link:hover:not(:disabled) { background: var(--wash); color: var(--text); }
 .plugin-link[aria-current="true"], .plugin-link[aria-current="true"]:hover {
   background: var(--raised); border-color: var(--line); color: var(--text); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
 }
@@ -180,7 +184,7 @@ details > summary:hover { color: var(--text); }
   flex: 1; min-height: 0; overflow: auto; background: var(--sunken); border: 1px solid var(--line); border-radius: 12px;
   padding: 4px 16px; overflow-anchor: none; font: 12px/18px var(--mono); font-variant-numeric: tabular-nums;
 }
-.log-row { display: grid; grid-template-columns: 88px 48px 136px minmax(0, 1fr); gap: 12px; padding: 4px 0; border-bottom: 1px solid rgba(237, 237, 237, .05); }
+.log-row { display: grid; grid-template-columns: 88px 48px 136px minmax(0, 1fr); gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--row-line); }
 .log-row:last-child { border-bottom: 0; }
 .log-row span { overflow-wrap: anywhere; white-space: pre-wrap; }
 .log-row time, .log-module { color: var(--muted); }

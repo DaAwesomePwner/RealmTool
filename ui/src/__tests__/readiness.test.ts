@@ -111,3 +111,16 @@ it('dismisses close warnings without reviving them on updates and expires new wa
     expect(view.notices.textContent).not.toContain('20% HP');
   } finally { vi.useRealTimers(); }
 });
+
+it('keeps protection first and puts loop-lag diagnostics after the status items', () => {
+  const view = new Readiness({ post: vi.fn() }, vi.fn());
+  view.update({ protection: { state: 'protected', since: 1, reasons: [] }, loopLag: { worker: { p99: 1.4, max: 3.9, degraded: false } },
+    data: { state: 'idle', gameBuild: null, catalogBuild: null, error: null, lastResult: null },
+    proxy: { state: 'running', port: 2050, error: null }, game: { dir: null, candidates: [], launcher: null, helper: { state: 'installed', backup: false } },
+    sessions: { open: 1, connected: 1 }, profile: { active: 'default', available: [] }, operation: null, revision: 1 });
+  const children = [...view.status.children];
+  expect(children[0].getAttribute('data-key')).toBe('protection');
+  const lag = children.at(-1)!;
+  expect(lag.className).toBe('loop-lag'); expect(lag.textContent).toBe('Network loop: p99 1.4 ms / max 3.9 ms');
+  expect(children.slice(1, -1).map(child => child.getAttribute('data-key'))).toEqual(['proxy', 'helper', 'sessions', 'profile', 'operation']);
+});
